@@ -1,0 +1,6 @@
+{
+    "require": {
+        "mpdf/mpdf": "^8.3",
+        "morilog/jalali": "^3.5"
+    }
+}
