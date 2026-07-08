@@ -1,9 +1,12 @@
 <?php
-require_once __DIR__ . '/db.php';
+// index.php
+
+require_once __DIR__ . '/panel/db.php';
 require_once __DIR__ . '/includes/helpers.php';
 $prices = getPrices();
 $works = getPortfolioWorks();
 $contact = require __DIR__ . '/contact.php';
+
 ?>
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -246,7 +249,7 @@ $contact = require __DIR__ . '/contact.php';
     <div class="container footer-content">
         <div>
             <p>© <?= date('Y') ?> <?= SITE_NAME ?></p>
-            <p><a href="admin/login.php">ورود مدیر</a></p>
+            <p><a href="panel/login.php">ورود مدیر</a></p>
         </div>
         <div>
             <p>دامنه: <strong>exolab.ir</strong></p>

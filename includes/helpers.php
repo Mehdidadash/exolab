@@ -1,5 +1,7 @@
 <?php
 
+require_once __DIR__ . '/icons.php';
+
 function toPersianDigits($input) {
     $numbers = ['0','1','2','3','4','5','6','7','8','9'];
     $persian = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
@@ -55,12 +57,9 @@ function parseDateInput($input) {
 function toJalaliDate($gregorianDate) {
     if (empty($gregorianDate)) return '';
     try {
-        $jDate = new \Morilog\Jalali\Jd();
-        $jalaliDate = $jDate->toJalali($gregorianDate);
-        if (is_array($jalaliDate)) {
-            return implode('/', $jalaliDate);
-        }
-        return $jalaliDate;
+        $date = new DateTime($gregorianDate);
+        $jalaliDate = \Morilog\Jalali\Jalalian::fromDateTime($date);
+        return $jalaliDate->format('Y/m/d');
     } catch (\Throwable $e) {
         return $gregorianDate;
     }
@@ -69,15 +68,9 @@ function toJalaliDate($gregorianDate) {
 function toJalaliDateFormatted($gregorianDate) {
     if (empty($gregorianDate)) return '';
     try {
-        $jDate = new \Morilog\Jalali\Jd();
-        $jalaliDate = $jDate->toJalali($gregorianDate);
-        if (is_array($jalaliDate)) {
-            $year = $jalaliDate[0];
-            $month = str_pad($jalaliDate[1], 2, '0', STR_PAD_LEFT);
-            $day = str_pad($jalaliDate[2], 2, '0', STR_PAD_LEFT);
-            return toPersianDigits("$year/$month/$day");
-        }
-        return $jalaliDate;
+        $date = new DateTime($gregorianDate);
+        $jalaliDate = \Morilog\Jalali\Jalalian::fromDateTime($date);
+        return toPersianDigits($jalaliDate->format('Y/m/d'));
     } catch (\Throwable $e) {
         return $gregorianDate;
     }
@@ -90,16 +83,80 @@ function toJalaliDateWithMonth($gregorianDate) {
         'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'
     ];
     try {
-        $jDate = new \Morilog\Jalali\Jd();
-        $jalaliDate = $jDate->toJalali($gregorianDate);
-        if (is_array($jalaliDate)) {
-            $year = $jalaliDate[0];
-            $month = $jalaliDate[1];
-            $day = $jalaliDate[2];
-            return toPersianDigits("$day") . ' ' . $months[$month - 1] . ' ' . toPersianDigits("$year");
-        }
-        return $jalaliDate;
+        $date = new DateTime($gregorianDate);
+        $jalaliDate = \Morilog\Jalali\Jalalian::fromDateTime($date);
+        $year = $jalaliDate->getYear();
+        $month = $jalaliDate->getMonth();
+        $day = $jalaliDate->getDay();
+        return toPersianDigits((string) $day) . ' ' . $months[$month - 1] . ' ' . toPersianDigits((string) $year);
     } catch (\Throwable $e) {
         return $gregorianDate;
+    }
+}
+
+function formatCaseLocation($locationType, $teeth)
+{
+    $map = [
+        'teeth' => 'دندان',
+        'upper' => 'فک بالا',
+        'lower' => 'فک پایین',
+        'both' => 'هر دو',
+    ];
+
+    if (empty($locationType)) {
+        return $teeth ? htmlspecialchars($teeth) : '—';
+    }
+
+    $label = $map[$locationType] ?? htmlspecialchars($locationType);
+    if (!empty($teeth)) {
+        return $label . ' (' . htmlspecialchars($teeth) . ')';
+    }
+
+    return $label;
+}
+function parseJalaliToGregorian($jalaliDate) {
+    $value = trim($jalaliDate);
+    if ($value === '') return '';
+
+    // Convert Persian digits to Latin
+    $value = normalizePersianDigits($value);
+
+    // Remove any non-digit characters (except maybe allow slashes? but we'll just extract numbers)
+    preg_match_all('/\d+/', $value, $matches);
+    $numbers = $matches[0] ?? [];
+    if (count($numbers) < 3) {
+        // Not enough numbers; try using parseDateInput as fallback
+        $fallback = parseDateInput($value);
+        if ($fallback !== '') return $fallback;
+        return '';
+    }
+
+    // Take first three numbers as year, month, day
+    list($year, $month, $day) = array_slice($numbers, 0, 3);
+    $month = str_pad($month, 2, '0', STR_PAD_LEFT);
+    $day = str_pad($day, 2, '0', STR_PAD_LEFT);
+    $dateStr = $year . '/' . $month . '/' . $day;
+
+    // If year is between 1300 and 1500, treat as Jalali
+    if ($year >= 1300 && $year <= 1500) {
+        try {
+            // Use the library to convert
+            $jalali = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $dateStr);
+            return $jalali->toCarbon()->toDateString(); // returns YYYY-MM-DD
+        } catch (\Throwable $e) {
+            // Log error if possible
+            if (function_exists('error_log')) {
+                error_log('Jalali conversion failed for: ' . $dateStr . ' - ' . $e->getMessage());
+            }
+            return '';
+        }
+    } else {
+        // Assume Gregorian
+        try {
+            $dt = new DateTime($dateStr);
+            return $dt->format('Y-m-d');
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 }

@@ -1,4 +1,6 @@
 <?php
+// composer-setup.php
+
 
 /*
  * This file is part of Composer.

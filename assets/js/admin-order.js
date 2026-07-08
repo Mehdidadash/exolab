@@ -27,7 +27,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // collect ordered ids
             const ids = Array.from(tbody.querySelectorAll('tr')).map(r => r.dataset.id);
             // post to update endpoint
-            fetch('../admin/update_order.php', {
+            fetch('../panel/update_order.php', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ table: tableName, ids })

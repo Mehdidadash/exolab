@@ -4,7 +4,7 @@ This document explains the invoice and payment management system added to the EX
 
 ## Features
 
-### 1. Invoice Management (`/admin/invoices.php`)
+### 1. Invoice Management (`/panel/invoices.php`)
 - Create, edit, and delete invoices
 - Track invoice status (paid/unpaid)
 - Generate PDF invoices with Farsi dates and RTL layout
@@ -17,7 +17,7 @@ This document explains the invoice and payment management system added to the EX
   - Invoice and due dates
   - Notes
 
-### 2. Payment Recording (`/admin/payments.php`)
+### 2. Payment Recording (`/panel/payments.php`)
 - Record doctor payments with multiple methods:
   - **کارت به کارت** (Card to Card Transfer)
   - **شبا** (SHEBA/IBAN Transfer)
@@ -34,7 +34,7 @@ This document explains the invoice and payment management system added to the EX
   - Bank account
   - Notes
 
-### 3. Bank Accounts Management (`/admin/bank_accounts.php`)
+### 3. Bank Accounts Management (`/panel/bank_accounts.php`)
 - Manage bank accounts for receiving payments
 - Multiple account support (yours, wife's, partner's, etc.)
 - Fields:
@@ -51,7 +51,7 @@ This document explains the invoice and payment management system added to the EX
 - Can be used to create a debt report
 
 ### 5. PDF Invoice Generation
-- URL: `/admin/invoice_pdf.php?id=<invoice_id>`
+- URL: `/panel/invoice_pdf.php?id=<invoice_id>`
 - Features:
   - Farsi (Persian) dates using Jalali calendar
   - RTL (Right-to-Left) layout
@@ -173,27 +173,27 @@ composer require mpdf/mpdf morilog/jalali
 ## Files Added/Modified
 
 ### New Files
-- `/admin/invoices.php` - Invoices list
-- `/admin/invoice_form.php` - Invoice create/edit
-- `/admin/save_invoice.php` - Save invoice endpoint
-- `/admin/delete_invoice.php` - Delete invoice endpoint
-- `/admin/invoice_pdf.php` - PDF generator
-- `/admin/payments.php` - Payments list
-- `/admin/payment_form.php` - Payment create/edit
-- `/admin/save_payment.php` - Save payment endpoint
-- `/admin/delete_payment.php` - Delete payment endpoint
-- `/admin/bank_accounts.php` - Bank accounts list
-- `/admin/bank_account_form.php` - Bank account create/edit
-- `/admin/save_bank_account.php` - Save bank account endpoint
-- `/admin/delete_bank_account.php` - Delete bank account endpoint
+- `/panel/invoices.php` - Invoices list
+- `/panel/invoice_form.php` - Invoice create/edit
+- `/panel/save_invoice.php` - Save invoice endpoint
+- `/panel/delete_invoice.php` - Delete invoice endpoint
+- `/panel/invoice_pdf.php` - PDF generator
+- `/panel/payments.php` - Payments list
+- `/panel/payment_form.php` - Payment create/edit
+- `/panel/save_payment.php` - Save payment endpoint
+- `/panel/delete_payment.php` - Delete payment endpoint
+- `/panel/bank_accounts.php` - Bank accounts list
+- `/panel/bank_account_form.php` - Bank account create/edit
+- `/panel/save_bank_account.php` - Save bank account endpoint
+- `/panel/delete_bank_account.php` - Delete bank account endpoint
 - `/vendor/` - Composer dependencies (mpdf/mpdf, morilog/jalali)
 
 ### Modified Files
 - `/install.php` - Added new table creation SQL
 - `/db.php` - Added invoice/payment helper functions
 - `/includes/helpers.php` - Added Jalali date helpers
-- `/admin/auth.php` - Updated navigation menu
-- `/admin/dashboard.php` - Added invoice/payment links
+- `/panel/auth.php` - Updated navigation menu
+- `/panel/dashboard.php` - Added invoice/payment links
 
 ## Notes
 

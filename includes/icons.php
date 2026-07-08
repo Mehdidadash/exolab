@@ -8,6 +8,10 @@ function svg_icon($name, $classes = '') {
         'map' => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" class="' . $classes . '"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 110-5 2.5 2.5 0 010 5z"/></svg>',
         'bale' => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor" class="' . $classes . '"><rect width="100" height="100" rx="20" fill="#00c6e0"/><text x="50" y="65" font-size="60" font-weight="bold" text-anchor="middle" fill="#fff">ب</text></svg>',
         'rubika' => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="currentColor" class="' . $classes . '"><circle cx="50" cy="50" r="45" fill="#ff6b6b"/><text x="50" y="65" font-size="48" font-weight="bold" text-anchor="middle" fill="#fff">ر</text></svg>',
+        // common action icons
+        'eye' => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" class="' . $classes . '"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+        'edit' => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" class="' . $classes . '"><path d="M3 21v-3l11-11 3 3L6 21H3z"/><path d="M14 7l3 3"/></svg>',
+        'trash' => '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" class="' . $classes . '"><path d="M3 6h18"/><path d="M8 6v12a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2V6"/><path d="M10 11v6M14 11v6"/></svg>',
     ];
     
     return $icons[$name] ?? '';
