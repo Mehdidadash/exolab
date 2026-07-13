@@ -21,6 +21,7 @@ if ($editing) {
 panel_layout_start($editing ? 'ویرایش قیمت اختصاصی' : 'افزودن قیمت اختصاصی جدید');
 ?>
 <form method="post" action="save_doctor_price_override.php">
+    <?= csrf_field() ?>
     <?php if ($editing): ?>
         <input type="hidden" name="id" value="<?= $override['id'] ?>">
     <?php endif; ?>
@@ -52,7 +53,7 @@ panel_layout_start($editing ? 'ویرایش قیمت اختصاصی' : 'افزو
 
         <div class="form-group">
             <label for="custom_price">قیمت اختصاصی (تومان)</label>
-            <input type="number" id="custom_price" name="custom_price" step="0.01" min="0" value="<?= $override['custom_price'] ?? '' ?>" required>
+            <input type="number" id="custom_price" name="custom_price" step="1" min="0" value="<?= $override['custom_price'] ?? '' ?>" required>
             <small style="display:block; margin-top:6px; color:#525252;">
                 این قیمت به جای قیمت پیش‌فرض برای این پزشک و خدمت استفاده خواهد شد.
             </small>

@@ -3,6 +3,8 @@
 
 require_once __DIR__ . '/auth.php';
 
+require_csrf();
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: works.php');
     exit;
@@ -75,6 +77,9 @@ if (!empty($_POST['id'])) {
     $stmt = db()->prepare('INSERT INTO portfolio_works (title, description, image_filename, display_order, active) VALUES (?, ?, ?, ?, ?)');
     $stmt->execute([$title, $description, $image_filename, $display_order, $active]);
 }
+
+$savedId = !empty($_POST['id']) ? (int) $_POST['id'] : (int) db()->lastInsertId();
+audit_log_save('work', $savedId, 'نمونه کار');
 
 header('Location: works.php');
 exit;

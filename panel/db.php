@@ -3,15 +3,13 @@
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/../vendor/autoload.php';
+
+use App\Database\Connection;
+
 function db() {
-    static $pdo;
+    static $pdo = null;
     if ($pdo === null) {
-        $dsn = 'mysql:host=' . DB_HOST . ';dbname=' . DB_NAME . ';charset=utf8mb4';
-        $pdo = new PDO($dsn, DB_USER, DB_PASS, [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::MYSQL_ATTR_INIT_COMMAND => 'SET NAMES utf8mb4',
-        ]);
+        $pdo = Connection::getInstance();
         try {
             ensureSitePricesOrderColumn($pdo);
         } catch (Throwable $e) {}
@@ -71,9 +69,10 @@ function getAllDoctors() {
 }
 
 function getDoctor($id) {
-    $stmt = db()->prepare('SELECT id, full_name AS name, email, phone, notes, active FROM users WHERE id = ? AND role = "doctor" LIMIT 1');
+    $stmt = db()->prepare('SELECT id, full_name AS name, email, phone, notes, active, last_login FROM users WHERE id = ? AND role = "doctor" LIMIT 1');
     $stmt->execute([(int) $id]);
-    return $stmt->fetch();
+    $result = $stmt->fetch();
+    return $result;
 }
 
 function saveDoctor($data) {
@@ -223,9 +222,11 @@ function getInvoice($id) {
     $stmt = db()->prepare('SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name,
             COALESCE(u.phone, i.doctor_phone) AS doctor_phone,
             COALESCE(u.email, i.doctor_email) AS doctor_email,
-            u.id AS doctor_id
+            u.id AS doctor_id,
+            b.account_owner_name AS bank_owner, b.bank_name, b.account_number, b.card_number, b.iban_sheba
         FROM doctor_invoices i
         LEFT JOIN users u ON i.doctor_id = u.id
+        LEFT JOIN bank_accounts b ON i.bank_account_id = b.id
         WHERE i.id = ?');
     $stmt->execute([(int) $id]);
     return $stmt->fetch();
@@ -238,7 +239,13 @@ function getInvoiceItems($invoice_id) {
         WHERE ii.invoice_id = ?
         ORDER BY ii.id ASC');
     $stmt->execute([(int) $invoice_id]);
-    return $stmt->fetchAll();
+    $items = $stmt->fetchAll();
+    // Round amounts to integers (Toman has no decimals)
+    foreach ($items as &$item) {
+        $item['unit_price'] = round((float) $item['unit_price']);
+        $item['total_amount'] = round((float) $item['total_amount']);
+    }
+    return $items;
 }
 
 function saveInvoice($data) {
@@ -253,18 +260,21 @@ function saveInvoice($data) {
         $unitPrice = (float) ($item['unit_price'] ?? 0);
         $items[] = [
             'price_id' => !empty($item['price_id']) ? (int) $item['price_id'] : null,
+            'case_id' => !empty($item['case_id']) ? (int) $item['case_id'] : null,
             'item_title' => $itemTitle,
             'item_description' => $itemDescription ?: null,
             'patient_name' => trim($item['patient_name'] ?? '') ?: null,
             'quantity' => $quantity,
             'unit_price' => $unitPrice,
-            'total_amount' => $quantity * $unitPrice,
+            'total_amount' => round($quantity * $unitPrice),
         ];
     }
-    $totalAmount = array_sum(array_column($items, 'total_amount'));
+    $totalAmount = round(array_sum(array_column($items, 'total_amount')));
+
+    $bankAccountId = !empty($data['bank_account_id']) ? (int) $data['bank_account_id'] : null;
 
     if (isset($data['id']) && !empty($data['id'])) {
-        $stmt = db()->prepare('UPDATE doctor_invoices SET invoice_number = ?, doctor_id = ?, doctor_name = ?, doctor_phone = ?, doctor_email = ?, total_amount = ?, payment_status = ?, invoice_date = ?, due_date = ?, notes = ?, updated_at = ? WHERE id = ?');
+        $stmt = db()->prepare('UPDATE doctor_invoices SET invoice_number = ?, doctor_id = ?, doctor_name = ?, doctor_phone = ?, doctor_email = ?, total_amount = ?, payment_status = ?, invoice_date = ?, due_date = ?, notes = ?, bank_account_id = ?, updated_at = ? WHERE id = ?');
         $stmt->execute([
             $data['invoice_number'],
             $data['doctor_id'] ?: null,
@@ -276,12 +286,13 @@ function saveInvoice($data) {
             $data['invoice_date'],
             $data['due_date'] ?? null,
             $data['notes'] ?? null,
+            $bankAccountId,
             $now,
             (int) $data['id']
         ]);
         $invoiceId = (int) $data['id'];
     } else {
-        $stmt = db()->prepare('INSERT INTO doctor_invoices (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, due_date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = db()->prepare('INSERT INTO doctor_invoices (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, due_date, notes, bank_account_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $data['invoice_number'],
             $data['doctor_id'] ?: null,
@@ -293,19 +304,21 @@ function saveInvoice($data) {
             $data['invoice_date'],
             $data['due_date'] ?? null,
             $data['notes'] ?? null,
+            $bankAccountId,
             $now
         ]);
         $invoiceId = db()->lastInsertId();
     }
 
-    // Delete old items and insert new ones
+    // Delete old items and insert new ones (with case_id support)
     $del = db()->prepare('DELETE FROM invoice_items WHERE invoice_id = ?');
     $del->execute([$invoiceId]);
-    $ins = db()->prepare('INSERT INTO invoice_items (invoice_id, price_id, item_title, item_description, patient_name, quantity, unit_price, total_amount, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $ins = db()->prepare('INSERT INTO invoice_items (invoice_id, price_id, case_id, item_title, item_description, patient_name, quantity, unit_price, total_amount, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     foreach ($items as $item) {
         $ins->execute([
             $invoiceId,
             $item['price_id'],
+            $item['case_id'],
             $item['item_title'],
             $item['item_description'],
             $item['patient_name'],
@@ -613,7 +626,7 @@ function getOutstandingBalance($doctor_id) {
  * @param string $invoiceDate YYYY-MM-DD (usually today)
  * @return int invoice_id
  */
-function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate) {
+function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankAccountId = null) {
     $now = date('Y-m-d H:i:s');
     
     // Generate a unique invoice number (e.g., INV-YYYYMM-001)
@@ -638,8 +651,8 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate) {
     // Insert invoice
     $stmt = db()->prepare('
         INSERT INTO doctor_invoices 
-        (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
     // Get doctor info
     $doctor = getDoctor($doctor_id);
@@ -653,6 +666,7 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate) {
         'unpaid',
         $invoiceDate,
         'فاکتور ماهانه خودکار',
+        $bankAccountId,
         $now
     ]);
     $invoiceId = db()->lastInsertId();

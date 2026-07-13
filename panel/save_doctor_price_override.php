@@ -3,6 +3,8 @@
 require_once __DIR__ . '/auth.php';
 require_role('admin');
 
+require_csrf();
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: doctor_price_overrides.php');
     exit;
@@ -28,6 +30,7 @@ if (isset($_POST['id']) && !empty($_POST['id'])) {
     $data['id'] = (int)$_POST['id'];
 }
 
-saveDoctorPriceOverride($data);
+$savedId = saveDoctorPriceOverride($data);
+audit_log_save('price_override', $savedId, 'قیمت اختصاصی');
 header('Location: doctor_price_overrides.php');
 exit;

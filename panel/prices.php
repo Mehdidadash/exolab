@@ -32,11 +32,7 @@ panel_layout_start('لیست قیمت‌ها');
             <td><?= isset($price['display_order']) ? (int)$price['display_order'] : 0 ?></td>
             <td><span class="badge"><?= $price['active'] ? 'بله' : 'خیر' ?></span></td>
             <td class="actions">
-                <a class="btn" href="price_form.php?id=<?= $price['id'] ?>">ویرایش</a>
-                <form method="post" action="delete_price.php" style="display:inline;" onsubmit="return confirm('آیا مطمئن هستید؟');">
-                    <input type="hidden" name="id" value="<?= $price['id'] ?>">
-                    <button type="submit">حذف</button>
-                </form>
+                <?= action_dropdown(null, 'price_form.php?id=' . $price['id'], 'delete_price.php', $price['id']) ?>
             </td>
         </tr>
     <?php endforeach; ?>

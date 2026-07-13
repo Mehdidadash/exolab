@@ -252,8 +252,7 @@ $contact = require __DIR__ . '/contact.php';
             <p><a href="panel/login.php">ورود مدیر</a></p>
         </div>
         <div>
-            <p>دامنه: <strong>exolab.ir</strong></p>
-            <p>IP: <strong>5.144.129.129</strong></p>
+            <p>تلفن: <strong><a href="tel:<?= htmlspecialchars($contact['phone_eslamshahr']) ?>" style="color:#f5c518;"><?= htmlspecialchars($contact['phone_eslamshahr']) ?></a></strong></p>
         </div>
     </div>
 </footer>

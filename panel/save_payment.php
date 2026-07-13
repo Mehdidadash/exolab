@@ -4,6 +4,8 @@
 require_once __DIR__ . '/auth.php';
 require_role('admin');
 
+require_csrf();
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: payments.php');
     exit;
@@ -40,5 +42,6 @@ if (isset($_POST['id']) && !empty($_POST['id'])) {
     $data['id'] = (int) $_POST['id'];
 }
 
-savePayment($data);
+$savedId = savePayment($data);
+audit_log_save('payment', $savedId, 'پرداخت');
 header('Location: payments.php');

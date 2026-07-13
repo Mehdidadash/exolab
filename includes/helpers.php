@@ -14,7 +14,7 @@ function formatAmountToman($value) {
         return htmlspecialchars((string) $value);
     }
 
-    $formatted = number_format((float) $clean, 0, '.', ',');
+    $formatted = number_format((float) round($clean), 0, '.', ',');
     $formatted = str_replace(',', '٬', $formatted);
     return toPersianDigits($formatted) . ' تومان';
 }
@@ -159,4 +159,80 @@ function parseJalaliToGregorian($jalaliDate) {
             return '';
         }
     }
+}
+
+// =====================================================
+// CSRF Protection Helpers
+// =====================================================
+function csrf_token() {
+    if (empty($_SESSION['_csrf_token'])) {
+        $_SESSION['_csrf_token'] = bin2hex(random_bytes(32));
+    }
+    return $_SESSION['_csrf_token'];
+}
+
+function csrf_field() {
+    return '<input type="hidden" name="_csrf_token" value="' . csrf_token() . '">';
+}
+
+function csrf_meta() {
+    return '<meta name="csrf-token" content="' . csrf_token() . '">';
+}
+
+function verify_csrf($token = null) {
+    if ($token === null) {
+        $token = $_POST['_csrf_token'] ?? '';
+        // Also check X-CSRF-Token header (hosting security filters may strip POST field)
+        if (empty($token)) {
+            $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+        }
+    }
+    if (empty($_SESSION['_csrf_token']) || !hash_equals($_SESSION['_csrf_token'], $token)) {
+        return false;
+    }
+    return true;
+}
+
+function require_csrf() {
+    if (!verify_csrf()) {
+        http_response_code(403);
+        if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => false, 'error' => 'csrf_invalid', 'message' => 'CSRF token نامعتبر است. لطفاً صفحه را Refresh کنید.']);
+        } else {
+            die('CSRF token نامعتبر است. لطفاً صفحه را Refresh کنید.');
+        }
+        exit;
+    }
+}
+
+// =====================================================
+// Audit Logging Helpers
+// =====================================================
+function audit_log(string $action, string $entityType = null, int $entityId = null, string $details = null): void
+{
+    $userId = null;
+    if (function_exists('current_user')) {
+        $user = current_user();
+        $userId = $user['id'] ?? null;
+    }
+
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+
+    $stmt = db()->prepare(
+        'INSERT INTO audit_log (user_id, action, entity_type, entity_id, details, ip_address, created_at) 
+         VALUES (?, ?, ?, ?, ?, ?, NOW())'
+    );
+    $stmt->execute([$userId, $action, $entityType, $entityId, $details, $ip]);
+}
+
+function audit_log_save(string $entityType, int $entityId, string $label): void
+{
+    $action = isset($_POST['id']) && !empty($_POST['id']) ? 'update' : 'create';
+    audit_log("{$action}_{$entityType}", $entityType, $entityId, "{$label} #{$entityId}");
+}
+
+function audit_log_delete(string $entityType, int $entityId, string $label): void
+{
+    audit_log("delete_{$entityType}", $entityType, $entityId, "حذف {$label} #{$entityId}");
 }

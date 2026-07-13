@@ -3,7 +3,7 @@
 require_once __DIR__ . '/auth.php';
 require_login();
 
-if (!has_permission('view_all_cases') && !has_permission('view_own_cases')) {
+if (!has_permission('view_all_cases') && !has_permission('view_own_cases') && !has_permission('view_assigned_cases')) {
     die('دسترسی غیرمجاز');
 }
 
@@ -12,6 +12,8 @@ if (empty($_SESSION['_csrf_token'])) {
     $_SESSION['_csrf_token'] = bin2hex(random_bytes(32));
 }
 $csrf_token = $_SESSION['_csrf_token'];
+// Ensure session is saved before AJAX calls read it
+session_write_close();
 
 $doctors = getAllDoctors(); // now returns from users table
 $statusesStmt = db()->query('SELECT * FROM case_statuses ORDER BY name ASC');
@@ -103,6 +105,7 @@ panel_layout_start('مدیریت کیس‌ها');
     <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px;">
         <button type="submit" class="btn">اعمال فیلتر</button>
         <a href="cases.php" class="btn" style="background: #E5E7EB; color: #0F172A;">پاک کردن فیلترها</a>
+        <button type="button" id="print-labels-btn" class="btn" style="background: #059669; color: #fff;" onclick="printSelectedLabels()">🖨 پرینت برچسب</button>
     </div>
 </form>
 
@@ -111,6 +114,7 @@ panel_layout_start('مدیریت کیس‌ها');
 <table id="cases-table" class="display" style="width:100%">
     <thead>
     <tr>
+        <th><input type="checkbox" id="select-all-cases" onchange="toggleAllCases(this.checked)"></th>
         <th>Case ID</th>
         <th>پزشک</th>
         <th>بیمار</th>
@@ -121,6 +125,7 @@ panel_layout_start('مدیریت کیس‌ها');
         <th>وضعیت</th>
         <th>تاریخ دریافت</th>
         <th>فاکتور</th>
+        <th>لابراتوار</th>
         <th>عملیات</th>
     </tr>
     </thead>
@@ -141,6 +146,15 @@ panel_layout_start('مدیریت کیس‌ها');
                         <option value="">انتخاب...</option>
                         <?php foreach ($doctors as $doctor): ?>
                         <option value="<?= $doctor['id'] ?>"><?= htmlspecialchars($doctor['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="case-lab-id">برونسپاری به لابراتوار</label>
+                    <select id="case-lab-id" name="lab_id">
+                        <option value="">بدون برونسپاری</option>
+                        <?php $labs = db()->query("SELECT id, full_name FROM users WHERE role='lab' AND active=1 ORDER BY full_name"); foreach ($labs as $lab): ?>
+                        <option value="<?= $lab['id'] ?>"><?= htmlspecialchars($lab['full_name']) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -181,7 +195,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 </div>
                 <div class="form-group">
                     <label for="case-unit-price">فی (تومان)</label>
-                    <input type="number" id="case-unit-price" name="unit_price" step="0.01">
+                    <input type="number" id="case-unit-price" name="unit_price" step="1">
                 </div>
                 <div class="form-group">
                     <label for="case-received-date">تاریخ دریافت</label>
@@ -202,7 +216,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 </div>
                 <div class="form-group" style="grid-column:1/3;">
                     <label for="case-files">فایل طراحی (STL / PLY)</label>
-                    <input type="file" id="case-files" name="case_files[]" accept=".stl,.ply" multiple>
+                    <input type="file" id="case-files" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp" multiple>
                 </div>
             </div>
             <div style="display:flex; gap:10px; margin-top:12px; justify-content:flex-end;">
@@ -400,10 +414,11 @@ panel_layout_start('مدیریت کیس‌ها');
                         d.date_to = jQuery('#date_to').val();
                     }
                 },
-                order: [[8, 'desc']],
+                order: [[9, 'desc']], // received_date column
                 responsive: true,
                 pageLength: 25,
                 columns: [
+                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; } },
                     { data: 0 },
                     { data: 1 },
                     { data: 2 },
@@ -414,7 +429,8 @@ panel_layout_start('مدیریت کیس‌ها');
                     { data: 7 },
                     { data: 8 },
                     { data: 9 },
-                    { data: 10, orderable: false, searchable: false }
+                    { data: 10, orderable: false, searchable: true },
+                    { data: 11, orderable: false, searchable: false }
                 ],
                 // Persian language for DataTables
                 language: {
@@ -478,14 +494,20 @@ panel_layout_start('مدیریت کیس‌ها');
             jQuery('#delete-confirm').on('click', function(){
                 if (!deleteId) return;
                 jQuery('#delete-modal').css({display: 'none'});
-                jQuery.post('delete_case.php', { id: deleteId, _csrf_token: '<?= htmlspecialchars($csrf_token) ?>' }, function(resp){
-                    try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
-                    if (j.success) {
-                        table.ajax.reload(null, false);
-                    } else {
-                        alert('حذف انجام نشد');
-                    }
-                }).fail(function(){ alert('خطا در حذف'); });
+                jQuery.ajax({
+                    url: 'delete_case.php',
+                    type: 'POST',
+                    data: { id: deleteId, _csrf_token: '<?= htmlspecialchars($csrf_token) ?>' },
+                    beforeSend: function(xhr) {
+                        xhr.setRequestHeader('X-CSRF-Token', '<?= htmlspecialchars($csrf_token) ?>');
+                    },
+                    success: function(resp){
+                        try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
+                        if (j.success) { table.ajax.reload(null, false); }
+                        else { alert('حذف انجام نشد'); }
+                    },
+                    error: function(){ alert('خطا در حذف'); }
+                });
             });
             jQuery('#delete-cancel').on('click', function(){
                 jQuery('#delete-modal').css({display: 'none'});
@@ -507,13 +529,7 @@ panel_layout_start('مدیریت کیس‌ها');
             }
             jQuery('#case-cancel').on('click', function(){ closeCaseModal(); });
 
-            jQuery(document).on('click', '.action-toggle', function(e){
-                e.stopPropagation();
-                var $menu = jQuery(this).siblings('.action-menu');
-                jQuery('.action-menu').not($menu).hide();
-                $menu.toggle();
-            });
-            jQuery(document).on('click', function(){ jQuery('.action-menu').hide(); });
+            // (action-menu toggle handled by icons.php action_menu_script)
 
             function populateCaseForm(data){
                 jQuery('#case-id').val(data.id || '');
@@ -527,6 +543,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-unit-price').val(data.unit_price || '');
                 jQuery('#case-received-date').val(data.received_date || ''); // sets correct date
                 jQuery('#case-status-id').val(data.status_id || '');
+                jQuery('#case-lab-id').val(data.lab_id || '');
                 jQuery('#case-description').val(data.description || '');
             }
 
@@ -544,6 +561,9 @@ panel_layout_start('مدیریت کیس‌ها');
                     data: fd,
                     processData: false,
                     contentType: false,
+                    beforeSend: function(xhr) {
+                        xhr.setRequestHeader('X-CSRF-Token', '<?= htmlspecialchars($csrf_token) ?>');
+                    },
                     success: function(resp){
                         try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
                         if (j.success) {
@@ -577,6 +597,35 @@ panel_layout_start('مدیریت کیس‌ها');
                 }
             });
 
+            // ─── Print labels for selected cases ───
+            window.printSelectedLabels = function() {
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                var ids = [];
+                checked.forEach(function(cb) { ids.push(cb.value); });
+                if (ids.length === 0) {
+                    alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                    return;
+                }
+                var form = document.createElement('form');
+                form.method = 'post';
+                form.action = 'print_labels.php';
+                form.target = '_blank';
+                ids.forEach(function(id) {
+                    var inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'case_ids[]';
+                    inp.value = id;
+                    form.appendChild(inp);
+                });
+                document.body.appendChild(form);
+                form.submit();
+                document.body.removeChild(form);
+            };
+            window.toggleAllCases = function(checked) {
+                document.querySelectorAll('.case-select-cb').forEach(function(cb) {
+                    cb.checked = checked;
+                });
+            };
         }
 
     })();

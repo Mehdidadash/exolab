@@ -3,7 +3,28 @@
 require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/db.php';
 require_once __DIR__ . '/../includes/helpers.php';
-session_start();
+
+// Secure session configuration for shared hosting
+if (session_status() === PHP_SESSION_NONE) {
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+    session_set_cookie_params([
+        'lifetime' => 86400 * 7,
+        'path'     => '/',
+        'secure'   => $isHttps,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+    session_start();
+}
+
+// Ensure CSRF token exists after session starts
+if (empty($_SESSION['_csrf_token'])) {
+    $_SESSION['_csrf_token'] = bin2hex(random_bytes(32));
+}
+
+// Note: session_write_close() is NOT called here intentionally.
+// save_case.php needs to read/write session for CSRF validation.
 
 // Permission mapping
 $GLOBALS['role_permissions'] = [
@@ -13,6 +34,11 @@ $GLOBALS['role_permissions'] = [
     'secretary'  => ['view_all_cases', 'create_cases', 'edit_cases', 'upload_files', 'delete_files'],
     'designer'   => ['view_all_cases', 'upload_design_files', 'edit_case_status'],
     'technician' => ['view_all_cases', 'update_case_status', 'view_invoices'],
+    'operator'   => ['view_all_cases', 'update_case_status'],
+    'powder'     => ['view_all_cases'],
+    'courier'    => ['view_all_cases'],
+    'finance'    => ['view_all_cases', 'view_invoices', 'view_payments'],
+    'lab'        => ['view_assigned_cases', 'view_case_files'],
 ];
 
 function current_user() {
@@ -93,11 +119,13 @@ function panel_layout_start($title = 'پنل مدیریت') {
                     <a href="cases.php">کیس‌ها</a>
                 <?php endif; ?>
                 <?php if (has_role('admin')): ?>
+                    <a href="users.php">کاربران</a>
                     <a href="doctors.php">پزشکان</a>
                     <a href="prices.php">قیمت</a>
-                    <a href="doctor_price_overrides.php">قیمت‌های اختصاصی</a>   <!-- new line -->
+                    <a href="doctor_price_overrides.php">قیمت‌های اختصاصی</a>
                     <a href="works.php">نمونه کار</a>
                     <a href="bank_accounts.php">حساب‌های بانکی</a>
+                    <a href="audit_log.php">لاگ فعالیت‌ها</a>
                 <?php endif; ?>
                 <?php if (has_permission('view_invoices')): ?>
                     <a href="invoices.php">فاکتورها</a>
@@ -119,6 +147,7 @@ function panel_layout_end() {
     ?>
         </div>
     </main>
+    <?= action_menu_script() ?>
     </body>
     </html>
     <?php

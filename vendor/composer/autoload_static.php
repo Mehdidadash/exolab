@@ -23,6 +23,11 @@ class ComposerStaticInitea58f8c8b22c3a7e6402fc09de86acef
         array (
             'setasign\\Fpdi\\' => 14,
         ),
+        'c' =>
+        array (
+            'chillerlan\\Settings\\' => 20,
+            'chillerlan\\QRCode\\' => 18,
+        ),
         'S' =>
         array (
             'Symfony\\Polyfill\\Php83\\' => 23,
@@ -56,6 +61,7 @@ class ComposerStaticInitea58f8c8b22c3a7e6402fc09de86acef
         'A' =>
         array (
             'Assert\\' => 7,
+            'App\\' => 4,
         ),
     );
 
@@ -63,6 +69,14 @@ class ComposerStaticInitea58f8c8b22c3a7e6402fc09de86acef
         'setasign\\Fpdi\\' =>
         array (
             0 => __DIR__ . '/..' . '/setasign/fpdi/src',
+        ),
+        'chillerlan\\Settings\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/chillerlan/php-settings-container/src',
+        ),
+        'chillerlan\\QRCode\\' =>
+        array (
+            0 => __DIR__ . '/..' . '/chillerlan/php-qrcode/src',
         ),
         'Symfony\\Polyfill\\Php83\\' =>
         array (
@@ -127,6 +141,10 @@ class ComposerStaticInitea58f8c8b22c3a7e6402fc09de86acef
         'Assert\\' =>
         array (
             0 => __DIR__ . '/..' . '/beberlei/assert/lib/Assert',
+        ),
+        'App\\' =>
+        array (
+            0 => __DIR__ . '/../..' . '/src',
         ),
     );
 

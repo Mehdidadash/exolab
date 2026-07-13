@@ -25,11 +25,7 @@ panel_layout_start('مدیریت قیمت‌های اختصاصی پزشکان')
             <td><?= htmlspecialchars($override['service_title'] ?? '—') ?></td>
             <td><?= formatAmountToman($override['custom_price']) ?></td>
             <td class="actions">
-                <a class="btn" href="doctor_price_override_form.php?id=<?= $override['id'] ?>">ویرایش</a>
-                <form method="post" action="delete_doctor_price_override.php" style="display:inline;" onsubmit="return confirm('آیا مطمئن هستید؟');">
-                    <input type="hidden" name="id" value="<?= $override['id'] ?>">
-                    <button type="submit">حذف</button>
-                </form>
+                <?= action_dropdown(null, 'doctor_price_override_form.php?id=' . $override['id'], 'delete_doctor_price_override.php', $override['id']) ?>
             </td>
         </tr>
     <?php endforeach; ?>

@@ -11,6 +11,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $id = $_POST['id'] ?? null;
 $token = $_POST['_csrf_token'] ?? '';
+if (empty($token)) {
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+}
 
 if (empty($id)) {
     http_response_code(400);

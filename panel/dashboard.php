@@ -8,7 +8,46 @@ $role = $user['role'];
 panel_layout_start('داشبورد');
 
 if ($role === 'admin') {
+    // ─── آمارهای لحظه‌ای ───
+    $stats = [];
+    $stats['doctors'] = db()->query("SELECT COUNT(*) FROM users WHERE role='doctor' AND active=1")->fetchColumn();
+    $stats['cases'] = db()->query("SELECT COUNT(*) FROM cases")->fetchColumn();
+    $stats['active_cases'] = db()->query("SELECT COUNT(*) FROM cases c JOIN case_statuses s ON c.status_id = s.id WHERE s.name NOT IN ('Delivered','Cancelled')")->fetchColumn();
+    $stats['total_invoices'] = db()->query("SELECT COUNT(*) FROM doctor_invoices")->fetchColumn();
+    $stats['unpaid_invoices'] = db()->query("SELECT COUNT(*) FROM doctor_invoices WHERE payment_status='unpaid'")->fetchColumn();
+    $stats['monthly_revenue'] = db()->query("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid' AND MONTH(invoice_date) = MONTH(CURDATE()) AND YEAR(invoice_date) = YEAR(CURDATE())")->fetchColumn();
+    $stats['total_revenue'] = db()->query("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid'")->fetchColumn();
     ?>
+    <!-- Stats Cards -->
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 32px;">
+        <div class="card" style="text-align: center; border-right: 4px solid #06B6D4;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">پزشکان فعال</h4>
+            <p style="font-size:2rem; margin:8px 0 0; font-weight:700;"><?= toPersianDigits($stats['doctors']) ?></p>
+        </div>
+        <div class="card" style="text-align: center; border-right: 4px solid #0F172A;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">کل کیس‌ها</h4>
+            <p style="font-size:2rem; margin:8px 0 0; font-weight:700;"><?= toPersianDigits($stats['cases']) ?></p>
+        </div>
+        <div class="card" style="text-align: center; border-right: 4px solid #f59e0b;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">کیس‌های فعال</h4>
+            <p style="font-size:2rem; margin:8px 0 0; font-weight:700;"><?= toPersianDigits($stats['active_cases']) ?></p>
+        </div>
+        <div class="card" style="text-align: center; border-right: 4px solid #10b981;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">فاکتورهای صادرشده</h4>
+            <p style="font-size:2rem; margin:8px 0 0; font-weight:700;"><?= toPersianDigits($stats['total_invoices']) ?></p>
+            <small style="color:#ef4444;"><?= toPersianDigits($stats['unpaid_invoices']) ?> پرداخت نشده</small>
+        </div>
+        <div class="card" style="text-align: center; border-right: 4px solid #8b5cf6;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">درآمد ماه جاری</h4>
+            <p style="font-size:1.2rem; margin:8px 0 0; font-weight:700;"><?= formatAmountToman($stats['monthly_revenue']) ?></p>
+        </div>
+        <div class="card" style="text-align: center; border-right: 4px solid #06B6D4;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">کل درآمد</h4>
+            <p style="font-size:1.2rem; margin:8px 0 0; font-weight:700;"><?= formatAmountToman($stats['total_revenue']) ?></p>
+        </div>
+    </div>
+
+    <!-- Navigation Cards -->
     <div class="grid">
         <div class="card">
             <h3>مدیریت قیمت‌ها</h3>
@@ -35,6 +74,10 @@ if ($role === 'admin') {
             <a class="btn" href="bank_accounts.php">رفتن</a>
         </div>
         <div class="card">
+            <h3>کیس‌ها</h3>
+            <a class="btn" href="cases.php">رفتن</a>
+        </div>
+        <div class="card">
             <h3>قیمت‌های اختصاصی پزشکان</h3>
             <p>تعیین قیمت‌های متفاوت برای هر پزشک به ازای هر خدمت.</p>
             <a class="btn" href="doctor_price_overrides.php">مدیریت</a>
@@ -43,14 +86,29 @@ if ($role === 'admin') {
     <?php
 } elseif ($role === 'doctor') {
     // Doctor stats
-    $stmt = db()->prepare('SELECT COUNT(*) FROM cases WHERE doctor_id = (SELECT id FROM users WHERE id = ?)');
+    $stmt = db()->prepare('SELECT COUNT(*) FROM cases WHERE doctor_id = ?');
     $stmt->execute([$user['id']]);
     $totalCases = $stmt->fetchColumn();
+
+    $stmt2 = db()->prepare("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE doctor_id = ? AND payment_status = 'unpaid'");
+    $stmt2->execute([$user['id']]);
+    $totalDebt = $stmt2->fetchColumn();
     ?>
+    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 32px;">
+        <div class="card" style="text-align: center; border-right: 4px solid #06B6D4;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">کل کیس‌ها</h4>
+            <p style="font-size:2rem; margin:8px 0 0; font-weight:700;"><?= toPersianDigits($totalCases) ?></p>
+        </div>
+        <?php if ($totalDebt > 0): ?>
+        <div class="card" style="text-align: center; border-right: 4px solid #ef4444;">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">بدهی</h4>
+            <p style="font-size:1.2rem; margin:8px 0 0; font-weight:700; color:#ef4444;"><?= formatAmountToman($totalDebt) ?></p>
+        </div>
+        <?php endif; ?>
+    </div>
     <div class="grid">
         <div class="card">
-            <h3>کل کیس‌ها</h3>
-            <p style="font-size:1.8rem;"><?= toPersianDigits($totalCases) ?></p>
+            <h3>کیس‌های من</h3>
             <a class="btn" href="cases.php">مشاهده</a>
         </div>
         <div class="card">

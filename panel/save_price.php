@@ -4,6 +4,8 @@
 require_once __DIR__ . '/auth.php';
 require_role('admin');
 
+require_csrf();
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: prices.php');
     exit;
@@ -28,6 +30,9 @@ if (!empty($_POST['id'])) {
     $stmt = db()->prepare('INSERT INTO site_prices (title, description, price, category, active, display_order) VALUES (?, ?, ?, ?, ?, ?)');
     $stmt->execute([$title, $description, $price, $category, $active, $display_order]);
 }
+
+$savedId = !empty($_POST['id']) ? (int) $_POST['id'] : (int) db()->lastInsertId();
+audit_log_save('price', $savedId, 'قیمت');
 
 header('Location: prices.php');
 exit;

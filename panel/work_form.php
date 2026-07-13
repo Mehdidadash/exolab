@@ -17,6 +17,7 @@ panel_layout_start($editing ? 'ویرایش نمونه کار' : 'افزودن �
 ?>
 <div class="form-card">
     <form method="post" action="save_work.php" enctype="multipart/form-data">
+        <?= csrf_field() ?>
         <?php if ($editing): ?>
             <input type="hidden" name="id" value="<?= $work['id'] ?>">
         <?php endif; ?>

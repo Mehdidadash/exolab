@@ -27,11 +27,7 @@ panel_layout_start('لیست پزشکان');
             <td><?= htmlspecialchars($doctor['phone'] ?? '') ?></td>
             <td><?= htmlspecialchars($doctor['email'] ?? '') ?></td>
             <td class="actions">
-                <a class="btn" href="doctor_form.php?id=<?= $doctor['id'] ?>">ویرایش</a>
-                <form method="post" action="delete_doctor.php" style="display:inline;" onsubmit="return confirm('آیا مطمئن هستید؟');">
-                    <input type="hidden" name="id" value="<?= $doctor['id'] ?>">
-                    <button type="submit">حذف</button>
-                </form>
+                <?= action_dropdown('doctor_view.php?id=' . $doctor['id'], 'doctor_form.php?id=' . $doctor['id'], 'delete_doctor.php', $doctor['id']) ?>
             </td>
         </tr>
     <?php endforeach; ?>

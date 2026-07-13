@@ -6,6 +6,7 @@ require_login();
 $user = current_user();
 $isAdmin = ($user['role'] === 'admin');
 $isDoctor = ($user['role'] === 'doctor');
+$isLab = ($user['role'] === 'lab');
 $doctorId = $isDoctor ? $user['id'] : null; // direct user id as doctor id
 
 $columns = [
@@ -36,18 +37,21 @@ $params = [];
 if ($isDoctor) {
     $whereClauses[] = 'c.doctor_id = ?';
     $params[] = $doctorId;
-} elseif (!$isAdmin) {
-    // For staff with view_all_cases permission, we allow all
-    if (!has_permission('view_all_cases')) {
-        die('دسترسی غیرمجاز');
-    }
+} elseif ($isLab) {
+    // Lab users only see cases assigned to their lab
+    $whereClauses[] = 'c.lab_id = ?';
+    $params[] = $user['id'];
+} elseif (!has_permission('view_all_cases')) {
+    die('دسترسی غیرمجاز');
+}
+
+// Filter by doctor
+if (!empty($_GET['doctor_id'])) {
+    $whereClauses[] = 'c.doctor_id = ?';
+    $params[] = (int) $_GET['doctor_id'];
 }
 
 // Filter by status
-error_log('date_from raw: ' . $_GET['date_from']);
-$d = parseJalaliToGregorian($_GET['date_from']);
-error_log('date_from converted: ' . $d);
-
 if (!empty($_GET['status_id'])) {
     $whereClauses[] = 'c.status_id = ?';
     $params[] = (int) $_GET['status_id'];
@@ -72,10 +76,13 @@ if ($searchValue !== '') {
 
 $db = db();
 
-// Total records (scoped for doctor)
+// Total records (scoped)
 if ($isDoctor) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE doctor_id = ?');
     $totalStmt->execute([$doctorId]);
+} elseif ($isLab) {
+    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE lab_id = ?');
+    $totalStmt->execute([$user['id']]);
 } else {
     $totalStmt = $db->query('SELECT COUNT(*) FROM cases');
 }
@@ -97,12 +104,13 @@ $length = max(1, (int) $length);
 $start = max(0, (int) $start);
 
 $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
-        di.invoice_number, di.id AS invoice_id
+        di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id
     LEFT JOIN site_prices p ON c.service_id = p.id
     LEFT JOIN case_statuses cs ON c.status_id = cs.id
     LEFT JOIN doctor_invoices di ON c.invoice_id = di.id
+    LEFT JOIN users lab ON c.lab_id = lab.id
     WHERE " . implode(' AND ', $whereClauses) . "
     ORDER BY $orderBy $orderDir
     LIMIT $length OFFSET $start";
@@ -122,8 +130,9 @@ foreach ($rows as $r) {
         $edit = svg_icon('edit', 'icon-sm');
         $trash = svg_icon('trash', 'icon-sm');
 
+        $tid = htmlspecialchars($r['id'], ENT_QUOTES, 'UTF-8');
         $actionDropdown = '<div class="action-dropdown" style="position:relative; display:inline-block;">'
-            . '<button class="btn action-toggle" data-id="' . htmlspecialchars($r['id']) . '" style="padding:4px 8px;">⋯</button>'
+            . '<button class="btn action-toggle" data-id="' . $tid . '" style="padding:4px 8px;" onclick="var x=this.nextElementSibling;var o=x.style.display===\'block\';document.querySelectorAll(\'.action-menu\').forEach(function(m){m.style.display=\'none\';});if(!o)x.style.display=\'block\';event.stopPropagation();">⋯</button>'
             . '<div class="action-menu" style="display:none; position:absolute; right:0; background:#fff; border:1px solid #e5e7eb; padding:4px; border-radius:6px; min-width:40px; box-shadow:0 6px 18px rgba(0,0,0,0.08); z-index:999;">'
                 . '<a class="btn action-icon" href="view_case.php?id=' . htmlspecialchars($r['id']) . '" target="_blank" onclick="event.stopPropagation(); window.open(this.href, \'_blank\'); return false;" style="display:block; padding:4px 6px; text-align:center;">' . $eye . '</a>'
                 . '<a href="#" class="btn action-icon edit-case" data-id="' . htmlspecialchars($r['id']) . '" style="display:block; padding:4px 6px; text-align:center;">' . $edit . '</a>'
@@ -133,6 +142,9 @@ foreach ($rows as $r) {
     } else {
         $actionDropdown = '<a class="btn" href="view_case.php?id=' . htmlspecialchars($r['id']) . '">مشاهده</a>';
     }
+
+    $labHtml = $isAdmin && !empty($r['lab_name']) ? htmlspecialchars($r['lab_name']) : '';
+    if ($isAdmin && empty($r['lab_name'])) $labHtml = '—';
 
     $data[] = [
         $r['id'],
@@ -145,6 +157,7 @@ foreach ($rows as $r) {
         '<span class="badge">' . htmlspecialchars($r['status_name'] ?: 'نامشخص') . '</span>',
         $received,
         $invoiceHtml,
+        $labHtml,
         $actionDropdown
     ];
 }

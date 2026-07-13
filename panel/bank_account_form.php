@@ -14,6 +14,7 @@ if ($editing && !$account) {
 panel_layout_start($editing ? 'ویرایش حساب بانکی' : 'افزودن حساب بانکی جدید');
 ?>
 <form method="post" action="save_bank_account.php">
+    <?= csrf_field() ?>
     <?php if ($editing): ?>
         <input type="hidden" name="id" value="<?= $account['id'] ?>">
     <?php endif; ?>

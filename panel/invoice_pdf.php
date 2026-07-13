@@ -67,11 +67,31 @@ $invoiceDate = toJalaliDateWithMonth($invoice['invoice_date']);
 $invoiceDueDate = $invoice['due_date'] ? toJalaliDateWithMonth($invoice['due_date']) : '—';
 $doctorPhone = htmlspecialchars($invoice['doctor_phone'] ?? '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 $doctorEmail = htmlspecialchars($invoice['doctor_email'] ?? '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-$invoiceTotal = toPersianDigits(number_format($invoice['total_amount'], 0));
+$invoiceTotal = toPersianDigits(number_format(round($invoice['total_amount']), 0));
 $paymentStatus = $invoice['payment_status'] === 'paid' ? 'پرداخت شده' : 'پرداخت نشده';
 $invoiceNotes = htmlspecialchars($invoice['notes'] ?? '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 $generatedDate = toJalaliDateWithMonth(date('Y-m-d'));
 $generatedTime = toPersianDigits(date('H:i'));
+
+// ---- اطلاعات حساب بانکی ----
+$bankInfoSection = '';
+if (!empty($invoice['bank_owner'])) {
+    $bankOwner = htmlspecialchars($invoice['bank_owner'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $bankName = htmlspecialchars($invoice['bank_name'] ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $accountNumber = htmlspecialchars($invoice['account_number'] ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $cardNumber = htmlspecialchars($invoice['card_number'] ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $ibanSheba = htmlspecialchars($invoice['iban_sheba'] ?? '', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+    $bankInfoSection = '<div class="section">
+        <div class="section-title">اطلاعات حساب بانکی</div>
+        <p>';
+    if ($bankName) $bankInfoSection .= "<span class=\"info-label\">بانک:</span> {$bankName}<br>";
+    if ($bankOwner) $bankInfoSection .= "<span class=\"info-label\">صاحب حساب:</span> {$bankOwner}<br>";
+    if ($accountNumber) $bankInfoSection .= "<span class=\"info-label\">شماره حساب:</span> {$accountNumber}<br>";
+    if ($cardNumber) $bankInfoSection .= "<span class=\"info-label\">شماره کارت:</span> {$cardNumber}<br>";
+    if ($ibanSheba) $bankInfoSection .= "<span class=\"info-label\">شبا:</span> {$ibanSheba}<br>";
+    $bankInfoSection .= '</p></div>';
+}
 
 // ---- تنظیمات mPDF ----
 $mpdf = new Mpdf([
@@ -183,12 +203,7 @@ $html = <<<HTML
         </table>
     </div>
 
-    <div class="section">
-        <div class="section-title">وضعیت</div>
-        <p>
-            <span class="info-label">وضعیت پرداخت:</span> {$paymentStatus}<br>
-        </p>
-    </div>
+    {$bankInfoSection}
 
     <div class="section">
         <div class="section-title">یادداشت‌ها</div>

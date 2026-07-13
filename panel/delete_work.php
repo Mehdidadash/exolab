@@ -3,8 +3,11 @@
 
 require_once __DIR__ . '/auth.php';
 require_role('admin');
+require_csrf();
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['id'])) {
-    $work = getPortfolioWork((int) $_POST['id']);
+    $delId = (int) $_POST['id'];
+    audit_log_delete('work', $delId, 'نمونه کار');
+    $work = getPortfolioWork($delId);
     
     if ($work) {
         // حذف فایل تصویر

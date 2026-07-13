@@ -4,6 +4,8 @@
 require_once __DIR__ . '/auth.php';
 require_role('admin');
 
+require_csrf();
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: bank_accounts.php');
     exit;
@@ -36,5 +38,6 @@ if (isset($_POST['id']) && !empty($_POST['id'])) {
     $data['id'] = (int) $_POST['id'];
 }
 
-saveBankAccount($data);
+$savedId = saveBankAccount($data);
+audit_log_save('bank_account', $savedId, 'حساب بانکی');
 header('Location: bank_accounts.php');

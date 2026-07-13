@@ -17,6 +17,7 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
 ?>
 <div class="form-card">
     <form method="post" action="save_price.php">
+        <?= csrf_field() ?>
         <?php if ($editing): ?>
             <input type="hidden" name="id" value="<?= $price['id'] ?>">
         <?php endif; ?>

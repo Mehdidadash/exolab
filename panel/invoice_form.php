@@ -16,6 +16,7 @@ if ($editing && !$invoice) {
 panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکتور جدید');
 ?>
 <form method="post" action="save_invoice.php">
+    <?= csrf_field() ?>
     <?php if ($editing): ?>
         <input type="hidden" name="id" value="<?= $invoice['id'] ?>">
     <?php endif; ?>
@@ -51,7 +52,7 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
                     <th>شرح</th>
                     <th>نام بیمار</th>
                     <th style="width: 90px;">تعداد</th>
-                    <th>فی</th>
+                    <th>فی (تومان)</th>
                     <th>جمع</th>
                     <th>عملیات</th>
                 </tr>
@@ -59,25 +60,36 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
             <tbody id="invoice-items" data-items='<?= json_encode(array_map(function ($item) {
                 return [
                     'price_id' => $item['price_id'],
+                    'case_id' => $item['case_id'] ?? null,
                     'item_title' => $item['item_title'],
                     'item_description' => $item['item_description'],
                     'patient_name' => $item['patient_name'],
                     'quantity' => $item['quantity'],
-                    'unit_price' => $item['unit_price']
+                    'unit_price' => round((float) $item['unit_price'])
                 ];
             }, $invoiceItems), JSON_UNESCAPED_UNICODE) ?>'>
             </tbody>
         </table>
-        <button type="button" id="add-invoice-item" class="btn" style="background: #0F172A; color: #fff; margin-top: 10px;">افزودن آیتم جدید</button>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+            <button type="button" id="add-invoice-item" class="btn" style="background: #0F172A; color: #fff;">افزودن آیتم جدید</button>
+            <button type="button" id="add-cases-from-doctor" class="btn" style="background: #06B6D4; color: #fff;">افزودن از کیس‌های دکتر</button>
+            <button type="button" id="add-discount-item" class="btn" style="background: #f59e0b; color: #fff;">افزودن تخفیف</button>
+        </div>
 
         <label for="total_amount">مبلغ کل (تومان)</label>
-        <input type="number" id="total_amount" name="total_amount" value="<?= htmlspecialchars($invoice['total_amount'] ?? 0) ?>" step="0.01" readonly>
+        <input type="number" id="total_amount" name="total_amount" value="<?= (int) round($invoice['total_amount'] ?? 0) ?>" readonly>
 
-        <label for="payment_status">وضعیت پرداخت</label>
-        <select id="payment_status" name="payment_status">
-            <option value="unpaid" <?= ($invoice['payment_status'] ?? 'unpaid') === 'unpaid' ? 'selected' : '' ?>>پرداخت نشده</option>
-            <option value="paid" <?= ($invoice['payment_status'] ?? '') === 'paid' ? 'selected' : '' ?>>پرداخت شده</option>
+        <label for="bank_account_id">حساب بانکی (برای درج در فاکتور)</label>
+        <select id="bank_account_id" name="bank_account_id">
+            <option value="">بدون حساب بانکی</option>
+            <?php foreach (getAllBankAccounts() as $acc): ?>
+                <option value="<?= $acc['id'] ?>" <?= ($invoice['bank_account_id'] ?? 0) == $acc['id'] ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($acc['bank_name'] . ' - ' . $acc['account_owner_name']) ?>
+                    <?= $acc['card_number'] ? ' - کارت: ' . htmlspecialchars($acc['card_number']) : '' ?>
+                </option>
+            <?php endforeach; ?>
         </select>
+        <small style="display:block; margin-bottom:12px;">این حساب در فاکتور PDF چاپ خواهد شد.</small>
 
         <label for="invoice_date">تاریخ فاکتور</label>
         <div style="display:flex; gap:8px; align-items:center;">
@@ -106,6 +118,16 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
         <script src="../assets/js/invoice-items.js"></script>
 
         <script>
+            // Restore default bank account from sessionStorage
+            (function(){
+                var saved = sessionStorage.getItem('default_bank_account_id');
+                if (saved) {
+                    var sel = document.getElementById('bank_account_id');
+                    if (sel && !<?= $editing ? 'true' : 'false' ?>) {
+                        sel.value = saved;
+                    }
+                }
+            })();
             (function(){
                 var todayJalali = '<?= toJalaliDateFormatted(date('Y-m-d')) ?>';
                 document.getElementById('set_invoice_today')?.addEventListener('click', function(){

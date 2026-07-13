@@ -17,6 +17,7 @@ $doctors = getAllDoctors();
 panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت جدید');
 ?>
 <form method="post" action="save_payment.php">
+    <?= csrf_field() ?>
     <?php if ($editing): ?>
         <input type="hidden" name="id" value="<?= $payment['id'] ?>">
     <?php endif; ?>
@@ -45,7 +46,7 @@ panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت
         <input type="text" id="doctor_name" name="doctor_name" value="<?= htmlspecialchars($payment['doctor_name'] ?? '') ?>">
 
         <label for="amount">مبلغ (تومان)</label>
-        <input type="number" id="amount" name="amount" value="<?= $payment['amount'] ?? 0 ?>" step="0.01" required>
+        <input type="number" id="amount" name="amount" value="<?= round((float)($payment['amount'] ?? 0)) ?>" step="1" required>
         
         <label for="payment_method">روش پرداخت</label>
         <select id="payment_method" name="payment_method" required>

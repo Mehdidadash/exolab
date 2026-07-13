@@ -17,6 +17,7 @@ panel_layout_start($editing ? 'ویرایش پزشک' : 'افزودن پزشک �
 ?>
 <div class="form-card">
     <form method="post" action="save_doctor.php">
+        <?= csrf_field() ?>
         <?php if ($editing): ?>
             <input type="hidden" name="id" value="<?= $doctor['id'] ?>">
         <?php endif; ?>

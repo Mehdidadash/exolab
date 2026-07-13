@@ -30,11 +30,7 @@ panel_layout_start('لیست پرداخت‌ها');
             <td><small><?= htmlspecialchars($payment['transaction_number'] ?? '—') ?></small></td>
             <td><small><?= htmlspecialchars($payment['account_owner_name'] ?? '—') ?></small></td>
             <td class="actions">
-                <a class="btn" href="payment_form.php?id=<?= $payment['id'] ?>">ویرایش</a>
-                <form method="post" action="delete_payment.php" style="display:inline;" onsubmit="return confirm('آیا مطمئن هستید؟');">
-                    <input type="hidden" name="id" value="<?= $payment['id'] ?>">
-                    <button type="submit">حذف</button>
-                </form>
+                <?= action_dropdown(null, 'payment_form.php?id=' . $payment['id'], 'delete_payment.php', $payment['id']) ?>
             </td>
         </tr>
     <?php endforeach; ?>

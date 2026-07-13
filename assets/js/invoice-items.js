@@ -2,145 +2,289 @@ document.addEventListener('DOMContentLoaded', function () {
     const priceOptions = JSON.parse(document.getElementById('price-data')?.textContent || '[]');
     const itemRows = document.getElementById('invoice-items');
     const addItemBtn = document.getElementById('add-invoice-item');
+    const addDiscountBtn = document.getElementById('add-discount-item');
+    const addCasesBtn = document.getElementById('add-cases-from-doctor');
     const totalAmountField = document.getElementById('total_amount');
 
-    function createPriceOptions(selectedId = '') {
-        const select = document.createElement('select');
-        // the visible select is for user selection only; the actual submitted value
-        // will be stored in a hidden input named `items[index][price_id]`.
-        select.className = 'form-control';
-        const emptyOption = document.createElement('option');
-        emptyOption.value = '';
-        emptyOption.textContent = 'انتخاب از لیست قیمت...';
-        select.appendChild(emptyOption);
-        priceOptions.forEach(price => {
-            const option = document.createElement('option');
-            option.value = price.id;
-            option.textContent = price.title;
-            if (price.id === selectedId) option.selected = true;
-            option.dataset.price = price.price;
-            select.appendChild(option);
-        });
-        return select;
+    // ─── Helper: format number with commas ───
+    function fmt(n) {
+        return Math.round(n).toLocaleString('en-US');
     }
 
+    // ─── Update single row total ───
     function updateRowTotal(row) {
-        const qty = Number(row.querySelector('.item-quantity')?.value || 1);
-        const price = Number(row.querySelector('.item-unit-price')?.value || 0);
-        const total = qty * price;
-        row.querySelector('.item-total').textContent = total.toLocaleString('en-US');
+        var qty = Number(row.querySelector('.item-quantity')?.value || 1);
+        var price = Number(row.querySelector('.item-unit-price')?.value || 0);
+        var total = qty * price;
+        var td = row.querySelector('.item-total');
+        if (td) td.textContent = fmt(total);
         updateInvoiceTotal();
     }
 
+    // ─── Update invoice grand total ───
     function updateInvoiceTotal() {
-        let sum = 0;
-        itemRows.querySelectorAll('tr.invoice-item-row').forEach(row => {
-            const qty = Number(row.querySelector('.item-quantity')?.value || 1);
-            const price = Number(row.querySelector('.item-unit-price')?.value || 0);
+        var sum = 0;
+        itemRows.querySelectorAll('tr.invoice-item-row').forEach(function(row) {
+            var qty = Number(row.querySelector('.item-quantity')?.value || 1);
+            var price = Number(row.querySelector('.item-unit-price')?.value || 0);
             sum += qty * price;
         });
-        totalAmountField.value = sum.toFixed(2);
+        totalAmountField.value = Math.round(sum);
     }
 
+    // ─── Re-index input names after row add/remove ───
     function refreshRowNames() {
-        itemRows.querySelectorAll('tr.invoice-item-row').forEach((row, index) => {
-            const priceSelect = row.querySelector('select');
-            const descriptionInput = row.querySelector('.item-description');
-            const hiddenTitle = row.querySelector('.item-title-hidden');
-            const patientInput = row.querySelector('.item-patient');
-            const qtyInput = row.querySelector('.item-quantity');
-            const priceInput = row.querySelector('.item-unit-price');
-            const hiddenPrice = row.querySelector('.item-price-hidden');
-
-            if (priceSelect) priceSelect.removeAttribute('name');
-            if (hiddenPrice) hiddenPrice.name = `items[${index}][price_id]`;
-            if (descriptionInput) descriptionInput.name = `items[${index}][item_description]`;
-            if (hiddenTitle) hiddenTitle.name = `items[${index}][item_title]`;
-            if (patientInput) patientInput.name = `items[${index}][patient_name]`;
-            if (qtyInput) qtyInput.name = `items[${index}][quantity]`;
-            if (priceInput) priceInput.name = `items[${index}][unit_price]`;
+        itemRows.querySelectorAll('tr.invoice-item-row').forEach(function(row, index) {
+            var fields = [
+                { sel: 'select', name: 'price_id' },
+                { sel: '.item-price-hidden', name: 'price_id' },
+                { sel: '.item-case-hidden', name: 'case_id' },
+                { sel: '.item-description', name: 'item_description' },
+                { sel: '.item-title-hidden', name: 'item_title' },
+                { sel: '.item-patient', name: 'patient_name' },
+                { sel: '.item-quantity', name: 'quantity' },
+                { sel: '.item-unit-price', name: 'unit_price' }
+            ];
+            fields.forEach(function(f) {
+                var el = row.querySelector(f.sel);
+                if (el) {
+                    el.removeAttribute('name');
+                    el.name = 'items[' + index + '][' + f.name + ']';
+                }
+            });
         });
     }
 
-    function addInvoiceRow(item = {}) {
-        const tr = document.createElement('tr');
+    // ─── Add a SIMPLE item row (title + price, no patient/qty/price-select) ───
+    function addSimpleRow(item) {
+        var tr = document.createElement('tr');
         tr.className = 'invoice-item-row';
-        tr.innerHTML = `
-            <td></td>
-            <td>
-                <input type="text" class="item-description" value="${item.item_description ?? ''}" placeholder="شرح خدمات">
-                <input type="hidden" class="item-title-hidden" value="${item.item_title ?? item.item_description ?? ''}">
-            </td>
-            <td><input type="text" class="item-patient" value="${item.patient_name ?? ''}"></td>
-            <td><input type="number" class="item-quantity" min="1" value="${item.quantity ?? 1}" required style="width: 80px;"></td>
-            <td><input type="number" class="item-unit-price" min="0" step="0.01" value="${item.unit_price ?? 0}" required></td>
-            <td class="item-total">0</td>
-            <td><button type="button" class="remove-item-btn">حذف</button></td>
-        `;
+        var desc = item.item_description || '';
+        var title = item.item_title || desc || '';
+        var price = item.unit_price || 0;
+        var caseId = item.case_id || '';
+        var isNeg = item.is_discount || false;
 
-        const priceCell = tr.children[0];
-        const priceSelect = createPriceOptions(item.price_id || '');
-        priceCell.appendChild(priceSelect);
-        const hiddenPrice = document.createElement('input');
-        hiddenPrice.type = 'hidden';
-        hiddenPrice.className = 'item-price-hidden';
-        hiddenPrice.value = item.price_id ?? '';
-        priceCell.appendChild(hiddenPrice);
+        tr.innerHTML =
+            '<td style="text-align:center; vertical-align:middle;">—</td>' +
+            '<td>' +
+                '<input type="text" class="item-description" value="' + desc.replace(/"/g, '&quot;') + '" placeholder="' + (isNeg ? 'عنوان تخفیف' : 'عنوان') + '" style="width:96%;">' +
+                '<input type="hidden" class="item-title-hidden" value="' + title.replace(/"/g, '&quot;') + '">' +
+                '<input type="hidden" class="item-case-hidden" value="' + caseId + '">' +
+                '<input type="hidden" class="item-price-hidden" value="">' +
+            '</td>' +
+            '<td><input type="text" class="item-patient" value="" style="width:96%;"></td>' +
+            '<td><input type="number" class="item-quantity" min="1" value="1" style="width:70px;"></td>' +
+            '<td><input type="number" class="item-unit-price" value="' + price + '" style="width:100px;" step="1"></td>' +
+            '<td class="item-total">0</td>' +
+            '<td><button type="button" class="remove-item-btn" style="background:#fee2e2; color:#991b1b; border:none; border-radius:6px; padding:6px 12px; cursor:pointer;">حذف</button></td>';
 
-        const descriptionInput = tr.querySelector('.item-description');
-        const hiddenTitle = tr.querySelector('.item-title-hidden');
-        const qtyInput = tr.querySelector('.item-quantity');
-        const priceInput = tr.querySelector('.item-unit-price');
+        // Event listeners
+        var descInput = tr.querySelector('.item-description');
+        var hiddenTitle = tr.querySelector('.item-title-hidden');
+        var qtyInput = tr.querySelector('.item-quantity');
+        var priceInput = tr.querySelector('.item-unit-price');
 
-        function syncPrice() {
-            const selected = priceSelect.selectedOptions[0];
-            if (selected && selected.dataset.price && priceInput) {
-                priceInput.value = Number(selected.dataset.price).toFixed(2);
-            }
-            if (hiddenPrice) hiddenPrice.value = priceSelect.value || '';
-            updateRowTotal(tr);
+        if (descInput && hiddenTitle) {
+            descInput.addEventListener('input', function() { hiddenTitle.value = this.value; });
         }
+        if (qtyInput) qtyInput.addEventListener('input', function() { updateRowTotal(tr); });
+        if (priceInput) priceInput.addEventListener('input', function() { updateRowTotal(tr); });
 
-        if (descriptionInput && hiddenTitle) {
-            descriptionInput.addEventListener('input', function () {
-                hiddenTitle.value = this.value;
-            });
-        }
-
-        priceSelect.addEventListener('change', syncPrice);
-        if (qtyInput) {
-            qtyInput.addEventListener('input', () => updateRowTotal(tr));
-        }
-        if (priceInput) {
-            priceInput.addEventListener('input', () => updateRowTotal(tr));
-        }
-
-        const removeButton = tr.querySelector('.remove-item-btn');
-        if (removeButton) {
-            removeButton.addEventListener('click', function () {
-                tr.remove();
-                refreshRowNames();
-                updateInvoiceTotal();
-            });
-        }
+        tr.querySelector('.remove-item-btn').addEventListener('click', function() {
+            tr.remove();
+            refreshRowNames();
+            updateInvoiceTotal();
+        });
 
         itemRows.appendChild(tr);
         refreshRowNames();
         updateRowTotal(tr);
     }
 
+    // ─── Add a CASE row (with price select, patient, quantity, case link) ───
+    function addCaseRow(c) {
+        var tr = document.createElement('tr');
+        tr.className = 'invoice-item-row';
+        var patient = (c.patient_name || '').replace(/"/g, '&quot;');
+        var servTitle = (c.service_title || 'خدمت').replace(/"/g, '&quot;');
+        var desc = ('کیس #' + c.id + ' - ' + (c.patient_name || '')).replace(/"/g, '&quot;');
+        var price = Math.round(c.total_price || c.unit_price || 0);
+
+        // Build price select
+        var selectHtml = '<select class="form-control" style="width:100%;">';
+        selectHtml += '<option value="">انتخاب...</option>';
+        priceOptions.forEach(function(p) {
+            var sel = (p.id == c.service_id) ? ' selected' : '';
+            selectHtml += '<option value="' + p.id + '" data-price="' + p.price + '"' + sel + '>' + p.title + '</option>';
+        });
+        selectHtml += '</select>';
+
+        tr.innerHTML =
+            '<td style="text-align:center;">' + selectHtml + '</td>' +
+            '<td>' +
+                '<input type="text" class="item-description" value="' + desc + '" style="width:96%;">' +
+                '<input type="hidden" class="item-title-hidden" value="' + servTitle + '">' +
+                '<input type="hidden" class="item-case-hidden" value="' + c.id + '">' +
+                '<input type="hidden" class="item-price-hidden" value="' + (c.service_id || '') + '">' +
+            '</td>' +
+            '<td><input type="text" class="item-patient" value="' + patient + '" style="width:96%;"></td>' +
+            '<td><input type="number" class="item-quantity" min="1" value="' + (c.quantity || 1) + '" style="width:70px;"></td>' +
+            '<td><input type="number" class="item-unit-price" value="' + price + '" style="width:100px;" step="1"></td>' +
+            '<td class="item-total">0</td>' +
+            '<td><button type="button" class="remove-item-btn" style="background:#fee2e2; color:#991b1b; border:none; border-radius:6px; padding:6px 12px; cursor:pointer;">حذف</button></td>';
+
+        // Wire events
+        var selectEl = tr.querySelector('select');
+        var priceHidden = tr.querySelector('.item-price-hidden');
+        var descInput = tr.querySelector('.item-description');
+        var hiddenTitle = tr.querySelector('.item-title-hidden');
+        var qtyInput = tr.querySelector('.item-quantity');
+        var priceInput = tr.querySelector('.item-unit-price');
+
+        function syncCasePrice() {
+            var opt = selectEl.selectedOptions[0];
+            if (opt && opt.dataset.price && priceInput) {
+                priceInput.value = Math.round(Number(opt.dataset.price));
+            }
+            if (priceHidden) priceHidden.value = selectEl.value || '';
+            updateRowTotal(tr);
+        }
+
+        if (descInput && hiddenTitle) {
+            descInput.addEventListener('input', function() { hiddenTitle.value = this.value; });
+        }
+        selectEl.addEventListener('change', syncCasePrice);
+        if (qtyInput) qtyInput.addEventListener('input', function() { updateRowTotal(tr); });
+        if (priceInput) priceInput.addEventListener('input', function() { updateRowTotal(tr); });
+
+        tr.querySelector('.remove-item-btn').addEventListener('click', function() {
+            tr.remove();
+            refreshRowNames();
+            updateInvoiceTotal();
+        });
+
+        itemRows.appendChild(tr);
+        refreshRowNames();
+        updateRowTotal(tr);
+    }
+
+    // ─── Button: افزودن آیتم جدید (simple, positive) ───
     if (addItemBtn) {
         addItemBtn.addEventListener('click', function () {
-            addInvoiceRow({ quantity: 1, unit_price: 0 });
+            addSimpleRow({ item_title: '', item_description: '', unit_price: 0 });
         });
     }
 
+    // ─── Button: افزودن تخفیف (simple, negative hint) ───
+    if (addDiscountBtn) {
+        addDiscountBtn.addEventListener('click', function () {
+            addSimpleRow({ item_title: 'تخفیف', item_description: 'تخفیف', unit_price: 0, is_discount: true });
+            var rows = itemRows.querySelectorAll('tr.invoice-item-row');
+            var lastRow = rows[rows.length - 1];
+            if (lastRow) {
+                var inp = lastRow.querySelector('.item-unit-price');
+                if (inp) inp.placeholder = 'مقدار منفی';
+            }
+        });
+    }
+
+    // ─── Button: افزودن از کیس‌های دکتر ───
+    if (addCasesBtn) {
+        addCasesBtn.addEventListener('click', function () {
+            var doctorId = document.getElementById('doctor_id').value;
+            if (!doctorId) {
+                alert('لطفاً ابتدا یک دکتر انتخاب کنید.');
+                return;
+            }
+            fetch('get_case.php?doctor_id=' + doctorId + '&uninvoiced=1')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (!data || !data.length) {
+                        alert('هیچ کیس فاکتورنشده‌ای برای این دکتر یافت نشد.');
+                        return;
+                    }
+                    // Build modal
+                    var rowsHtml = '';
+                    data.forEach(function(c, idx) {
+                        var safeData = encodeURIComponent(JSON.stringify(c));
+                        rowsHtml += '<tr>' +
+                            '<td><input type="checkbox" class="case-cb" data-idx="' + idx + '" checked></td>' +
+                            '<td>' + c.id + '</td>' +
+                            '<td>' + (c.patient_name || '') + '</td>' +
+                            '<td>' + (c.service_title || '') + '</td>' +
+                            '<td>' + fmt(c.total_price || c.unit_price || 0) + '</td>' +
+                            '</tr>';
+                        rowsHtml += '<tr style="display:none;" class="case-data" data-idx="' + idx + '" data-json="' + safeData + '"></tr>';
+                    });
+
+                    var html = '<div class="case-selector-overlay" style="position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:99999;">' +
+                        '<div style="background:#fff; border-radius:12px; max-width:700px; width:90%; max-height:80vh; overflow:auto; padding:24px;">' +
+                        '<h3 style="margin-top:0;">انتخاب کیس‌ها</h3>' +
+                        '<table style="width:100%; border-collapse:collapse;">' +
+                        '<thead><tr><th><input type="checkbox" id="case-select-all" checked></th><th>#</th><th>بیمار</th><th>خدمت</th><th>قیمت</th></tr></thead><tbody>' +
+                        rowsHtml +
+                        '</tbody></table>' +
+                        '<div style="margin-top:16px; display:flex; gap:10px;">' +
+                        '<button type="button" class="case-confirm-btn" class="btn" style="background:#06B6D4; color:#fff; border:none; border-radius:8px; padding:10px 20px; font-weight:700; cursor:pointer;">افزودن کیس‌های انتخاب شده</button>' +
+                        '<button type="button" class="case-cancel-btn" style="background:#E5E7EB; color:#0F172A; border:none; border-radius:8px; padding:10px 20px; font-weight:700; cursor:pointer;">انصراف</button>' +
+                        '</div></div></div>';
+
+                    var div = document.createElement('div');
+                    div.innerHTML = html;
+                    document.body.appendChild(div);
+                    var overlay = div.querySelector('.case-selector-overlay');
+
+                    // Select all
+                    overlay.querySelector('#case-select-all').addEventListener('change', function() {
+                        overlay.querySelectorAll('.case-cb').forEach(function(cb) { cb.checked = this.checked; }.bind(this));
+                    });
+
+                    // Confirm
+                    overlay.querySelector('.case-confirm-btn').addEventListener('click', function() {
+                        var selected = [];
+                        overlay.querySelectorAll('.case-cb:checked').forEach(function(cb) {
+                            var idx = cb.dataset.idx;
+                            var dataRow = overlay.querySelector('.case-data[data-idx="' + idx + '"]');
+                            if (dataRow) {
+                                try {
+                                    var obj = JSON.parse(decodeURIComponent(dataRow.dataset.json));
+                                    selected.push(obj);
+                                } catch(e) { console.warn('parse error', e); }
+                            }
+                        });
+                        selected.forEach(function(c) { addCaseRow(c); });
+                        document.body.removeChild(div);
+                    });
+
+                    // Cancel
+                    overlay.querySelector('.case-cancel-btn').addEventListener('click', function() {
+                        document.body.removeChild(div);
+                    });
+                })
+                .catch(function(err) {
+                    alert('خطا در دریافت کیس‌ها: ' + err.message);
+                });
+        });
+    }
+
+    // ─── Load existing items on page load ───
     if (itemRows && itemRows.dataset.items) {
-        const existingItems = JSON.parse(itemRows.dataset.items);
-        if (existingItems.length === 0) {
-            addInvoiceRow();
-        } else {
-            existingItems.forEach(item => addInvoiceRow(item));
+        try {
+            var existingItems = JSON.parse(itemRows.dataset.items);
+            if (existingItems.length === 0) {
+                addSimpleRow({ unit_price: 0 });
+            } else {
+                existingItems.forEach(function(item) {
+                    if (item.case_id) {
+                        addCaseRow(item);
+                    } else {
+                        addSimpleRow(item);
+                    }
+                });
+            }
+        } catch(e) {
+            addSimpleRow({ unit_price: 0 });
         }
     }
 });

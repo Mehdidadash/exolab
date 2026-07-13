@@ -1,2 +1,10 @@
 *.zip
 exolab.zip
+exolab.rar
+# Environment variables
+.env
+
+# OS files
+Thumbs.db
+.DS_Store
+exolabir_index.sql

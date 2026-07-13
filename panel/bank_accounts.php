@@ -31,11 +31,7 @@ panel_layout_start('مدیریت حسابهای بانکی');
             <td><small><?= htmlspecialchars($account['iban_sheba'] ?? '—') ?></small></td>
             <td><span class="badge"><?= $account['is_active'] ? 'بله' : 'خیر' ?></span></td>
             <td class="actions">
-                <a class="btn" href="bank_account_form.php?id=<?= $account['id'] ?>">ویرایش</a>
-                <form method="post" action="delete_bank_account.php" style="display:inline;" onsubmit="return confirm('آیا مطمئن هستید؟');">
-                    <input type="hidden" name="id" value="<?= $account['id'] ?>">
-                    <button type="submit">حذف</button>
-                </form>
+                <?= action_dropdown(null, 'bank_account_form.php?id=' . $account['id'], 'delete_bank_account.php', $account['id']) ?>
             </td>
         </tr>
     <?php endforeach; ?>

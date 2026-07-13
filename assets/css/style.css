@@ -384,6 +384,17 @@ a {
     color: #fff;
 }
 
+/* Action dropdown — exactly like cases.php */
+.action-dropdown { position: relative; display: inline-block; }
+.action-toggle { font-size: 1.2rem; line-height: 1; background: transparent; border: 1px solid #ddd; border-radius: 4px; padding: 0 6px; cursor: pointer; }
+.action-toggle:hover { background: #f3f4f6; }
+.action-menu { min-width: 40px !important; padding: 4px !important; }
+.action-icon { display: block !important; padding: 4px 6px !important; margin: 2px 0; border-radius: 4px; text-decoration: none; color: inherit; border: none; background: none; cursor: pointer; width: 100%; text-align: center; box-sizing: border-box; }
+.action-icon svg { width: 18px; height: 18px; vertical-align: middle; fill: currentColor; }
+.action-icon:hover { background: #f3f4f6; }
+.action-icon.delete-action:hover { background: #fee2e2; }
+.icon-sm { width: 18px; height: 18px; display: inline-block; vertical-align: middle; }
+
 .site-footer {
     padding: 32px 0;
     background: #071b3c;

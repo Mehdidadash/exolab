@@ -14,4 +14,4 @@ if ($doctor_id <= 0 || $service_id <= 0) {
 
 $price = getApplicablePrice($doctor_id, $service_id);
 header('Content-Type: application/json');
-echo json_encode(['price' => $price ? number_format($price, 2, '.', '') : null]);
+echo json_encode(['price' => $price ? round((float)$price) : null]);

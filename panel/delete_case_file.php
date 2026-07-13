@@ -11,6 +11,9 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $id = !empty($_POST['id']) ? (int) $_POST['id'] : 0;
 $token = $_POST['_csrf_token'] ?? '';
+if (empty($token)) {
+    $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
+}
 if (empty($_SESSION['_csrf_token']) || $token !== $_SESSION['_csrf_token']) {
     http_response_code(403);
     echo json_encode(['success'=>false,'error'=>'csrf']);

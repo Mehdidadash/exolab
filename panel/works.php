@@ -29,11 +29,7 @@ panel_layout_start('مدیریت نمونه کار');
             <td><span class="badge"><?= $work['active'] ? 'بله' : 'خیر' ?></span></td>
             <td><?= (int) $work['display_order'] ?></td>
             <td class="actions">
-                <a class="btn" href="work_form.php?id=<?= $work['id'] ?>">ویرایش</a>
-                <form method="post" action="delete_work.php" style="display:inline;" onsubmit="return confirm('آیا مطمئن هستید؟');">
-                    <input type="hidden" name="id" value="<?= $work['id'] ?>">
-                    <button type="submit">حذف</button>
-                </form>
+                <?= action_dropdown(null, 'work_form.php?id=' . $work['id'], 'delete_work.php', $work['id']) ?>
             </td>
         </tr>
     <?php endforeach; ?>
