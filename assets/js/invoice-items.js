@@ -11,26 +11,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return Math.round(n).toLocaleString('en-US');
     }
 
-    // ─── Update single row total ───
-    function updateRowTotal(row) {
-        var qty = Number(row.querySelector('.item-quantity')?.value || 1);
-        var price = Number(row.querySelector('.item-unit-price')?.value || 0);
-        var total = qty * price;
-        var td = row.querySelector('.item-total');
-        if (td) td.textContent = fmt(total);
-        updateInvoiceTotal();
-    }
 
-    // ─── Update invoice grand total ───
-    function updateInvoiceTotal() {
-        var sum = 0;
-        itemRows.querySelectorAll('tr.invoice-item-row').forEach(function(row) {
-            var qty = Number(row.querySelector('.item-quantity')?.value || 1);
-            var price = Number(row.querySelector('.item-unit-price')?.value || 0);
-            sum += qty * price;
-        });
-        totalAmountField.value = Math.round(sum);
-    }
 
     // ─── Re-index input names after row add/remove ───
     function refreshRowNames() {
@@ -43,7 +24,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 { sel: '.item-title-hidden', name: 'item_title' },
                 { sel: '.item-patient', name: 'patient_name' },
                 { sel: '.item-quantity', name: 'quantity' },
-                { sel: '.item-unit-price', name: 'unit_price' }
+                { sel: '.item-unit-price', name: 'unit_price' },
+                { sel: '.item-total', name: 'total_amount' }
             ];
             fields.forEach(function(f) {
                 var el = row.querySelector(f.sel);
@@ -55,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // ─── Add a SIMPLE item row (title + price, no patient/qty/price-select) ───
+    // ─── Add a SIMPLE item row (title + price) ───
     function addSimpleRow(item) {
         var tr = document.createElement('tr');
         tr.className = 'invoice-item-row';
@@ -64,18 +46,21 @@ document.addEventListener('DOMContentLoaded', function () {
         var price = item.unit_price || 0;
         var caseId = item.case_id || '';
         var isNeg = item.is_discount || false;
+        var patient = (item.patient_name || '').replace(/"/g, '&quot;');
+        var qty = item.quantity || 1;
+        var typeLabel = (item.service_title || item.item_title || (isNeg ? 'تخفیف' : '')).replace(/"/g, '&quot;');
 
         tr.innerHTML =
-            '<td style="text-align:center; vertical-align:middle;">—</td>' +
+            '<td style="text-align:center; vertical-align:middle;">' + (typeLabel || '—') + '</td>' +
             '<td>' +
-                '<input type="text" class="item-description" value="' + desc.replace(/"/g, '&quot;') + '" placeholder="' + (isNeg ? 'عنوان تخفیف' : 'عنوان') + '" style="width:96%;">' +
+                '<input type="text" class="item-description" value="' + desc.replace(/"/g, '&quot;') + '" placeholder="' + (isNeg ? 'عنوان تخفیف' : 'توضیحات') + '" style="width:96%;">' +
                 '<input type="hidden" class="item-title-hidden" value="' + title.replace(/"/g, '&quot;') + '">' +
                 '<input type="hidden" class="item-case-hidden" value="' + caseId + '">' +
                 '<input type="hidden" class="item-price-hidden" value="">' +
             '</td>' +
-            '<td><input type="text" class="item-patient" value="" style="width:96%;"></td>' +
-            '<td><input type="number" class="item-quantity" min="1" value="1" style="width:70px;"></td>' +
-            '<td><input type="number" class="item-unit-price" value="' + price + '" style="width:100px;" step="1"></td>' +
+            '<td><input type="text" class="item-patient" value="' + patient + '" style="width:96%;"></td>' +
+            '<td><input type="number" class="item-quantity" min="1" value="' + qty + '" style="width:70px;"></td>' +
+            '<input type="hidden" class="item-unit-price" value="' + price + '">' +
             '<td class="item-total">0</td>' +
             '<td><button type="button" class="remove-item-btn" style="background:#fee2e2; color:#991b1b; border:none; border-radius:6px; padding:6px 12px; cursor:pointer;">حذف</button></td>';
 
@@ -83,13 +68,11 @@ document.addEventListener('DOMContentLoaded', function () {
         var descInput = tr.querySelector('.item-description');
         var hiddenTitle = tr.querySelector('.item-title-hidden');
         var qtyInput = tr.querySelector('.item-quantity');
-        var priceInput = tr.querySelector('.item-unit-price');
 
         if (descInput && hiddenTitle) {
             descInput.addEventListener('input', function() { hiddenTitle.value = this.value; });
         }
         if (qtyInput) qtyInput.addEventListener('input', function() { updateRowTotal(tr); });
-        if (priceInput) priceInput.addEventListener('input', function() { updateRowTotal(tr); });
 
         tr.querySelector('.remove-item-btn').addEventListener('click', function() {
             tr.remove();
@@ -108,7 +91,10 @@ document.addEventListener('DOMContentLoaded', function () {
         tr.className = 'invoice-item-row';
         var patient = (c.patient_name || '').replace(/"/g, '&quot;');
         var servTitle = (c.service_title || 'خدمت').replace(/"/g, '&quot;');
-        var desc = ('کیس #' + c.id + ' - ' + (c.patient_name || '')).replace(/"/g, '&quot;');
+        // Use only teeth/location as description, without "کیس #" prefix
+        var desc = (c.item_description || c.teeth || c.location_type || c.patient_name || '').replace(/"/g, '&quot;');
+        // Strip common patterns
+        desc = desc.replace(/^کیس #\d+ - /, '').replace(/^دندان /, '');
         var price = Math.round(c.total_price || c.unit_price || 0);
 
         // Build price select
@@ -130,22 +116,22 @@ document.addEventListener('DOMContentLoaded', function () {
             '</td>' +
             '<td><input type="text" class="item-patient" value="' + patient + '" style="width:96%;"></td>' +
             '<td><input type="number" class="item-quantity" min="1" value="' + (c.quantity || 1) + '" style="width:70px;"></td>' +
-            '<td><input type="number" class="item-unit-price" value="' + price + '" style="width:100px;" step="1"></td>' +
+            '<input type="hidden" class="item-unit-price" value="' + price + '">' +
             '<td class="item-total">0</td>' +
             '<td><button type="button" class="remove-item-btn" style="background:#fee2e2; color:#991b1b; border:none; border-radius:6px; padding:6px 12px; cursor:pointer;">حذف</button></td>';
 
         // Wire events
         var selectEl = tr.querySelector('select');
         var priceHidden = tr.querySelector('.item-price-hidden');
+        var unitPriceHidden = tr.querySelector('.item-unit-price');
         var descInput = tr.querySelector('.item-description');
         var hiddenTitle = tr.querySelector('.item-title-hidden');
         var qtyInput = tr.querySelector('.item-quantity');
-        var priceInput = tr.querySelector('.item-unit-price');
 
         function syncCasePrice() {
             var opt = selectEl.selectedOptions[0];
-            if (opt && opt.dataset.price && priceInput) {
-                priceInput.value = Math.round(Number(opt.dataset.price));
+            if (opt && opt.dataset.price && unitPriceHidden) {
+                unitPriceHidden.value = Math.round(Number(opt.dataset.price));
             }
             if (priceHidden) priceHidden.value = selectEl.value || '';
             updateRowTotal(tr);
@@ -156,7 +142,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         selectEl.addEventListener('change', syncCasePrice);
         if (qtyInput) qtyInput.addEventListener('input', function() { updateRowTotal(tr); });
-        if (priceInput) priceInput.addEventListener('input', function() { updateRowTotal(tr); });
 
         tr.querySelector('.remove-item-btn').addEventListener('click', function() {
             tr.remove();
@@ -167,6 +152,27 @@ document.addEventListener('DOMContentLoaded', function () {
         itemRows.appendChild(tr);
         refreshRowNames();
         updateRowTotal(tr);
+    }
+
+    // ─── Update single row total ───
+    function updateRowTotal(row) {
+        var qty = Number(row.querySelector('.item-quantity')?.value || 1);
+        var price = Number(row.querySelector('.item-unit-price')?.value || 0);
+        var total = qty * price;
+        var td = row.querySelector('.item-total');
+        if (td) td.textContent = fmt(total);
+        updateInvoiceTotal();
+    }
+
+    // ─── Update invoice grand total ───
+    function updateInvoiceTotal() {
+        var sum = 0;
+        itemRows.querySelectorAll('tr.invoice-item-row').forEach(function(row) {
+            var qty = Number(row.querySelector('.item-quantity')?.value || 1);
+            var price = Number(row.querySelector('.item-unit-price')?.value || 0);
+            sum += qty * price;
+        });
+        totalAmountField.value = Math.round(sum);
     }
 
     // ─── Button: افزودن آیتم جدید (simple, positive) ───
@@ -184,7 +190,20 @@ document.addEventListener('DOMContentLoaded', function () {
             var lastRow = rows[rows.length - 1];
             if (lastRow) {
                 var inp = lastRow.querySelector('.item-unit-price');
-                if (inp) inp.placeholder = 'مقدار منفی';
+                if (inp) {
+                    inp.type = 'number';
+                    inp.step = '1';
+                    inp.style.width = '100px';
+                    inp.placeholder = 'مبلغ تخفیف';
+                    // Auto-negate: if user enters positive, make it negative
+                    inp.addEventListener('input', function() {
+                        var val = parseFloat(this.value) || 0;
+                        if (val > 0) {
+                            this.value = '-' + val;
+                        }
+                        updateRowTotal(lastRow);
+                    });
+                }
             }
         });
     }

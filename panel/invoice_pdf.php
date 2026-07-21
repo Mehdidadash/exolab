@@ -40,19 +40,19 @@ $invoiceTitle = "صورت حساب {$monthName} {$year} دکتر {$doctorName}";
 // ---- ساخت ردیف‌های جدول ----
 $itemsRowsHtml = '';
 foreach ($invoiceItems as $item) {
-    $type = $item['price_title'] ?: ($item['price_id'] ? 'شناسه ' . $item['price_id'] : '—');
+    $type = $item['price_title'] ?: $item['item_title'] ?: '—';
     $description = $item['item_description'] ?: $item['item_title'];
     $patient = $item['patient_name'] ?: '—';
     $quantity = toPersianDigits(number_format($item['quantity'], 0));
-    $unitPrice = formatAmountToman($item['unit_price']);
     $totalPrice = formatAmountToman($item['total_amount']);
 
+    $receivedDate = !empty($item['created_at']) ? toJalaliDateFormatted($item['created_at']) : '—';
     $itemsRowsHtml .= '<tr>' .
         '<td>' . htmlspecialchars($type, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($description, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($patient, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . $quantity . '</td>' .
-        '<td>' . $unitPrice . '</td>' .
+        '<td>' . $receivedDate . '</td>' .
         '<td>' . $totalPrice . '</td>' .
         '</tr>';
 }
@@ -189,7 +189,7 @@ $html = <<<HTML
                     <th>شرح</th>
                     <th>نام بیمار</th>
                     <th>تعداد</th>
-                    <th>فی</th>
+                    <th>تاریخ دریافت</th>
                     <th>جمع</th>
                 </tr>
             </thead>

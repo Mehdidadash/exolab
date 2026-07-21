@@ -3,7 +3,7 @@
 require_once __DIR__ . '/auth.php';
 require_login();
 
-if (!has_permission('view_all_cases') && !has_permission('view_own_cases') && !has_permission('view_assigned_cases')) {
+if (!has_permission('view_all_cases') && !has_permission('view_own_cases') && !has_permission('view_assigned_cases') && !has_permission('view_clinic_cases')) {
     die('دسترسی غیرمجاز');
 }
 
@@ -106,6 +106,8 @@ panel_layout_start('مدیریت کیس‌ها');
         <button type="submit" class="btn">اعمال فیلتر</button>
         <a href="cases.php" class="btn" style="background: #E5E7EB; color: #0F172A;">پاک کردن فیلترها</a>
         <button type="button" id="print-labels-btn" class="btn" style="background: #059669; color: #fff;" onclick="printSelectedLabels()">🖨 پرینت برچسب</button>
+        <button type="button" id="batch-status-btn" class="btn" style="background: #7c3aed; color: #fff;" onclick="openBatchStatusModal()">📋 تغییر وضعیت گروهی</button>
+        <button type="button" id="export-csv-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="exportSelectedCSV()">📥 خروجی CSV</button>
     </div>
 </form>
 
@@ -139,6 +141,7 @@ panel_layout_start('مدیریت کیس‌ها');
         <form id="case-form">
             <input type="hidden" name="id" id="case-id">
             <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+            <input type="hidden" name="parent_id" id="case-parent-id" value="">
             <div class="grid" style="grid-template-columns: 1fr 1fr; gap:10px;">
                 <div class="form-group">
                     <label for="case-doctor-id">پزشک</label>
@@ -153,7 +156,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label for="case-lab-id">برونسپاری به لابراتوار</label>
                     <select id="case-lab-id" name="lab_id">
                         <option value="">بدون برونسپاری</option>
-                        <?php $labs = db()->query("SELECT id, full_name FROM users WHERE role='lab' AND active=1 ORDER BY full_name"); foreach ($labs as $lab): ?>
+                        <?php $labs = db()->query("SELECT id, full_name FROM users WHERE role='outsource_lab' AND active=1 ORDER BY full_name"); foreach ($labs as $lab): ?>
                         <option value="<?= $lab['id'] ?>"><?= htmlspecialchars($lab['full_name']) ?></option>
                         <?php endforeach; ?>
                     </select>
@@ -216,7 +219,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 </div>
                 <div class="form-group" style="grid-column:1/3;">
                     <label for="case-files">فایل طراحی (STL / PLY)</label>
-                    <input type="file" id="case-files" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp" multiple>
+                    <input type="file" id="case-files" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.rar,.zip" multiple>
                 </div>
             </div>
             <div style="display:flex; gap:10px; margin-top:12px; justify-content:flex-end;">
@@ -239,8 +242,28 @@ panel_layout_start('مدیریت کیس‌ها');
     </div>
 </div>
 
+<!-- Batch Status Update Modal -->
+<div id="batch-status-modal" class="modal" style="display:none;">
+    <div class="modal-content form-card" style="max-width:420px; margin:auto; padding:24px;">
+        <h3 style="margin-bottom:12px;">تغییر وضعیت گروهی کیس‌ها</h3>
+        <p id="batch-status-count" style="margin-bottom:16px; color:#555;"></p>
+        <div class="form-group">
+            <label for="batch-status-select">وضعیت جدید</label>
+            <select id="batch-status-select" style="width:100%;">
+                <option value="">انتخاب کنید...</option>
+                <?php foreach ($statuses as $s): ?>
+                    <option value="<?= $s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+            <button id="batch-status-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
+            <button id="batch-status-confirm" class="btn" style="background:#7c3aed; color:#fff;">تغییر وضعیت</button>
+        </div>
+    </div>
+</div>
+
 <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
-<link rel="stylesheet" href="../assets/css/datatables.min.css">
 <style>
     .modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.45); z-index:9999; }
     .modal .modal-content{ max-height:90vh; overflow:auto; box-shadow:0 8px 24px rgba(0,0,0,0.2); background:white; border-radius:4px; }
@@ -282,8 +305,6 @@ panel_layout_start('مدیریت کیس‌ها');
         }
     }
 </style>
-<script src="../assets/js/jquery-3.6.0.min.js"></script>
-<script src="../assets/js/datatables.min.js"></script>
 <script src="../assets/js/persian-date.min.js"></script>
 <script src="../assets/js/persian-datepicker.min.js"></script>
 
@@ -469,8 +490,19 @@ panel_layout_start('مدیریت کیس‌ها');
                 e.preventDefault();
                 jQuery('#case-form')[0].reset();
                 jQuery('#case-id').val('');
+                jQuery('#case-parent-id').val('');
                 openCaseModal();
             });
+
+            // Auto-open modal with parent_id from URL parameter ?add_sub=XXX
+            var urlParams = new URLSearchParams(window.location.search);
+            var addSub = urlParams.get('add_sub');
+            if (addSub) {
+                jQuery('#case-form')[0].reset();
+                jQuery('#case-id').val('');
+                jQuery('#case-parent-id').val(addSub);
+                openCaseModal('افزودن کیس زیرمجموعه برای کیس #' + addSub);
+            }
 
             jQuery(document).on('click', '.edit-case', function(e){
                 e.preventDefault();
@@ -525,6 +557,7 @@ panel_layout_start('مدیریت کیس‌ها');
             function closeCaseModal(){
                 jQuery('#case-modal').css({display: 'none'});
                 jQuery('#case-form')[0].reset();
+                jQuery('#case-save').prop('disabled', false).text('ذخیره');
                 setTimeout(function(){ jQuery('#case-received-date').val(''); }, 100);
             }
             jQuery('#case-cancel').on('click', function(){ closeCaseModal(); });
@@ -533,6 +566,7 @@ panel_layout_start('مدیریت کیس‌ها');
 
             function populateCaseForm(data){
                 jQuery('#case-id').val(data.id || '');
+                jQuery('#case-parent-id').val(data.parent_id || '');
                 jQuery('#case-doctor-id').val(data.doctor_id || '');
                 jQuery('#case-patient-name').val(data.patient_name || '');
                 jQuery('#case-service-id').val(data.service_id || '');
@@ -550,30 +584,67 @@ panel_layout_start('مدیریت کیس‌ها');
             jQuery('#case-form').on('submit', function(e){
                 e.preventDefault();
                 var formEl = jQuery(this)[0];
-                var fd = new FormData(formEl);
-                fd.set('_csrf_token', '<?= htmlspecialchars($csrf_token) ?>');
+                var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+
+                // Build URL-encoded data (text fields only – no files)
+                var params = new URLSearchParams(new FormData(formEl));
+                params.set('_csrf_token', csrf);
                 if (!jQuery('#case-received-date').val()) {
-                    fd.set('received_date', todayJalali);
+                    params.set('received_date', todayJalali);
                 }
+
                 jQuery.ajax({
                     url: 'save_case.php',
                     type: 'POST',
-                    data: fd,
-                    processData: false,
-                    contentType: false,
-                    beforeSend: function(xhr) {
-                        xhr.setRequestHeader('X-CSRF-Token', '<?= htmlspecialchars($csrf_token) ?>');
+                    data: params.toString(),
+                    headers: {
+                        'X-CSRF-Token': csrf
+                    },
+                    beforeSend: function() {
+                        jQuery('#case-save').prop('disabled', true).text('در حال ذخیره...');
                     },
                     success: function(resp){
                         try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
                         if (j.success) {
+                            // If files selected, upload them separately after case is created
+                            var fileInput = document.getElementById('case-files');
+                            if (fileInput && fileInput.files.length > 0) {
+                                var fd = new FormData();
+                                fd.set('case_id', j.id);
+                                for (var i = 0; i < fileInput.files.length; i++) {
+                                    fd.append('case_files[]', fileInput.files[i]);
+                                }
+                                jQuery.ajax({
+                                    url: 'upload_case_files.php?case_id=' + encodeURIComponent(j.id),
+                                    type: 'POST',
+                                    data: fd,
+                                    processData: false,
+                                    contentType: false,
+                                    headers: {
+                                        'X-CSRF-Token': csrf,
+                                        'X-Case-Id': j.id
+                                    },
+                                    success: function(resp2){
+                                        try { var j2 = (typeof resp2 === 'string') ? JSON.parse(resp2) : resp2; } catch(e){ j2 = { success: false }; }
+                                        if (!j2.success && j2.errors && j2.errors.length) {
+                                            alert('برخی فایل‌ها آپلود نشدند:\n' + j2.errors.join('\n'));
+                                        }
+                                    },
+                                    error: function(xhr){
+                                        alert('خطا در آپلود فایل‌ها: ' + (xhr.responseText || ''));
+                                    }
+                                });
+                            }
                             closeCaseModal();
                             table.ajax.reload(null, false);
                         } else {
                             alert('ذخیره انجام نشد: ' + (j.message || ''));
                         }
                     },
-                    error: function(){ alert('خطا در سرور'); }
+                    error: function(){
+                        jQuery('#case-save').prop('disabled', false).text('ذخیره');
+                        alert('خطا در سرور');
+                    }
                 });
             });
             // Auto-update unit price when doctor or service changes in the modal
@@ -626,6 +697,75 @@ panel_layout_start('مدیریت کیس‌ها');
                     cb.checked = checked;
                 });
             };
+
+            // ─── CSV export ───
+            window.exportSelectedCSV = function() {
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                var ids = [];
+                checked.forEach(function(cb) { ids.push(cb.value); });
+                if (ids.length === 0) {
+                    alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                    return;
+                }
+                var form = document.createElement('form');
+                form.method = 'post';
+                form.action = 'export_cases_csv.php';
+                ids.forEach(function(id) {
+                    var inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'case_ids[]';
+                    inp.value = id;
+                    form.appendChild(inp);
+                });
+                // Add CSRF header via hidden input
+                var csrfInp = document.createElement('input');
+                csrfInp.type = 'hidden';
+                csrfInp.name = '_csrf_token';
+                csrfInp.value = '<?= htmlspecialchars($csrf_token) ?>';
+                form.appendChild(csrfInp);
+                document.body.appendChild(form);
+                form.submit();
+                document.body.removeChild(form);
+            };
+
+            // ─── Batch status update ───
+            window.openBatchStatusModal = function() {
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                if (checked.length === 0) {
+                    alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                    return;
+                }
+                document.getElementById('batch-status-count').textContent = checked.length + ' کیس انتخاب شده است.';
+                document.getElementById('batch-status-modal').style.display = 'flex';
+            };
+            jQuery('#batch-status-cancel').on('click', function(){
+                jQuery('#batch-status-modal').css({display: 'none'});
+            });
+            jQuery('#batch-status-confirm').on('click', function(){
+                var statusId = jQuery('#batch-status-select').val();
+                if (!statusId) { alert('لطفاً یک وضعیت انتخاب کنید.'); return; }
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                if (checked.length === 0) { alert('هیچ کیسی انتخاب نشده.'); return; }
+                var ids = [];
+                checked.forEach(function(cb) { ids.push(cb.value); });
+                jQuery('#batch-status-modal').css({display: 'none'});
+                jQuery.ajax({
+                    url: 'batch_update_status.php',
+                    type: 'POST',
+                    data: { case_ids: ids, status_id: statusId, _csrf_token: '<?= htmlspecialchars($csrf_token) ?>' },
+                    headers: { 'X-CSRF-Token': '<?= htmlspecialchars($csrf_token) ?>' },
+                    success: function(resp){
+                        try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
+                        if (j.success) {
+                            table.ajax.reload(null, false);
+                            alert(j.updated + ' کیس با موفقیت بروزرسانی شد.');
+                        } else {
+                            alert('خطا: ' + (j.errors ? j.errors.join(', ') : j.error));
+                        }
+                    },
+                    error: function(){ alert('خطا در سرور'); }
+                });
+            });
         }
 
     })();

@@ -9,7 +9,7 @@ panel_layout_start('لیست پزشکان');
 <div style="margin-bottom: 18px;">
     <a class="btn" href="doctor_form.php">افزودن پزشک جدید</a>
 </div>
-<table>
+<table class="datatable display">
     <thead>
     <tr>
         <th>ردیف</th>

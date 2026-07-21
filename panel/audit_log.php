@@ -3,33 +3,21 @@
 require_once __DIR__ . '/auth.php';
 require_role('admin');
 
-// Pagination
-$page = max(1, (int) ($_GET['page'] ?? 1));
-$perPage = 50;
-$offset = ($page - 1) * $perPage;
-
-// Filter by action type
+// Fetch ALL logs – DataTables handles pagination/search client-side
 $filterAction = $_GET['action'] ?? '';
 
 $where = '';
 $params = [];
-
 if ($filterAction) {
     $where = 'WHERE al.action LIKE ?';
     $params[] = "%{$filterAction}%";
 }
 
-$countStmt = db()->prepare("SELECT COUNT(*) FROM audit_log al {$where}");
-$countStmt->execute($params);
-$totalCount = (int) $countStmt->fetchColumn();
-$totalPages = (int) ceil($totalCount / $perPage);
-
 $sql = "SELECT al.*, u.full_name AS user_name, u.role AS user_role
         FROM audit_log al
         LEFT JOIN users u ON al.user_id = u.id
         {$where}
-        ORDER BY al.created_at DESC
-        LIMIT " . (int) $perPage . " OFFSET " . (int) $offset;
+        ORDER BY al.created_at DESC";
 
 $stmt = db()->prepare($sql);
 $stmt->execute($params);
@@ -43,7 +31,6 @@ panel_layout_start('لاگ فعالیت‌ها');
     </div>
 </div>
 
-<!-- Filter -->
 <form method="get" style="margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
     <input type="text" name="action" placeholder="فیلتر بر اساس نوع عملیات (create، update، delete)..." value="<?= htmlspecialchars($filterAction) ?>" style="flex: 1; min-width: 200px;">
     <button type="submit" style="background: #0F172A;">فیلتر</button>
@@ -53,7 +40,7 @@ panel_layout_start('لاگ فعالیت‌ها');
 </form>
 
 <div style="overflow-x: auto;">
-<table>
+<table class="datatable display" data-order="0">
     <thead>
     <tr>
         <th>زمان</th>
@@ -68,7 +55,7 @@ panel_layout_start('لاگ فعالیت‌ها');
     <tbody>
     <?php foreach ($logs as $log): ?>
         <tr>
-            <td style="white-space: nowrap; font-size: 0.85rem;"><?= toJalaliDateFormatted($log['created_at']) ?> - <?= toPersianDigits(substr($log['created_at'], 11, 5)) ?></td>
+            <td data-sort="<?= htmlspecialchars($log['created_at']) ?>" style="white-space: nowrap; font-size: 0.85rem;"><?= toJalaliDateFormatted($log['created_at']) ?> - <?= toPersianDigits(substr($log['created_at'], 11, 5)) ?></td>
             <td><?= htmlspecialchars($log['user_name'] ?? '—') ?></td>
             <td><span class="badge"><?= htmlspecialchars($log['user_role'] ?? '—') ?></span></td>
             <td>
@@ -87,27 +74,5 @@ panel_layout_start('لاگ فعالیت‌ها');
     </tbody>
 </table>
 </div>
-
-<!-- Pagination -->
-<?php if ($totalPages > 1): ?>
-<div style="display: flex; justify-content: center; gap: 6px; margin-top: 20px; flex-wrap: wrap;">
-    <?php if ($page > 1): ?>
-        <a class="btn" href="?page=<?= $page - 1 ?>&action=<?= urlencode($filterAction) ?>" style="background: #E5E7EB; color: #0F172A;">قبلی</a>
-    <?php endif; ?>
-    
-    <?php for ($i = max(1, $page - 3); $i <= min($totalPages, $page + 3); $i++): ?>
-        <a class="btn" href="?page=<?= $i ?>&action=<?= urlencode($filterAction) ?>" 
-           style="<?= $i === $page ? 'background: #0F172A; color: #fff;' : 'background: #E5E7EB; color: #0F172A;' ?>">
-            <?= toPersianDigits($i) ?>
-        </a>
-    <?php endfor; ?>
-    
-    <?php if ($page < $totalPages): ?>
-        <a class="btn" href="?page=<?= $page + 1 ?>&action=<?= urlencode($filterAction) ?>" style="background: #E5E7EB; color: #0F172A;">بعدی</a>
-    <?php endif; ?>
-</div>
-<div style="text-align: center; margin-top: 8px; color: #525252;">
-    نمایش <?= toPersianDigits($offset + 1) ?> تا <?= toPersianDigits(min($offset + $perPage, $totalCount)) ?> از <?= toPersianDigits($totalCount) ?> لاگ
-</div>
-<?php endif; ?>
+<?php panel_layout_end(); ?>
 <?php panel_layout_end(); ?>

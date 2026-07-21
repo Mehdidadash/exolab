@@ -48,24 +48,30 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
         <table class="invoice-items-table" style="width:100%; border-collapse: collapse;">
             <thead>
                 <tr>
-                    <th>انتخاب</th>
+                    <th>نوع</th>
                     <th>شرح</th>
                     <th>نام بیمار</th>
                     <th style="width: 90px;">تعداد</th>
-                    <th>فی (تومان)</th>
                     <th>جمع</th>
                     <th>عملیات</th>
                 </tr>
             </thead>
             <tbody id="invoice-items" data-items='<?= json_encode(array_map(function ($item) {
+                // Map DB fields to the format expected by addCaseRow() in invoice-items.js
+                $unitPrice = round((float) $item['unit_price']);
+                $quantity = (int) ($item['quantity'] ?? 1);
                 return [
+                    'id' => $item['case_id'],
+                    'case_id' => $item['case_id'],
                     'price_id' => $item['price_id'],
-                    'case_id' => $item['case_id'] ?? null,
+                    'service_id' => $item['price_id'],
                     'item_title' => $item['item_title'],
+                    'service_title' => $item['item_title'],
                     'item_description' => $item['item_description'],
                     'patient_name' => $item['patient_name'],
-                    'quantity' => $item['quantity'],
-                    'unit_price' => round((float) $item['unit_price'])
+                    'quantity' => $quantity,
+                    'unit_price' => $unitPrice,
+                    'total_price' => $unitPrice * $quantity,
                 ];
             }, $invoiceItems), JSON_UNESCAPED_UNICODE) ?>'>
             </tbody>
@@ -112,10 +118,13 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
             return ['id' => $price['id'], 'title' => $price['title'], 'price' => $price['price']];
         }, $prices), JSON_UNESCAPED_UNICODE) ?></script>
         <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
-        <script src="../assets/js/jquery-3.6.0.min.js"></script>
         <script src="../assets/js/persian-date.min.js"></script>
         <script src="../assets/js/persian-datepicker.min.js"></script>
         <script src="../assets/js/invoice-items.js"></script>
+        <!-- DEBUG: invoice items count=<?= count($invoiceItems) ?> -->
+        <?php if (!empty($invoiceItems)): ?>
+        <!-- DEBUG: first item patient_name=<?= htmlspecialchars($invoiceItems[0]['patient_name'] ?? 'NULL') ?> qty=<?= $invoiceItems[0]['quantity'] ?? 'NULL' ?> case_id=<?= $invoiceItems[0]['case_id'] ?? 'NULL' ?> -->
+        <?php endif; ?>
 
         <script>
             // Restore default bank account from sessionStorage

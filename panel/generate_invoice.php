@@ -42,10 +42,10 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
             // Convert jalali month/year to gregorian range
             $jalaliDateStr = sprintf('%04d/%02d/01', $year, $month);
             try {
-                $startDate = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr)
-                    ->toCarbon()->startOfMonth()->toDateString();
-                $endDate = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr)
-                    ->toCarbon()->endOfMonth()->toDateString();
+                $jalaliStart = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr);
+                $startDate = $jalaliStart->toCarbon()->toDateString();
+                // End of Jalali month = first of next month minus 1 day
+                $endDate = $jalaliStart->addMonths(1)->subDay()->toCarbon()->toDateString();
             } catch (\Exception $e) {
                 $message = 'تاریخ وارد شده معتبر نیست: ' . $e->getMessage();
                 // fallback to show the form again
@@ -66,7 +66,7 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
             $total = $balance + array_sum(array_column($cases, 'total_price'));
 
             if (empty($cases) && $balance == 0) {
-                $message = 'هیچ کیس تکمیل‌شده و فاکتورنشده‌ای برای این پزشک در بازه انتخابی وجود ندارد و بدهی هم ندارد.';
+                $message = 'هیچ کیس فاکتورنشده‌ای برای این پزشک در بازه انتخابی وجود ندارد و بدهی هم ندارد.';
             } else {
                 // If preview_selected, filter cases to only selected ones
                 if ($selectedCasesOnly && !empty($selectedCaseIds)) {
@@ -209,10 +209,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm']) && $_POST[
     $selectedCaseIds = isset($_POST['case_ids']) && is_array($_POST['case_ids']) ? array_map('intval', $_POST['case_ids']) : [];
     $jalaliDateStr = sprintf('%04d/%02d/01', $year, $month);
     try {
-        $startDate = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr)
-            ->toCarbon()->startOfMonth()->toDateString();
-        $endDate = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr)
-            ->toCarbon()->endOfMonth()->toDateString();
+        $jalaliStart = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr);
+        $startDate = $jalaliStart->toCarbon()->toDateString();
+        $endDate = $jalaliStart->addMonths(1)->subDay()->toCarbon()->toDateString();
     } catch (\Exception $e) {
         $message = 'تاریخ نامعتبر: ' . $e->getMessage();
         $generatedInvoiceId = null;

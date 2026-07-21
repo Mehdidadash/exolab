@@ -3,19 +3,10 @@
 require_once __DIR__ . '/auth.php';
 require_role('admin');
 
-$allRoles = [
-    'admin' => 'مدیر سیستم',
-    'doctor' => 'دندانپزشک',
-    'staff' => 'کارمند',
-    'secretary' => 'منشی',
-    'designer' => 'طراح',
-    'technician' => 'تکنیسین',
-    'operator' => 'اپراتور دستگاه',
-    'powder' => 'پودرگذار',
-    'courier' => 'پیک',
-    'finance' => 'امور مالی',
-    'lab' => 'لابراتوار برونسپاری',
-];
+$allRoles = [];
+foreach (getAllRoles() as $r) {
+    $allRoles[$r['name']] = $r['label'];
+}
 
 $editing = !empty($_GET['id']);
 $user = null;
@@ -56,7 +47,7 @@ panel_layout_start($editing ? 'ویرایش کاربر' : 'افزودن کارب
         </div>
         <div class="form-group">
             <label for="role">نقش</label>
-            <select id="role" name="role" required>
+            <select id="role" name="role" required onchange="toggleClinicField(this.value)">
                 <?php foreach ($allRoles as $key => $label): ?>
                     <option value="<?= $key ?>" <?= ($user['role'] ?? '') === $key ? 'selected' : '' ?>>
                         <?= $label ?>
@@ -64,6 +55,24 @@ panel_layout_start($editing ? 'ویرایش کاربر' : 'افزودن کارب
                 <?php endforeach; ?>
             </select>
         </div>
+        <div class="form-group" id="clinic-field" style="display:none;">
+            <label for="clinic_id">کلینیک (فقط برای پزشکان زیرمجموعه کلینیک)</label>
+            <select id="clinic_id" name="clinic_id">
+                <option value="">بدون کلینیک</option>
+                <?php $clinics = db()->query("SELECT id, full_name FROM users WHERE role='clinic' AND active=1 ORDER BY full_name"); foreach ($clinics as $clinic): ?>
+                    <option value="<?= $clinic['id'] ?>" <?= ($user['clinic_id'] ?? '') == $clinic['id'] ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($clinic['full_name']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <small style="color:#525252;">⚠️ توجه: نقش کاربر باید «دندانپزشک» باشد. نقش «کلینیک» فقط برای حساب کلینیک (سازمان مادر) است، نه برای پزشکان.</small>
+        </div>
+        <script>
+        function toggleClinicField(role) {
+            document.getElementById('clinic-field').style.display = (role === 'doctor') ? 'block' : 'none';
+        }
+        toggleClinicField('<?= htmlspecialchars($user['role'] ?? '') ?>');
+        </script>
         <div class="form-group">
             <label for="password">
                 رمز عبور

@@ -8,7 +8,7 @@ panel_layout_start('لیست پرداخت‌ها');
 <div style="margin-bottom: 18px;">
     <a class="btn" href="payment_form.php">ثبت پرداخت جدید</a>
 </div>
-<table>
+<table class="datatable display">
     <thead>
     <tr>
         <th>نام دکتر</th>

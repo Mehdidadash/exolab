@@ -8,8 +8,12 @@ require_once __DIR__ . '/../includes/helpers.php';
 if (session_status() === PHP_SESSION_NONE) {
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
             || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
+    // Set GC lifetime BEFORE session start
+    if (ini_get('session.gc_maxlifetime') < 86400 * 30) {
+        ini_set('session.gc_maxlifetime', 86400 * 30);
+    }
     session_set_cookie_params([
-        'lifetime' => 86400 * 7,
+        'lifetime' => 86400 * 30,
         'path'     => '/',
         'secure'   => $isHttps,
         'httponly' => true,
@@ -26,20 +30,36 @@ if (empty($_SESSION['_csrf_token'])) {
 // Note: session_write_close() is NOT called here intentionally.
 // save_case.php needs to read/write session for CSRF validation.
 
-// Permission mapping
-$GLOBALS['role_permissions'] = [
-    'admin'      => ['*'],
-    'doctor'     => ['view_own_cases', 'view_own_invoices', 'view_own_payments', 'view_case_files'],
-    'staff'      => ['view_all_cases', 'create_cases', 'edit_cases', 'upload_files'],
-    'secretary'  => ['view_all_cases', 'create_cases', 'edit_cases', 'upload_files', 'delete_files'],
-    'designer'   => ['view_all_cases', 'upload_design_files', 'edit_case_status'],
-    'technician' => ['view_all_cases', 'update_case_status', 'view_invoices'],
-    'operator'   => ['view_all_cases', 'update_case_status'],
-    'powder'     => ['view_all_cases'],
-    'courier'    => ['view_all_cases'],
-    'finance'    => ['view_all_cases', 'view_invoices', 'view_payments'],
-    'lab'        => ['view_assigned_cases', 'view_case_files'],
-];
+// Permission mapping – loaded from database roles table
+$GLOBALS['role_permissions'] = [];
+$GLOBALS['role_labels'] = [];
+try {
+    $roles = getAllRoles();
+    foreach ($roles as $r) {
+        $GLOBALS['role_labels'][$r['name']] = $r['label'];
+        $perms = json_decode($r['permissions'] ?? '[]', true);
+        $GLOBALS['role_permissions'][$r['name']] = is_array($perms) ? $perms : [];
+    }
+} catch (\Throwable $e) {
+    // Fallback if roles table doesn't exist yet
+    $GLOBALS['role_permissions'] = [
+        'admin'      => ['*'],
+        'doctor'     => ['view_own_cases', 'view_own_invoices', 'view_own_payments', 'view_case_files'],
+        'staff'      => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files'],
+        'secretary'  => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files', 'delete_files'],
+        'designer'   => ['view_all_cases', 'upload_design_files', 'edit_case_status'],
+        'technician' => ['view_all_cases', 'update_case_status', 'view_invoices'],
+        'operator'   => ['view_all_cases', 'update_case_status'],
+        'powder'     => ['view_all_cases'],
+        'courier'    => ['view_all_cases'],
+        'finance'    => ['view_all_cases', 'view_invoices', 'view_payments'],
+        'outsource_lab' => ['view_assigned_cases', 'view_case_files'],
+        'customer_lab' => ['view_assigned_cases', 'view_case_files'],
+        'partner_lab'  => ['view_assigned_cases', 'view_case_files'],
+        'lab'        => ['view_assigned_cases', 'view_case_files'],
+        'clinic'     => ['view_clinic_cases', 'view_clinic_invoices', 'view_clinic_payments', 'view_case_files'],
+    ];
+}
 
 function current_user() {
     static $user = null;
@@ -95,6 +115,44 @@ function require_permission($permission) {
     }
 }
 
+// ─── Clinic hierarchy helpers ───
+
+/** Get IDs of doctors belonging to the current clinic user */
+function getClinicDoctorIds(): array {
+    $user = current_user();
+    if (!$user || $user['role'] !== 'clinic') return [];
+    $stmt = db()->prepare('SELECT id FROM users WHERE clinic_id = ? AND active = 1');
+    $stmt->execute([$user['id']]);
+    return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+}
+
+/** Get a WHERE clause snippet for clinic-scoped queries. Returns ['sql' => '...', 'params' => [...]] */
+function getClinicScope(string $alias = 'c'): array {
+    $user = current_user();
+    if ($user && $user['role'] === 'clinic') {
+        $ids = getClinicDoctorIds();
+        if (empty($ids)) {
+            return ['sql' => "{$alias}.doctor_id IN (0)", 'params' => []];
+        }
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        return ['sql' => "{$alias}.doctor_id IN ({$placeholders})", 'params' => $ids];
+    }
+    return ['sql' => '1=1', 'params' => []];
+}
+
+/** Check if user can access a specific doctor's data (for clinic users) */
+function canAccessDoctor(int $doctorId): bool {
+    $user = current_user();
+    if (!$user) return false;
+    if (has_permission('view_all_cases')) return true;
+    if ($user['role'] === 'doctor' && ($user['id'] === $doctorId || $user['id'] === $doctorId)) return true;
+    if ($user['role'] === 'clinic') {
+        $ids = getClinicDoctorIds();
+        return in_array($doctorId, $ids);
+    }
+    return false;
+}
+
 // Layout function – unified header for all pages
 function panel_layout_start($title = 'پنل مدیریت') {
     $user = current_user();
@@ -106,6 +164,9 @@ function panel_layout_start($title = 'پنل مدیریت') {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title><?= htmlspecialchars($title) ?></title>
         <link rel="stylesheet" href="../assets/css/style.css">
+        <link rel="stylesheet" href="../assets/css/datatables.min.css">
+        <script src="../assets/js/jquery-3.6.0.min.js"></script>
+        <script src="../assets/js/datatables.min.js"></script>
     </head>
     <body>
     <header class="site-header">
@@ -115,7 +176,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 <span><?= $user ? htmlspecialchars($user['full_name']) . ' — ' . $user['role'] : 'پنل' ?></span>
             </a>
             <nav class="site-nav">
-                <?php if (has_permission('view_all_cases') || has_permission('view_own_cases')): ?>
+                <?php if (has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_clinic_cases')): ?>
                     <a href="cases.php">کیس‌ها</a>
                 <?php endif; ?>
                 <?php if (has_role('admin')): ?>
@@ -126,11 +187,12 @@ function panel_layout_start($title = 'پنل مدیریت') {
                     <a href="works.php">نمونه کار</a>
                     <a href="bank_accounts.php">حساب‌های بانکی</a>
                     <a href="audit_log.php">لاگ فعالیت‌ها</a>
+                    <a href="roles.php">نقش‌ها</a>
                 <?php endif; ?>
-                <?php if (has_permission('view_invoices')): ?>
+                <?php if (has_permission('view_invoices') || has_permission('view_clinic_invoices')): ?>
                     <a href="invoices.php">فاکتورها</a>
                 <?php endif; ?>
-                <?php if (has_permission('view_own_payments') || has_role('admin')): ?>
+                <?php if (has_permission('view_own_payments') || has_role('admin') || has_permission('view_clinic_payments')): ?>
                     <a href="payments.php">پرداخت‌ها</a>
                 <?php endif; ?>
                 <a href="logout.php">خروج</a>
@@ -148,6 +210,39 @@ function panel_layout_end() {
         </div>
     </main>
     <?= action_menu_script() ?>
+    <script>
+    // Auto-initialize DataTables on any table with class "datatable"
+    document.addEventListener('DOMContentLoaded', function(){
+        if (typeof jQuery !== 'undefined' && typeof jQuery.fn.DataTable !== 'undefined') {
+            jQuery('.datatable').each(function(){
+                if (jQuery.fn.dataTable.isDataTable(this)) return; // skip if already initialized
+                var config = {
+                    responsive: true,
+                    pageLength: 25,
+                    destroy: true,
+                    language: {
+                        search: "جستجو:",
+                        lengthMenu: "نمایش _MENU_ در هر صفحه",
+                        info: "نمایش _START_ تا _END_ از _TOTAL_ مورد",
+                        infoEmpty: "هیچ موردی یافت نشد",
+                        infoFiltered: "(فیلتر شده از _MAX_ مورد)",
+                        loadingRecords: "در حال بارگذاری...",
+                        zeroRecords: "موردی یافت نشد",
+                        emptyTable: "داده‌ای موجود نیست",
+                        paginate: { first: "اول", previous: "قبلی", next: "بعدی", last: "آخر" },
+                        aria: { sortAscending: ": مرتب‌سازی صعودی", sortDescending: ": مرتب‌سازی نزولی" }
+                    }
+                };
+                // If the table has a data-order attribute, use it
+                var orderIdx = this.getAttribute('data-order');
+                if (orderIdx !== null) {
+                    config.order = [[parseInt(orderIdx), 'desc']];
+                }
+                jQuery(this).DataTable(config);
+            });
+        }
+    });
+    </script>
     </body>
     </html>
     <?php

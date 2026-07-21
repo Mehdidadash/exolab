@@ -6,21 +6,22 @@ require_login();
 $user = current_user();
 $isAdmin = ($user['role'] === 'admin');
 $isDoctor = ($user['role'] === 'doctor');
-$isLab = ($user['role'] === 'lab');
+$isLab = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab']);
 $doctorId = $isDoctor ? $user['id'] : null; // direct user id as doctor id
 
 $columns = [
     0 => 'c.id',
-    1 => 'u.full_name',         // doctor name from users
-    2 => 'c.patient_name',
-    3 => 'p.title',
-    4 => 'c.location_type',
-    5 => 'c.shade',
-    6 => 'c.total_price',
-    7 => 'cs.name',
-    8 => 'c.received_date',
-    9 => 'di.invoice_number',
-    10 => 'c.id'
+    1 => 'c.id',                // Case ID
+    2 => 'u.full_name',         // doctor name from users
+    3 => 'c.patient_name',
+    4 => 'p.title',
+    5 => 'c.location_type',
+    6 => 'c.shade',
+    7 => 'c.total_price',
+    8 => 'cs.name',
+    9 => 'c.received_date',
+    10 => 'di.invoice_number',
+    11 => 'c.id'
 ];
 
 $draw = isset($_GET['draw']) ? (int) $_GET['draw'] : 1;
@@ -41,6 +42,11 @@ if ($isDoctor) {
     // Lab users only see cases assigned to their lab
     $whereClauses[] = 'c.lab_id = ?';
     $params[] = $user['id'];
+} elseif (has_permission('view_clinic_cases')) {
+    // Clinic users see cases of their subordinate doctors
+    $clinicScope = getClinicScope('c');
+    $whereClauses[] = $clinicScope['sql'];
+    $params = array_merge($params, $clinicScope['params']);
 } elseif (!has_permission('view_all_cases')) {
     die('دسترسی غیرمجاز');
 }
@@ -83,6 +89,10 @@ if ($isDoctor) {
 } elseif ($isLab) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE lab_id = ?');
     $totalStmt->execute([$user['id']]);
+} elseif (has_permission('view_clinic_cases')) {
+    $clinicScope = getClinicScope('c');
+    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE ' . $clinicScope['sql']);
+    $totalStmt->execute($clinicScope['params']);
 } else {
     $totalStmt = $db->query('SELECT COUNT(*) FROM cases');
 }

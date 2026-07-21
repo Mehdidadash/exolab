@@ -3,19 +3,10 @@
 require_once __DIR__ . '/auth.php';
 require_role('admin');
 
-$allRoles = [
-    'admin' => 'مدیر سیستم',
-    'doctor' => 'دندانپزشک',
-    'staff' => 'کارمند',
-    'secretary' => 'منشی',
-    'designer' => 'طراح',
-    'technician' => 'تکنیسین',
-    'operator' => 'اپراتور دستگاه',
-    'powder' => 'پودرگذار',
-    'courier' => 'پیک',
-    'finance' => 'امور مالی',
-    'lab' => 'لابراتوار برونسپاری',
-];
+$allRoles = [];
+foreach (getAllRoles() as $r) {
+    $allRoles[$r['name']] = $r['label'];
+}
 
 $stmt = db()->query("SELECT * FROM users ORDER BY role ASC, full_name ASC");
 $users = $stmt->fetchAll();
@@ -31,7 +22,7 @@ panel_layout_start('مدیریت کاربران');
     <p class="empty">هیچ کاربری یافت نشد.</p>
 <?php else: ?>
 <div style="overflow-x:auto;">
-<table>
+<table class="datatable display">
     <thead>
     <tr>
         <th>نام</th>

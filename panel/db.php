@@ -594,7 +594,6 @@ function getUninvoicedCasesForDoctor($doctor_id, $startDate, $endDate) {
         FROM cases c
         LEFT JOIN site_prices p ON c.service_id = p.id
         WHERE c.doctor_id = ?
-          AND c.status_id = 4   -- Delivered
           AND c.invoice_id IS NULL
           AND c.received_date BETWEEN ? AND ?
         ORDER BY c.received_date ASC
@@ -675,9 +674,9 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankA
     // Insert invoice items
     foreach ($cases as $case) {
         $locationStr = formatCaseLocation($case['location_type'], $case['teeth']);
-        $description = 'کیس #' . $case['id'];
+        $description = '';
         if ($locationStr !== '—') {
-            $description .= ' - ' . $locationStr;
+            $description .= '' . $locationStr;
         }
         $stmt = db()->prepare('
             INSERT INTO invoice_items 
@@ -726,4 +725,85 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankA
     }
 
     return $invoiceId;
+}
+
+// =====================================================
+// Role Management Helpers
+// =====================================================
+
+function getAllRoles(): array {
+    $stmt = db()->query('SELECT * FROM roles ORDER BY id ASC');
+    return $stmt->fetchAll();
+}
+
+function getRole(int $id): ?array {
+    $stmt = db()->prepare('SELECT * FROM roles WHERE id = ?');
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function getRoleByName(string $name): ?array {
+    $stmt = db()->prepare('SELECT * FROM roles WHERE name = ?');
+    $stmt->execute([$name]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function getRolePermissions(string $roleName): array {
+    $role = getRoleByName($roleName);
+    if (!$role || empty($role['permissions'])) return [];
+    $perms = json_decode($role['permissions'], true);
+    return is_array($perms) ? $perms : [];
+}
+
+function saveRole(array $data): int {
+    $name = trim($data['name'] ?? '');
+    $label = trim($data['label'] ?? '');
+    $permissions = $data['permissions'] ?? [];
+    $permsJson = json_encode($permissions, JSON_UNESCAPED_UNICODE);
+    
+    if (isset($data['id']) && !empty($data['id'])) {
+        $stmt = db()->prepare('UPDATE roles SET name = ?, label = ?, permissions = ?, updated_at = NOW() WHERE id = ?');
+        $stmt->execute([$name, $label, $permsJson, (int)$data['id']]);
+        return (int)$data['id'];
+    } else {
+        $stmt = db()->prepare('INSERT INTO roles (name, label, permissions, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())');
+        $stmt->execute([$name, $label, $permsJson]);
+        return (int) db()->lastInsertId();
+    }
+}
+
+function deleteRole(int $id): bool {
+    $check = db()->prepare('SELECT COUNT(*) FROM users WHERE role = (SELECT name FROM roles WHERE id = ?)');
+    $check->execute([$id]);
+    if ((int) $check->fetchColumn() > 0) return false;
+    
+    $stmt = db()->prepare('DELETE FROM roles WHERE id = ?');
+    $stmt->execute([$id]);
+    return true;
+}
+
+function getAllPermissionDefinitions(): array {
+    return [
+        '*'                    => 'دسترسی کامل (مدیر)',
+        'view_all_cases'       => 'مشاهده همه کیس‌ها',
+        'view_own_cases'       => 'مشاهده کیس‌های خود',
+        'view_assigned_cases'  => 'مشاهده کیس‌های محول شده',
+        'view_clinic_cases'    => 'مشاهده کیس‌های کلینیک',
+        'create_cases'         => 'ایجاد کیس',
+        'edit_cases'           => 'ویرایش کیس',
+        'edit_case_status'     => 'ویرایش وضعیت کیس',
+        'update_case_status'   => 'بروزرسانی وضعیت',
+        'upload_files'         => 'آپلود فایل',
+        'upload_design_files'  => 'آپلود فایل طراحی',
+        'delete_files'         => 'حذف فایل',
+        'view_case_files'      => 'مشاهده فایل‌های کیس',
+        'view_invoices'        => 'مشاهده فاکتورها',
+        'view_clinic_invoices' => 'مشاهده فاکتورهای کلینیک',
+        'view_own_invoices'    => 'مشاهده فاکتورهای خود',
+        'view_payments'        => 'مشاهده پرداخت‌ها',
+        'view_own_payments'    => 'مشاهده پرداخت‌های خود',
+        'view_clinic_payments' => 'مشاهده پرداخت‌های کلینیک',
+    ];
 }

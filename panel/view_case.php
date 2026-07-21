@@ -38,6 +38,31 @@ if ($id) {
         $fstmt = db()->prepare('SELECT * FROM case_files WHERE case_id = ? ORDER BY id ASC');
         $fstmt->execute([$id]);
         $files = $fstmt->fetchAll();
+
+        // Get sub-cases (children)
+        $subStmt = db()->prepare(
+            'SELECT c.*, p.title AS service_title, cs.name AS status_name
+             FROM cases c
+             LEFT JOIN site_prices p ON c.service_id = p.id
+             LEFT JOIN case_statuses cs ON c.status_id = cs.id
+             WHERE c.parent_id = ?
+             ORDER BY c.id ASC'
+        );
+        $subStmt->execute([$id]);
+        $subCases = $subStmt->fetchAll();
+
+        // Get parent case if this is a sub-case
+        $parentCase = null;
+        if ($case['parent_id']) {
+            $pStmt = db()->prepare(
+                'SELECT c.*, p.title AS service_title
+                 FROM cases c
+                 LEFT JOIN site_prices p ON c.service_id = p.id
+                 WHERE c.id = ?'
+            );
+            $pStmt->execute([$case['parent_id']]);
+            $parentCase = $pStmt->fetch();
+        }
     }
 }
 
@@ -51,6 +76,22 @@ panel_layout_start('مشاهده کیس');
         <p><strong>پزشک:</strong> <?= htmlspecialchars($case['doctor_name']) ?></p>
         <p><strong>خدمت:</strong> <?= htmlspecialchars($case['service_title']) ?></p>
         <p><strong>تاریخ دریافت:</strong> <?= htmlspecialchars(toJalaliDateFormatted($case['received_date'])) ?></p>
+
+        <?php if ($parentCase): ?>
+            <p><strong>کیس اصلی:</strong> <a href="view_case.php?id=<?= $parentCase['id'] ?>">#<?= $parentCase['id'] ?> - <?= htmlspecialchars($parentCase['patient_name']) ?> (<?= htmlspecialchars($parentCase['service_title']) ?>)</a></p>
+        <?php endif; ?>
+
+        <?php if (!empty($subCases)): ?>
+            <h4>کیس‌های وابسته (زیرمجموعه)</h4>
+            <ul>
+                <?php foreach ($subCases as $sc): ?>
+                    <li><a href="view_case.php?id=<?= $sc['id'] ?>">#<?= $sc['id'] ?> - <?= htmlspecialchars($sc['patient_name']) ?> (<?= htmlspecialchars($sc['service_title']) ?>)</a> – <span class="badge"><?= htmlspecialchars($sc['status_name']) ?></span></li>
+                <?php endforeach; ?>
+            </ul>
+        <?php endif; ?>
+        <?php if (has_permission('create_cases') || has_role('admin')): ?>
+            <p style="margin-top:12px;"><a class="btn" href="cases.php?add_sub=<?= $case['id'] ?>" style="background:#0F172A; color:#fff;">➕ افزودن کیس زیرمجموعه</a></p>
+        <?php endif; ?>
 
         <h4>فایل‌ها</h4>
         <?php if (empty($files)): ?>
@@ -73,6 +114,9 @@ panel_layout_start('مشاهده کیس');
                             <button class="btn file-load" data-file="<?= htmlspecialchars($fileUrl) ?>" style="padding:4px 10px; font-size:0.85rem;">
                                 <?= htmlspecialchars($f['original_name']) ?>
                             </button>
+                        <?php endif; ?>
+                        <?php if (!in_array($user['role'] ?? '', ['doctor', 'clinic'])): ?>
+                            <a class="btn" href="download_case_file.php?id=<?= $f['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:4px 6px; font-size:0.8rem; text-decoration:none;" title="دانلود">⬇️</a>
                         <?php endif; ?>
                         <?php if (has_permission('edit_cases') || has_permission('upload_files')): ?>
                             <button class="btn file-action-rename" style="background:#F3F4F6; color:#111; padding:4px 6px; font-size:0.8rem;" data-id="<?= $f['id'] ?>" data-name="<?= htmlspecialchars($f['original_name']) ?>">✏️</button>

@@ -63,11 +63,28 @@ if ($received_date === '') {
 $status_id = !empty($data['status_id']) ? (int)$data['status_id'] : null;
 $lab_id = !empty($data['lab_id']) ? (int)$data['lab_id'] : null;
 $description = trim($data['description'] ?? '');
+$parent_id = !empty($data['parent_id']) ? (int)$data['parent_id'] : null;
+
+// Debug: log POST keys and patient_name value
+error_log("save_case POST keys: " . implode(', ', array_keys($data)));
+error_log("save_case patient_name raw: [" . ($data['patient_name'] ?? 'NULL') . "]");
+error_log("save_case patient_name after trim: [" . $patient_name . "]");
+error_log("save_case patient_name empty check: " . (empty($patient_name) ? 'EMPTY' : 'OK'));
 
 if (empty($patient_name)) {
     http_response_code(400);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success' => false, 'error' => 'validation', 'message' => 'نام بیمار الزامی است']);
+    echo json_encode([
+        'success' => false,
+        'error' => 'validation',
+        'message' => 'نام بیمار الزامی است',
+        'debug' => [
+            'patient_name_raw' => $data['patient_name'] ?? null,
+            'patient_name_trimmed' => $patient_name,
+            'patient_name_length' => strlen($patient_name),
+            'post_keys' => array_keys($data)
+        ]
+    ]);
     exit;
 }
 
@@ -93,7 +110,7 @@ function handleCaseFileUploads(int $caseId, array $files): array
     }
 
     // Allowed extensions: 3D files + common image formats
-    $allowed = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
+    $allowed = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'rar', 'zip'];
 
     foreach ($files['error'] as $idx => $err) {
         if ($err !== UPLOAD_ERR_OK) {
@@ -139,14 +156,14 @@ function handleCaseFileUploads(int $caseId, array $files): array
 
 try {
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, received_date = ?, status_id = ?, lab_id = ?, description = ?, updated_at = NOW() WHERE id = ?';
-        $params = [$doctor_id, $patient_name, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $description, $id];
+        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, received_date = ?, status_id = ?, lab_id = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
+        $params = [$doctor_id, $patient_name, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $description, $parent_id, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (doctor_id, patient_name, service_id, location_type, teeth, shade, quantity, unit_price, total_price, received_date, status_id, lab_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$doctor_id, $patient_name, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $description];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, service_id, location_type, teeth, shade, quantity, unit_price, total_price, received_date, status_id, lab_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $patient_name, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $description];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = (int) db()->lastInsertId();

@@ -9,7 +9,7 @@ panel_layout_start('مدیریت حسابهای بانکی');
 <div style="margin-bottom: 18px;">
     <a class="btn" href="bank_account_form.php">افزودن حساب بانکی جدید</a>
 </div>
-<table>
+<table class="datatable display">
     <thead>
     <tr>
         <th>نام صاحب حساب</th>

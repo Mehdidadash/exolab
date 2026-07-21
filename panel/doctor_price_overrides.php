@@ -9,7 +9,7 @@ panel_layout_start('مدیریت قیمت‌های اختصاصی پزشکان')
 <div style="margin-bottom:18px;">
     <a class="btn" href="doctor_price_override_form.php">افزودن قیمت اختصاصی جدید</a>
 </div>
-<table>
+<table class="datatable display">
     <thead>
         <tr>
             <th>پزشک</th>
