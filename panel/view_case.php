@@ -18,10 +18,14 @@ $isDoctor = ($user['role'] === 'doctor');
 $doctorId = $isDoctor ? $user['id'] : null;
 
 if ($id) {
-    $sql = 'SELECT c.*, u.full_name AS doctor_name, p.title AS service_title
+    $sql = 'SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, d.full_name AS designer_name,
+                   cs.name AS status_name, lab.full_name AS lab_name
             FROM cases c
             LEFT JOIN users u ON c.doctor_id = u.id
             LEFT JOIN site_prices p ON c.service_id = p.id
+            LEFT JOIN users d ON c.designer_id = d.id
+            LEFT JOIN case_statuses cs ON c.status_id = cs.id
+            LEFT JOIN users lab ON c.lab_id = lab.id
             WHERE c.id = ?';
     $params = [$id];
     if ($isDoctor) {
@@ -72,10 +76,56 @@ panel_layout_start('مشاهده کیس');
     <?php if (!$case): ?>
         <p>کیسی یافت نشد.</p>
     <?php else: ?>
-        <h3>کیس #<?= htmlspecialchars($case['id']) ?> - <?= htmlspecialchars($case['patient_name']) ?></h3>
-        <p><strong>پزشک:</strong> <?= htmlspecialchars($case['doctor_name']) ?></p>
-        <p><strong>خدمت:</strong> <?= htmlspecialchars($case['service_title']) ?></p>
-        <p><strong>تاریخ دریافت:</strong> <?= htmlspecialchars(toJalaliDateFormatted($case['received_date'])) ?></p>
+        <h3>کیس #<?= htmlspecialchars($case['id']) ?> - <?= htmlspecialchars($case['patient_name']) ?><?= !empty($case['receipt_number']) ? ' / ' . htmlspecialchars($case['receipt_number']) : '' ?></h3>
+
+        <?php $isRestricted = in_array($user['role'] ?? '', ['doctor', 'clinic']); ?>
+
+        <table style="width:100%; border-collapse:collapse; margin:12px 0;">
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>پزشک:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['doctor_name'] ?? '—') ?></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>شماره قبض:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['receipt_number'] ?? '—') ?></td>
+            </tr>
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>خدمت:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['service_title'] ?? '—') ?></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>وضعیت:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><span class="badge"><?= htmlspecialchars($case['status_name'] ?? '—') ?></span></td>
+            </tr>
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>تاریخ دریافت:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars(toJalaliDateFormatted($case['received_date'])) ?></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>مکان / دندان:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars(formatCaseLocation($case['location_type'], $case['teeth'])) ?></td>
+            </tr>
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>سایه:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['shade'] ?? '—') ?></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>تعداد:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= toPersianDigits((int)($case['quantity'] ?? 1)) ?></td>
+            </tr>
+            <?php if (!$isRestricted): ?>
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>لابراتوار:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['lab_name'] ?? '—') ?></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>طراح:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['designer_name'] ?? '—') ?></td>
+            </tr>
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>فی (تومان):</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= $case['unit_price'] ? formatAmountToman($case['unit_price']) : '—' ?></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>جمع کل:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= $case['total_price'] ? formatAmountToman($case['total_price']) : '—' ?></td>
+            </tr>
+            <?php endif; ?>
+            <?php if (!empty($case['description'])): ?>
+            <tr>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>توضیحات:</strong></td>
+                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['description']) ?></td>
+            </tr>
+            <?php endif; ?>
+        </table>
 
         <?php if ($parentCase): ?>
             <p><strong>کیس اصلی:</strong> <a href="view_case.php?id=<?= $parentCase['id'] ?>">#<?= $parentCase['id'] ?> - <?= htmlspecialchars($parentCase['patient_name']) ?> (<?= htmlspecialchars($parentCase['service_title']) ?>)</a></p>

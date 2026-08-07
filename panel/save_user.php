@@ -19,6 +19,7 @@ $active = isset($_POST['active']) && $_POST['active'] === '1' ? 1 : 0;
 $password = $_POST['password'] ?? '';
 $notes = trim($_POST['notes'] ?? '');
 $clinic_id = !empty($_POST['clinic_id']) ? (int) $_POST['clinic_id'] : null;
+$is_designer = !empty($_POST['is_designer']) ? 1 : 0;
 
 if (empty($fullName) || empty($username)) {
     header('Location: user_form.php?error=missing' . ($id ? '&id=' . $id : ''));
@@ -36,11 +37,11 @@ if ((int) $check->fetchColumn() > 0) {
 if ($id) {
     if ($password) {
         $hash = password_hash($password, PASSWORD_DEFAULT);
-        $stmt = db()->prepare('UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, role = ?, clinic_id = ?, active = ?, password_hash = ?, notes = ?, updated_at = NOW() WHERE id = ?');
-        $stmt->execute([$fullName, $username, $email ?: null, $phone ?: null, $role, $clinic_id, $active, $hash, $notes ?: null, $id]);
+        $stmt = db()->prepare('UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, role = ?, clinic_id = ?, is_designer = ?, active = ?, password_hash = ?, notes = ?, updated_at = NOW() WHERE id = ?');
+        $stmt->execute([$fullName, $username, $email ?: null, $phone ?: null, $role, $clinic_id, $is_designer, $active, $hash, $notes ?: null, $id]);
     } else {
-        $stmt = db()->prepare('UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, role = ?, clinic_id = ?, active = ?, notes = ?, updated_at = NOW() WHERE id = ?');
-        $stmt->execute([$fullName, $username, $email ?: null, $phone ?: null, $role, $clinic_id, $active, $notes ?: null, $id]);
+        $stmt = db()->prepare('UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, role = ?, clinic_id = ?, is_designer = ?, active = ?, notes = ?, updated_at = NOW() WHERE id = ?');
+        $stmt->execute([$fullName, $username, $email ?: null, $phone ?: null, $role, $clinic_id, $is_designer, $active, $notes ?: null, $id]);
     }
     $savedId = $id;
 } else {
@@ -49,8 +50,8 @@ if ($id) {
         exit;
     }
     $hash = password_hash($password, PASSWORD_DEFAULT);
-    $stmt = db()->prepare('INSERT INTO users (username, password_hash, full_name, email, phone, role, clinic_id, active, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())');
-    $stmt->execute([$username, $hash, $fullName, $email ?: null, $phone ?: null, $role, $clinic_id, $active, $notes ?: null]);
+    $stmt = db()->prepare('INSERT INTO users (username, password_hash, full_name, email, phone, role, clinic_id, is_designer, active, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())');
+    $stmt->execute([$username, $hash, $fullName, $email ?: null, $phone ?: null, $role, $clinic_id, $is_designer, $active, $notes ?: null]);
     $savedId = (int) db()->lastInsertId();
 }
 

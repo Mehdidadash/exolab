@@ -1,6 +1,8 @@
 *.zip
 exolab.zip
 exolab.rar
+*.zip
+*.rar
 # Environment variables
 .env
 

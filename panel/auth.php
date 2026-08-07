@@ -9,11 +9,11 @@ if (session_status() === PHP_SESSION_NONE) {
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
             || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
     // Set GC lifetime BEFORE session start
-    if (ini_get('session.gc_maxlifetime') < 86400 * 30) {
-        ini_set('session.gc_maxlifetime', 86400 * 30);
+    if (ini_get('session.gc_maxlifetime') < 86400 * 60) {
+        ini_set('session.gc_maxlifetime', 86400 * 60);
     }
     session_set_cookie_params([
-        'lifetime' => 86400 * 30,
+        'lifetime' => 86400 * 60,
         'path'     => '/',
         'secure'   => $isHttps,
         'httponly' => true,
@@ -45,10 +45,10 @@ try {
     $GLOBALS['role_permissions'] = [
         'admin'      => ['*'],
         'doctor'     => ['view_own_cases', 'view_own_invoices', 'view_own_payments', 'view_case_files'],
-        'staff'      => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files'],
-        'secretary'  => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files', 'delete_files'],
+        'staff'      => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files', 'batch_print_labels', 'export_csv'],
+        'secretary'  => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files', 'delete_files', 'batch_print_labels', 'export_csv'],
         'designer'   => ['view_all_cases', 'upload_design_files', 'edit_case_status'],
-        'technician' => ['view_all_cases', 'update_case_status', 'view_invoices'],
+        'technician' => ['view_all_cases', 'update_case_status', 'view_invoices', 'batch_print_labels'],
         'operator'   => ['view_all_cases', 'update_case_status'],
         'powder'     => ['view_all_cases'],
         'courier'    => ['view_all_cases'],
@@ -175,7 +175,10 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 <img src="../assets/icons/EXOLAB_LOGO_HORIZENTAL.svg" alt="EXOLAB" class="site-logo">
                 <span><?= $user ? htmlspecialchars($user['full_name']) . ' — ' . $user['role'] : 'پنل' ?></span>
             </a>
-            <nav class="site-nav">
+            <button class="menu-toggle" id="menuToggle" onclick="toggleMobileMenu()">
+                <img src="../assets/icons/hamburger-menu.svg" alt="☰">
+            </button>
+            <nav class="site-nav" id="siteNav">
                 <?php if (has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_clinic_cases')): ?>
                     <a href="cases.php">کیس‌ها</a>
                 <?php endif; ?>
@@ -197,6 +200,14 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 <?php endif; ?>
                 <a href="logout.php">خروج</a>
             </nav>
+            <?php if ($user): $notifCount = getUnreadNotificationCount($user['id']); ?>
+                <a href="notifications.php" class="notif-bell" style="position:relative; color:#fff; text-decoration:none; font-size:1.3rem; margin-right:10px;">
+                    🔔
+                    <?php if ($notifCount > 0): ?>
+                        <span style="position:absolute; top:-6px; right:-6px; background:#ef4444; color:#fff; font-size:0.65rem; padding:1px 5px; border-radius:50%; font-weight:bold;"><?= toPersianDigits($notifCount > 99 ? '99+' : $notifCount) ?></span>
+                    <?php endif; ?>
+                </a>
+            <?php endif; ?>
         </div>
     </header>
     <main class="section">
@@ -240,6 +251,20 @@ function panel_layout_end() {
                 }
                 jQuery(this).DataTable(config);
             });
+        }
+    });
+    </script>
+    <script>
+    function toggleMobileMenu() {
+        var nav = document.getElementById('siteNav');
+        if (nav) nav.classList.toggle('mobile-open');
+    }
+    // Close menu when clicking outside
+    document.addEventListener('click', function(e) {
+        var nav = document.getElementById('siteNav');
+        var btn = document.getElementById('menuToggle');
+        if (nav && nav.classList.contains('mobile-open') && !nav.contains(e.target) && !btn.contains(e.target)) {
+            nav.classList.remove('mobile-open');
         }
     });
     </script>

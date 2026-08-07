@@ -58,7 +58,6 @@ $errors = [];
 $uploaded = 0;
 
 if (empty($_FILES['case_files'])) {
-    error_log("upload_case_files: no files in \$_FILES, POST keys=" . implode(',', array_keys($_POST)) . " files=" . print_r($_FILES, true));
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => true, 'uploaded' => 0]);
     exit;

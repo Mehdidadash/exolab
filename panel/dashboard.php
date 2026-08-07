@@ -12,7 +12,7 @@ if ($role === 'admin') {
     $stats = [];
     $stats['doctors'] = db()->query("SELECT COUNT(*) FROM users WHERE role='doctor' AND active=1")->fetchColumn();
     $stats['cases'] = db()->query("SELECT COUNT(*) FROM cases")->fetchColumn();
-    $stats['active_cases'] = db()->query("SELECT COUNT(*) FROM cases c JOIN case_statuses s ON c.status_id = s.id WHERE s.name NOT IN ('Delivered','Cancelled')")->fetchColumn();
+    $stats['active_cases'] = db()->query("SELECT COUNT(*) FROM cases WHERE status_id != 4")->fetchColumn();
     $stats['total_invoices'] = db()->query("SELECT COUNT(*) FROM doctor_invoices")->fetchColumn();
     $stats['unpaid_invoices'] = db()->query("SELECT COUNT(*) FROM doctor_invoices WHERE payment_status='unpaid'")->fetchColumn();
     $stats['monthly_revenue'] = db()->query("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid' AND MONTH(invoice_date) = MONTH(CURDATE()) AND YEAR(invoice_date) = YEAR(CURDATE())")->fetchColumn();

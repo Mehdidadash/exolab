@@ -95,7 +95,8 @@ document.addEventListener('DOMContentLoaded', function () {
         var desc = (c.item_description || c.teeth || c.location_type || c.patient_name || '').replace(/"/g, '&quot;');
         // Strip common patterns
         desc = desc.replace(/^کیس #\d+ - /, '').replace(/^دندان /, '');
-        var price = Math.round(c.total_price || c.unit_price || 0);
+        // Use unit_price (not total_price) – updateRowTotal multiplies qty × price
+        var price = Math.round(c.unit_price || c.total_price || 0);
 
         // Build price select
         var selectHtml = '<select class="form-control" style="width:100%;">';

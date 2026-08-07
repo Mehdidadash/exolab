@@ -30,6 +30,7 @@ panel_layout_start('مدیریت کاربران');
         <th>ایمیل</th>
         <th>تلفن</th>
         <th>نقش</th>
+        <th>طراح</th>
         <th>وضعیت</th>
         <th>آخرین ورود</th>
         <th>عملیات</th>
@@ -43,6 +44,7 @@ panel_layout_start('مدیریت کاربران');
             <td><?= htmlspecialchars($u['email'] ?? '—') ?></td>
             <td><?= htmlspecialchars($u['phone'] ?? '—') ?></td>
             <td><span class="badge"><?= htmlspecialchars($allRoles[$u['role']] ?? $u['role']) ?></span></td>
+            <td><?= $u['is_designer'] ? '✅' : '—' ?></td>
             <td><span class="badge" style="background:<?= $u['active'] ? '#dcfce7' : '#fee2e2' ?>; color:<?= $u['active'] ? '#166534' : '#991b1b' ?>;">
                 <?= $u['active'] ? 'فعال' : 'غیرفعال' ?>
             </span></td>

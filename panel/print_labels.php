@@ -96,6 +96,11 @@ function buildLabelHtml(array $case, string $baseUrl): string
     $url      = $baseUrl . '/panel/view_case.php?id=' . $caseId;
     $doctor   = htmlspecialchars(abbrDoctor((string) ($case['doctor_name'] ?? '')));
     $patient  = htmlspecialchars((string) ($case['patient_name'] ?? ''));
+    $receipt  = (string) ($case['receipt_number'] ?? '');
+    // Append receipt number to patient name: e.g. "زهرا زنده دل/01020"
+    if ($receipt !== '') {
+        $patient .= '/' . $receipt;
+    }
     $service  = (string) ($case['service_title'] ?? '');
     $shade    = (string) ($case['shade'] ?? '');
     $location = abbrLocation($case['location_type'] ?? null, $case['teeth'] ?? null);
@@ -112,10 +117,12 @@ function buildLabelHtml(array $case, string $baseUrl): string
     $bs = 'border:0.3mm solid #231f20;';
     $fs = 'font-family:vazirblack;';
     // mPDF respects padding on nested <td>.  We use padding to reach the
-// target row height. 8pt Persian text with OTL ≈ 3.5mm,
-// so padding each side = (desiredRow - textHeight) / 2
-$pt = '0.7mm';
-$ct = 'font-size:8pt; padding:' . $pt . ' 0.3mm; vertical-align:middle;';
+    // target row height. 8pt Persian text with OTL ≈ 3.5mm,
+    // so padding each side = (desiredRow - textHeight) / 2
+    $pt = '0.7mm';
+    // Prevent text overflow from changing cell/label dimensions
+    $clip = 'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;';
+    $ct = 'font-size:8pt; padding:' . $pt . ' 0.3mm; vertical-align:middle;' . $clip;
 
     return '<table style="width:90mm; border-collapse:collapse;' . $fs . '">'
          . '<tr>'

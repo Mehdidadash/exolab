@@ -233,9 +233,10 @@ function getInvoice($id) {
 }
 
 function getInvoiceItems($invoice_id) {
-    $stmt = db()->prepare('SELECT ii.*, p.title AS price_title
+    $stmt = db()->prepare('SELECT ii.*, p.title AS price_title, c.received_date AS case_received_date
         FROM invoice_items ii
         LEFT JOIN site_prices p ON ii.price_id = p.id
+        LEFT JOIN cases c ON ii.case_id = c.id
         WHERE ii.invoice_id = ?
         ORDER BY ii.id ASC');
     $stmt->execute([(int) $invoice_id]);
@@ -383,7 +384,7 @@ function savePayment($data) {
         $stmt = db()->prepare('UPDATE doctor_payments SET doctor_id = ?, doctor_name = ?, amount = ?, payment_method = ?, payment_date = ?, transaction_number = ?, bank_account_id = ?, notes = ?, updated_at = ? WHERE id = ?');
         $stmt->execute([
             $data['doctor_id'] ?: null,
-            $data['doctor_name'],
+            $data['doctor_name'] ?? '',
             $data['amount'],
             $data['payment_method'],
             $data['payment_date'],
@@ -398,7 +399,7 @@ function savePayment($data) {
         $stmt = db()->prepare('INSERT INTO doctor_payments (doctor_id, doctor_name, amount, payment_method, payment_date, transaction_number, bank_account_id, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $data['doctor_id'] ?: null,
-            $data['doctor_name'],
+            $data['doctor_name'] ?? '',
             $data['amount'],
             $data['payment_method'],
             $data['payment_date'],
@@ -680,12 +681,13 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankA
         }
         $stmt = db()->prepare('
             INSERT INTO invoice_items 
-            (invoice_id, price_id, item_title, item_description, patient_name, quantity, unit_price, total_amount, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (invoice_id, price_id, case_id, item_title, item_description, patient_name, quantity, unit_price, total_amount, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ');
         $stmt->execute([
             $invoiceId,
             $case['service_id'],
+            $case['id'],           // case_id for linking to case
             $case['service_title'] ?? 'خدمت',
             $description,
             $case['patient_name'],
@@ -805,5 +807,48 @@ function getAllPermissionDefinitions(): array {
         'view_payments'        => 'مشاهده پرداخت‌ها',
         'view_own_payments'    => 'مشاهده پرداخت‌های خود',
         'view_clinic_payments' => 'مشاهده پرداخت‌های کلینیک',
+        'batch_print_labels'   => 'پرینت برچسب گروهی',
+        'batch_update_status'  => 'تغییر وضعیت گروهی',
+        'export_csv'           => 'خروجی CSV',
     ];
+}
+
+// =====================================================
+// Notification Helpers
+// =====================================================
+
+function createNotification(int $userId, string $title, string $message = null, int $caseId = null, string $type = 'info'): int {
+    $stmt = db()->prepare('INSERT INTO notifications (user_id, case_id, title, message, type, created_at) VALUES (?, ?, ?, ?, ?, NOW())');
+    $stmt->execute([$userId, $caseId, $title, $message, $type]);
+    return (int) db()->lastInsertId();
+}
+
+function getUnreadNotifications(int $userId, int $limit = 10): array {
+    $limit = (int) max(1, $limit);
+    $stmt = db()->prepare('SELECT * FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT ' . $limit);
+    $stmt->execute([$userId]);
+    return $stmt->fetchAll();
+}
+
+function getUnreadNotificationCount(int $userId): int {
+    $stmt = db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
+    $stmt->execute([$userId]);
+    return (int) $stmt->fetchColumn();
+}
+
+function markNotificationRead(int $notificationId): void {
+    $stmt = db()->prepare('UPDATE notifications SET is_read = 1 WHERE id = ?');
+    $stmt->execute([$notificationId]);
+}
+
+function markAllNotificationsRead(int $userId): void {
+    $stmt = db()->prepare('UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0');
+    $stmt->execute([$userId]);
+}
+
+function getAllNotifications(int $userId, int $limit = 50): array {
+    $limit = (int) max(1, $limit);
+    $stmt = db()->prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ' . $limit);
+    $stmt->execute([$userId]);
+    return $stmt->fetchAll();
 }

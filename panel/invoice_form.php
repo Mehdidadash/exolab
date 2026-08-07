@@ -106,7 +106,7 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
 
         <label for="due_date">تاریخ سررسید</label>
         <div style="display:flex; gap:8px; align-items:center;">
-            <input type="text" id="due_date" name="due_date" value="<?= htmlspecialchars($invoice['due_date'] ? toJalaliDateFormatted($invoice['due_date']) : '') ?>" placeholder="۱۴۰۳/۰۱/۰۱">
+            <input type="text" id="due_date" name="due_date" value="<?= htmlspecialchars(($invoice['due_date'] ?? '') ? toJalaliDateFormatted($invoice['due_date']) : '') ?>" placeholder="۱۴۰۳/۰۱/۰۱">
             <button type="button" id="set_due_today" class="btn" style="background:#0F172A; color:#fff;">امروز</button>
         </div>
         <small>اگر نیاز به سررسید دارید، تاریخ را به صورت هجری شمسی وارد کنید.</small>

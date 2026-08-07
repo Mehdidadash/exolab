@@ -87,6 +87,20 @@ panel_layout_start($editing ? 'ویرایش کاربر' : 'افزودن کارب
                 <option value="0" <?= isset($user['active']) && !$user['active'] ? 'selected' : '' ?>>خیر</option>
             </select>
         </div>
+        <div class="form-group" id="designer-field">
+            <label>
+                <input type="checkbox" id="is_designer" name="is_designer" value="1" <?= !empty($user['is_designer']) ? 'checked' : '' ?>>
+                طراح (می‌تواند در کیس‌ها به عنوان طراح انتخاب شود)
+            </label>
+        </div>
+        <script>
+        function toggleDesignerField(role) {
+            var hiddenRoles = ['doctor', 'clinic'];
+            document.getElementById('designer-field').style.display = hiddenRoles.includes(role) ? 'none' : 'block';
+        }
+        toggleDesignerField('<?= htmlspecialchars($user['role'] ?? '') ?>');
+        document.getElementById('role').addEventListener('change', function(){ toggleDesignerField(this.value); });
+        </script>
         <div class="form-group">
             <label for="notes">یادداشت</label>
             <textarea id="notes" name="notes" rows="3"><?= htmlspecialchars($user['notes'] ?? '') ?></textarea>

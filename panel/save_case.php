@@ -18,7 +18,6 @@ $token = $_POST['_csrf_token'] ?? '';
 if (empty($token)) {
     $token = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? '';
 }
-error_log("CSRF DEBUG: session=" . substr($sessionToken, 0, 16) . "..., received=" . substr($token, 0, 16) . "..., sid=" . session_id());
 
 if (empty($sessionToken) || !hash_equals($sessionToken, $token)) {
     http_response_code(403);
@@ -26,26 +25,18 @@ if (empty($sessionToken) || !hash_equals($sessionToken, $token)) {
     echo json_encode([
         'success' => false,
         'error' => 'csrf_invalid',
-        'message' => 'CSRF token نامعتبر. لطفاً صفحه را رفرش کنید و دوباره تلاش کنید.',
-        'debug' => [
-            'session_has_token' => !empty($sessionToken),
-            'post_has_token' => !empty($_POST['_csrf_token'] ?? ''),
-            'header_has_token' => !empty($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ''),
-            'session_id' => substr(session_id(), 0, 8) . '...',
-        ]
+        'message' => 'CSRF token نامعتبر. لطفاً صفحه را رفرش کنید و دوباره تلاش کنید.'
     ]);
     exit;
 }
 
 $data = $_POST;
-// Debug: log the received date
-error_log('Received date raw: ' . ($data['received_date'] ?? 'NULL'));
 $received_date = parseJalaliToGregorian($data['received_date'] ?? '');
-error_log('Parsed date: ' . $received_date);
 
 $id = !empty($data['id']) ? (int)$data['id'] : null;
 $doctor_id = !empty($data['doctor_id']) ? (int)$data['doctor_id'] : null;
 $patient_name = trim($data['patient_name'] ?? '');
+$receipt_number = !empty($data['receipt_number']) ? trim($data['receipt_number']) : null;
 $service_id = !empty($data['service_id']) ? (int)$data['service_id'] : null;
 $location_type = trim($data['location_type'] ?? '');
 $teeth = trim($data['teeth'] ?? '');
@@ -64,12 +55,7 @@ $status_id = !empty($data['status_id']) ? (int)$data['status_id'] : null;
 $lab_id = !empty($data['lab_id']) ? (int)$data['lab_id'] : null;
 $description = trim($data['description'] ?? '');
 $parent_id = !empty($data['parent_id']) ? (int)$data['parent_id'] : null;
-
-// Debug: log POST keys and patient_name value
-error_log("save_case POST keys: " . implode(', ', array_keys($data)));
-error_log("save_case patient_name raw: [" . ($data['patient_name'] ?? 'NULL') . "]");
-error_log("save_case patient_name after trim: [" . $patient_name . "]");
-error_log("save_case patient_name empty check: " . (empty($patient_name) ? 'EMPTY' : 'OK'));
+$designer_id = !empty($data['designer_id']) ? (int)$data['designer_id'] : null;
 
 if (empty($patient_name)) {
     http_response_code(400);
@@ -77,13 +63,7 @@ if (empty($patient_name)) {
     echo json_encode([
         'success' => false,
         'error' => 'validation',
-        'message' => 'نام بیمار الزامی است',
-        'debug' => [
-            'patient_name_raw' => $data['patient_name'] ?? null,
-            'patient_name_trimmed' => $patient_name,
-            'patient_name_length' => strlen($patient_name),
-            'post_keys' => array_keys($data)
-        ]
+        'message' => 'نام بیمار الزامی است'
     ]);
     exit;
 }
@@ -156,14 +136,14 @@ function handleCaseFileUploads(int $caseId, array $files): array
 
 try {
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, received_date = ?, status_id = ?, lab_id = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
-        $params = [$doctor_id, $patient_name, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $description, $parent_id, $id];
+        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, received_date = ?, status_id = ?, lab_id = ?, designer_id = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
+        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $designer_id, $description, $parent_id, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, service_id, location_type, teeth, shade, quantity, unit_price, total_price, received_date, status_id, lab_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $patient_name, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $description];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, received_date, status_id, lab_id, designer_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $designer_id, $description];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = (int) db()->lastInsertId();
@@ -173,6 +153,16 @@ try {
     $uploadErrors = [];
     if (!empty($_FILES['case_files'])) {
         $uploadErrors = handleCaseFileUploads($caseId, $_FILES['case_files']);
+    }
+
+    // Notifications for lab & designer assignment
+    if ($lab_id) {
+        $caseTitle = $patient_name ?: 'کیس #' . $caseId;
+        createNotification($lab_id, "کیس جدید: {$caseTitle}", "یک کیس جدید برای شما به عنوان لابراتوار ثبت شده است.", $caseId, 'assignment');
+    }
+    if ($designer_id) {
+        $caseTitle = $patient_name ?: 'کیس #' . $caseId;
+        createNotification($designer_id, "کیس جدید: {$caseTitle}", "یک کیس جدید برای شما به عنوان طراح ثبت شده است.", $caseId, 'assignment');
     }
 
     header('Content-Type: application/json; charset=utf-8');

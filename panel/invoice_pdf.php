@@ -46,7 +46,7 @@ foreach ($invoiceItems as $item) {
     $quantity = toPersianDigits(number_format($item['quantity'], 0));
     $totalPrice = formatAmountToman($item['total_amount']);
 
-    $receivedDate = !empty($item['created_at']) ? toJalaliDateFormatted($item['created_at']) : '—';
+    $receivedDate = !empty($item['case_received_date']) ? toJalaliDateFormatted($item['case_received_date']) : '—';
     $itemsRowsHtml .= '<tr>' .
         '<td>' . htmlspecialchars($type, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($description, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .

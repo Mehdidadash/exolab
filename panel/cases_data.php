@@ -114,13 +114,14 @@ $length = max(1, (int) $length);
 $start = max(0, (int) $start);
 
 $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
-        di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name
+        di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, des.full_name AS designer_name
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id
     LEFT JOIN site_prices p ON c.service_id = p.id
     LEFT JOIN case_statuses cs ON c.status_id = cs.id
     LEFT JOIN doctor_invoices di ON c.invoice_id = di.id
     LEFT JOIN users lab ON c.lab_id = lab.id
+    LEFT JOIN users des ON c.designer_id = des.id
     WHERE " . implode(' AND ', $whereClauses) . "
     ORDER BY $orderBy $orderDir
     LIMIT $length OFFSET $start";

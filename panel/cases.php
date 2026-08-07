@@ -105,9 +105,15 @@ panel_layout_start('مدیریت کیس‌ها');
     <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px;">
         <button type="submit" class="btn">اعمال فیلتر</button>
         <a href="cases.php" class="btn" style="background: #E5E7EB; color: #0F172A;">پاک کردن فیلترها</a>
+        <?php if (has_permission('batch_print_labels')): ?>
         <button type="button" id="print-labels-btn" class="btn" style="background: #059669; color: #fff;" onclick="printSelectedLabels()">🖨 پرینت برچسب</button>
+        <?php endif; ?>
+        <?php if (has_permission('batch_update_status')): ?>
         <button type="button" id="batch-status-btn" class="btn" style="background: #7c3aed; color: #fff;" onclick="openBatchStatusModal()">📋 تغییر وضعیت گروهی</button>
+        <?php endif; ?>
+        <?php if (has_permission('export_csv')): ?>
         <button type="button" id="export-csv-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="exportSelectedCSV()">📥 خروجی CSV</button>
+        <?php endif; ?>
     </div>
 </form>
 
@@ -152,7 +158,7 @@ panel_layout_start('مدیریت کیس‌ها');
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="lab-group">
                     <label for="case-lab-id">برونسپاری به لابراتوار</label>
                     <select id="case-lab-id" name="lab_id">
                         <option value="">بدون برونسپاری</option>
@@ -161,9 +167,22 @@ panel_layout_start('مدیریت کیس‌ها');
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <div class="form-group" id="designer-group">
+                    <label for="case-designer-id">طراح</label>
+                    <select id="case-designer-id" name="designer_id">
+                        <option value="">بدون طراح</option>
+                        <?php $designers = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name"); foreach ($designers as $des): ?>
+                        <option value="<?= $des['id'] ?>"><?= htmlspecialchars($des['full_name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
                 <div class="form-group">
                     <label for="case-patient-name">نام بیمار</label>
                     <input id="case-patient-name" name="patient_name" required>
+                </div>
+                <div class="form-group">
+                    <label for="case-receipt-number">شماره قبض</label>
+                    <input type="number" id="case-receipt-number" name="receipt_number" min="0" placeholder="مثلاً 01020">
                 </div>
                 <div class="form-group">
                     <label for="case-service-id">خدمت</label>
@@ -275,6 +294,10 @@ panel_layout_start('مدیریت کیس‌ها');
     .action-icon svg { width: 18px; height: 18px; vertical-align: middle; }
     .action-icon:hover { background: #f3f4f6; }
     .action-icon.delete-case:hover { background: #fee2e2; }
+    /* Hide lab/designer for restricted roles */
+    <?php if (in_array($user['role'] ?? '', ['doctor', 'clinic'])): ?>
+    #lab-group, #designer-group { display: none !important; }
+    <?php endif; ?>
     /* DataTable layout – single row on large screens */
     .dt-layout-row {
         display: flex;
@@ -435,11 +458,11 @@ panel_layout_start('مدیریت کیس‌ها');
                         d.date_to = jQuery('#date_to').val();
                     }
                 },
-                order: [[9, 'desc']], // received_date column
+                order: [[<?= has_role('admin') ? 9 : 8 ?>, 'desc']], // received_date column
                 responsive: true,
                 pageLength: 25,
                 columns: [
-                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; } },
+                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
                     { data: 0 },
                     { data: 1 },
                     { data: 2 },
@@ -450,10 +473,10 @@ panel_layout_start('مدیریت کیس‌ها');
                     { data: 7 },
                     { data: 8 },
                     { data: 9 },
-                    { data: 10, orderable: false, searchable: true },
+                    { data: 10, orderable: false, searchable: true, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
                     { data: 11, orderable: false, searchable: false }
                 ],
-                // Persian language for DataTables
+                order: [[9, 'desc']], // received_date column always at index 9
                 language: {
                     search: "جستجو:",
                     lengthMenu: "نمایش _MENU_ در هر صفحه",
@@ -569,6 +592,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-parent-id').val(data.parent_id || '');
                 jQuery('#case-doctor-id').val(data.doctor_id || '');
                 jQuery('#case-patient-name').val(data.patient_name || '');
+                jQuery('#case-receipt-number').val(data.receipt_number || '');
                 jQuery('#case-service-id').val(data.service_id || '');
                 jQuery('#case-location-type').val(data.location_type || '');
                 jQuery('#case-teeth').val(data.teeth || '');
@@ -578,6 +602,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-received-date').val(data.received_date || ''); // sets correct date
                 jQuery('#case-status-id').val(data.status_id || '');
                 jQuery('#case-lab-id').val(data.lab_id || '');
+                jQuery('#case-designer-id').val(data.designer_id || '');
                 jQuery('#case-description').val(data.description || '');
             }
 
