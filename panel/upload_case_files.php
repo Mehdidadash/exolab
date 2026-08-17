@@ -4,7 +4,15 @@
 // (Workaround for hosting that clears $_POST on multipart requests with files)
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_login();
+
+// Permission: admins, and roles with file-upload / design-file permissions
+if (!has_role('admin') && !has_permission('upload_design_files') && !has_permission('upload_files') && !has_permission('edit_cases')) {
+    http_response_code(403);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['success' => false, 'error' => 'forbidden']);
+    exit;
+}
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -38,13 +46,19 @@ if ($caseId <= 0) {
     exit;
 }
 
-// Verify case exists
-$check = db()->prepare('SELECT id FROM cases WHERE id = ?');
-$check->execute([$caseId]);
+// Verify case exists and the user may access it
+$user = current_user();
+if ($user['role'] === 'designer') {
+    $check = db()->prepare('SELECT id FROM cases WHERE id = ? AND designer_id = ?');
+    $check->execute([$caseId, (int) $user['id']]);
+} else {
+    $check = db()->prepare('SELECT id FROM cases WHERE id = ?');
+    $check->execute([$caseId]);
+}
 if (!$check->fetch()) {
-    http_response_code(404);
+    http_response_code(403);
     header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success' => false, 'error' => 'case_not_found']);
+    echo json_encode(['success' => false, 'error' => 'case_not_found', 'message' => 'کیس یافت نشد یا دسترسی ندارید.']);
     exit;
 }
 
@@ -64,6 +78,69 @@ if (empty($_FILES['case_files'])) {
 }
 
 $files = $_FILES['case_files'];
+
+// ─── Optional: package all selected files into a single ZIP ───
+$compress = !empty($_POST['compress']) || !empty($_GET['compress']);
+$fileCount = isset($files['name']) && is_array($files['name']) ? count($files['name']) : 0;
+
+if ($compress && $fileCount > 1) {
+    $zipName = 'case_' . $caseId . '_' . time() . '.zip';
+    $zipPath = $uploadDir . $zipName;
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+        $errors[] = 'zip_open_failed';
+    } else {
+        $used = [];
+        foreach ($files['error'] as $idx => $err) {
+            if ($err !== UPLOAD_ERR_OK) {
+                if ($err === UPLOAD_ERR_NO_FILE) continue;
+                $errors[] = "upload_error_{$idx}_{$err}";
+                continue;
+            }
+            $ext = strtolower(pathinfo($files['name'][$idx], PATHINFO_EXTENSION));
+            if (!in_array($ext, $allowed)) {
+                $errors[] = "ext_not_allowed_{$ext}";
+                continue;
+            }
+            // Keep the original filename inside the ZIP (avoid collisions)
+            $base = basename($files['name'][$idx]);
+            $name = $base;
+            $i = 1;
+            while (isset($used[$name])) {
+                $p = pathinfo($base);
+                $name = $p['filename'] . " ($i)." . ($p['extension'] ?? '');
+                $i++;
+            }
+            $used[$name] = true;
+            $zip->addFile($files['tmp_name'][$idx], $name);
+        }
+        $zip->close();
+        $size = @filesize($zipPath);
+        if ($size === false) {
+            $errors[] = 'zip_failed';
+            @unlink($zipPath);
+        } else {
+            try {
+                $ins = db()->prepare('INSERT INTO case_files (case_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, "application/zip", ?, NOW())');
+                $ins->execute([$caseId, $zipName, 'case_' . $caseId . '.zip', $size]);
+                $uploaded = 1;
+            } catch (\Throwable $e) {
+                $errors[] = 'db_insert_error';
+                error_log("upload_case_files: zip DB insert failed: " . $e->getMessage());
+                @unlink($zipPath);
+            }
+        }
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'success' => empty($errors),
+        'uploaded' => $uploaded,
+        'errors' => $errors,
+        'compressed' => true
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 foreach ($files['error'] as $idx => $err) {
     if ($err !== UPLOAD_ERR_OK) {
         if ($err === UPLOAD_ERR_NO_FILE) continue;

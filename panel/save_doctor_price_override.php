@@ -12,9 +12,16 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 $doctor_id = !empty($_POST['doctor_id']) ? (int)$_POST['doctor_id'] : 0;
 $service_id = !empty($_POST['service_id']) ? (int)$_POST['service_id'] : 0;
+$price_type = isset($_POST['price_type']) ? strtolower((string)$_POST['price_type']) : 'service';
 $custom_price = isset($_POST['custom_price']) ? (float)$_POST['custom_price'] : 0;
 
-if ($doctor_id <= 0 || $service_id <= 0 || $custom_price <= 0) {
+if ($doctor_id <= 0 || $custom_price <= 0) {
+    header('Location: doctor_price_override_form.php?error=missing');
+    exit;
+}
+
+// Service is required for the 'service' type; optional (per-type) for 'design_fee'
+if ($price_type === 'service' && $service_id <= 0) {
     header('Location: doctor_price_override_form.php?error=missing');
     exit;
 }
@@ -22,6 +29,7 @@ if ($doctor_id <= 0 || $service_id <= 0 || $custom_price <= 0) {
 $data = [
     'doctor_id' => $doctor_id,
     'service_id' => $service_id,
+    'price_type' => $price_type,
     'custom_price' => $custom_price,
 ];
 

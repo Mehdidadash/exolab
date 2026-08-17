@@ -9,11 +9,11 @@ if (session_status() === PHP_SESSION_NONE) {
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
             || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
     // Set GC lifetime BEFORE session start
-    if (ini_get('session.gc_maxlifetime') < 86400 * 60) {
-        ini_set('session.gc_maxlifetime', 86400 * 60);
+    if (ini_get('session.gc_maxlifetime') < 86400 * 600) {
+        ini_set('session.gc_maxlifetime', 86400 * 600);
     }
     session_set_cookie_params([
-        'lifetime' => 86400 * 60,
+        'lifetime' => 86400 * 600,
         'path'     => '/',
         'secure'   => $isHttps,
         'httponly' => true,
@@ -44,10 +44,10 @@ try {
     // Fallback if roles table doesn't exist yet
     $GLOBALS['role_permissions'] = [
         'admin'      => ['*'],
-        'doctor'     => ['view_own_cases', 'view_own_invoices', 'view_own_payments', 'view_case_files'],
+        'doctor'     => ['view_own_cases', 'view_own_invoices', 'view_own_payments', 'view_case_files', 'create_cases'],
         'staff'      => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files', 'batch_print_labels', 'export_csv'],
         'secretary'  => ['view_all_cases', 'create_cases', 'edit_cases', 'edit_case_status', 'upload_files', 'delete_files', 'batch_print_labels', 'export_csv'],
-        'designer'   => ['view_all_cases', 'upload_design_files', 'edit_case_status'],
+        'designer'   => ['view_assigned_cases', 'upload_design_files', 'edit_case_status'],
         'technician' => ['view_all_cases', 'update_case_status', 'view_invoices', 'batch_print_labels'],
         'operator'   => ['view_all_cases', 'update_case_status'],
         'powder'     => ['view_all_cases'],
@@ -92,8 +92,31 @@ function has_permission($permission) {
     return in_array('*', $perms) || in_array($permission, $perms);
 }
 
+/**
+ * Get the current request URI if it is an internal panel page (safe to return to after login).
+ */
+function getLoginRedirectUrl(): string {
+    $uri = $_SERVER['REQUEST_URI'] ?? '';
+    if ($uri === '' || $uri[0] !== '/' || strpos($uri, '//') === 0 || strpos($uri, '://') !== false) {
+        return '';
+    }
+    $path = parse_url($uri, PHP_URL_PATH) ?: '';
+    if (!preg_match('#/panel/[A-Za-z0-9_\-]+\.php$#', $path)) {
+        return '';
+    }
+    if (preg_match('#/panel/(login|logout)\.php$#', $path)) {
+        return '';
+    }
+    return $uri;
+}
+
 function require_login() {
     if (!is_logged_in()) {
+        // Remember where the user wanted to go so we can return after login
+        $target = getLoginRedirectUrl();
+        if ($target !== '') {
+            $_SESSION['login_redirect'] = $target;
+        }
         header('Location: login.php');
         exit;
     }
@@ -120,10 +143,15 @@ function require_permission($permission) {
 /** Get IDs of doctors belonging to the current clinic user */
 function getClinicDoctorIds(): array {
     $user = current_user();
-    if (!$user || $user['role'] !== 'clinic') return [];
-    $stmt = db()->prepare('SELECT id FROM users WHERE clinic_id = ? AND active = 1');
-    $stmt->execute([$user['id']]);
-    return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+    if (!$user) return [];
+
+    if ($user['role'] === 'clinic' || $user['role'] === 'doctor') {
+        $stmt = db()->prepare('SELECT id FROM users WHERE clinic_id = ? AND active = 1');
+        $stmt->execute([$user['id']]);
+        return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
+    return [];
 }
 
 /** Get a WHERE clause snippet for clinic-scoped queries. Returns ['sql' => '...', 'params' => [...]] */
@@ -145,12 +173,67 @@ function canAccessDoctor(int $doctorId): bool {
     $user = current_user();
     if (!$user) return false;
     if (has_permission('view_all_cases')) return true;
-    if ($user['role'] === 'doctor' && ($user['id'] === $doctorId || $user['id'] === $doctorId)) return true;
+    if ($user['role'] === 'doctor') {
+        if ($user['id'] === $doctorId) return true;
+        $ids = getClinicDoctorIds();
+        return in_array($doctorId, $ids);
+    }
     if ($user['role'] === 'clinic') {
         $ids = getClinicDoctorIds();
         return in_array($doctorId, $ids);
     }
     return false;
+}
+
+/**
+ * Check if a designer can access a target user's profile.
+ * Designers may view profiles of doctors, clinics, and labs that are linked
+ * to a case where they are assigned as the designer.
+ */
+function designerCanAccessUser(int $targetUserId): bool {
+    $user = current_user();
+    if (!$user || $user['role'] !== 'designer') {
+        return false;
+    }
+    $designerId = (int) $user['id'];
+    $stmt = db()->prepare('
+        SELECT COUNT(*) FROM cases c
+        LEFT JOIN users d ON c.doctor_id = d.id
+        WHERE c.designer_id = ?
+          AND (c.doctor_id = ? OR c.lab_id = ? OR d.clinic_id = ?)
+    ');
+    $stmt->execute([$designerId, $targetUserId, $targetUserId, $targetUserId]);
+    return (int) $stmt->fetchColumn() > 0;
+}
+
+/**
+ * Allowed case status IDs that the current user may set.
+ * An empty array means ALL statuses are allowed.
+ * Map each role to its allowed status IDs (case_statuses.id).
+ */
+function getAllowedStatusIdsForUser(): array {
+    $user = current_user();
+    if (!$user) return [];
+
+    // These roles manage cases end-to-end and may set any status
+    if (has_role('admin') || has_role('staff') || has_role('secretary')) {
+        return [];
+    }
+
+    $map = [
+        'designer' => [9, 10, 20, 21], // در حال طراحی، طراحی شده، ارسال به پزشک/مدیر برای کنترل طراحی
+        // Add other roles here, e.g.:
+        // 'technician' => [3, 4, 11, 12, 13, 14, 15, 16, 17],
+    ];
+
+    return $map[$user['role']] ?? [];
+}
+
+/** Check whether the current user may set a given status ID. */
+function canUserSetStatus(int $statusId): bool {
+    $allowed = getAllowedStatusIdsForUser();
+    if (empty($allowed)) return true;
+    return in_array($statusId, $allowed, true);
 }
 
 // Layout function – unified header for all pages
@@ -179,8 +262,11 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 <img src="../assets/icons/hamburger-menu.svg" alt="☰">
             </button>
             <nav class="site-nav" id="siteNav">
-                <?php if (has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_clinic_cases')): ?>
+                <?php if (has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_assigned_cases') || has_permission('view_clinic_cases') || has_role('designer')): ?>
                     <a href="cases.php">کیس‌ها</a>
+                <?php endif; ?>
+                <?php if ($user && in_array($user['role'] ?? '', ['doctor', 'designer', 'admin', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true)): ?>
+                    <a href="uploads.php">آپلود فایل</a>
                 <?php endif; ?>
                 <?php if (has_role('admin')): ?>
                     <a href="users.php">کاربران</a>
@@ -194,9 +280,14 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 <?php endif; ?>
                 <?php if (has_permission('view_invoices') || has_permission('view_clinic_invoices')): ?>
                     <a href="invoices.php">فاکتورها</a>
+                    <a href="designer_invoices.php">فاکتورهای طراحی</a>
+                    <a href="outsource_invoices.php">فاکتورهای برون‌سپاری</a>
                 <?php endif; ?>
                 <?php if (has_permission('view_own_payments') || has_role('admin') || has_permission('view_clinic_payments')): ?>
                     <a href="payments.php">پرداخت‌ها</a>
+                <?php endif; ?>
+                <?php if ($user): ?>
+                    <a href="change_password.php">تغییر رمز عبور</a>
                 <?php endif; ?>
                 <a href="logout.php">خروج</a>
             </nav>
@@ -268,6 +359,58 @@ function panel_layout_end() {
         }
     });
     </script>
+    <?php if ($user): ?>
+    <script>
+    // Browser notifications for logged-in users
+    (function(){
+        if (!('Notification' in window)) return;
+        var userId = <?= (int) $user['id'] ?>;
+        var storageKey = 'exolab_last_notif_' + userId;
+        var lastId = 0;
+        try { lastId = parseInt(localStorage.getItem(storageKey) || '0', 10) || 0; } catch(e) {}
+        var granted = Notification.permission === 'granted';
+
+        // Request permission on first user interaction (avoids auto-block)
+        function requestPermission() {
+            if (granted) return;
+            if (Notification.permission === 'denied') return;
+            Notification.requestPermission().then(function(p){
+                granted = (p === 'granted');
+            }).catch(function(){});
+        }
+        document.addEventListener('click', requestPermission, { once: true });
+
+        function poll() {
+            fetch('check_notifications.php?last_id=' + lastId, { cache: 'no-store', credentials: 'same-origin' })
+                .then(function(r){ return r.json(); })
+                .then(function(data){
+                    if (!data || !Array.isArray(data.notifications)) return;
+                    data.notifications.forEach(function(n){
+                        if (granted) {
+                            try {
+                                var opt = { body: n.message || (n.patient ? 'بیمار: ' + n.patient : ''), icon: '../assets/icons/favicon_io/android-chrome-192x192.png', tag: 'exolab-notif-' + n.id };
+                                var notif = new Notification(n.title || 'اعلان جدید', opt);
+                                notif.onclick = function(){
+                                    window.focus();
+                                    if (n.case_id) { window.open('view_case.php?id=' + n.case_id, '_blank'); }
+                                    else { window.open('notifications.php', '_blank'); }
+                                    notif.close();
+                                };
+                            } catch(e) {}
+                        }
+                        if (n.id > lastId) lastId = n.id;
+                    });
+                    if (data.max_id > lastId) lastId = data.max_id;
+                    try { localStorage.setItem(storageKey, String(lastId)); } catch(e) {}
+                })
+                .catch(function(){});
+        }
+        // initial + interval
+        setTimeout(poll, 3000);
+        setInterval(poll, 30000);
+    })();
+    </script>
+    <?php endif; ?>
     </body>
     </html>
     <?php

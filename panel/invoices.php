@@ -46,6 +46,10 @@ panel_layout_start($isDoctor ? 'فاکتورهای من' : 'لیست فاکتو�
     <div>
         <a class="btn" href="invoice_form.php">ایجاد فاکتور جدید</a>
         <a class="btn" href="generate_invoice.php" style="background: #0F172A; color: #fff;">صدور فاکتور ماهانه</a>
+        <a class="btn" href="generate_clinic_invoice.php" style="background: #059669; color: #fff;">صدور فاکتور کلینیک</a>
+        <a class="btn" href="generate_lab_invoice.php" style="background: #7c3aed; color: #fff;">صدور فاکتور لابراتوار</a>
+        <a class="btn" href="designer_invoices.php" style="background: #d97706; color: #fff;">صدور فاکتور طراحی</a>
+        <a class="btn" href="outsource_invoices.php" style="background: #059669; color: #fff;">فاکتورهای برون‌سپاری</a>
         <a class="btn" href="bank_accounts.php" style="background: #0F172A; color: #fff;">مدیریت حسابهای بانکی</a>
     </div>
 </div>

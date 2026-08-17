@@ -5,7 +5,7 @@ require_once __DIR__ . '/auth.php';
 require_role('admin');
 $editing = !empty($_GET['id']);
 $invoice = $editing ? getInvoice((int) $_GET['id']) : null;
-$doctors = getAllDoctors();
+$billingTargets = getAllBillingTargets();
 $prices = getAllPrices();
 $invoiceItems = $invoice ? getInvoiceItems($invoice['id']) : [];
 if ($editing && !$invoice) {
@@ -25,17 +25,17 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
         <label for="invoice_number">شماره فاکتور</label>
         <input type="text" id="invoice_number" name="invoice_number" value="<?= htmlspecialchars($invoice['invoice_number'] ?? '') ?>" required>
 
-        <label for="doctor_id">انتخاب دکتر</label>
+        <label for="doctor_id">انتخاب پزشک/طراح/کلینیک</label>
         <select id="doctor_id" name="doctor_id">
-            <option value="">انتخاب دکتر...</option>
-            <?php foreach ($doctors as $doctor): ?>
-                <option value="<?= $doctor['id'] ?>" <?= ($invoice['doctor_id'] ?? '') == $doctor['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($doctor['name']) ?>
+            <option value="">انتخاب...</option>
+            <?php foreach ($billingTargets as $target): ?>
+                <option value="<?= $target['id'] ?>" <?= ($invoice['doctor_id'] ?? '') == $target['id'] ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($target['name']) ?> (<?= htmlspecialchars($target['role'] === 'clinic' ? 'کلینیک' : ($target['role'] === 'designer' ? 'طراح' : 'پزشک')) ?>)
                 </option>
             <?php endforeach; ?>
         </select>
 
-        <label for="doctor_name">نام دکتر (در صورت نداشتن دکتر ثبت‌شده)</label>
+        <label for="doctor_name">نام طرف حساب (در صورت نداشتن حساب ثبت‌شده)</label>
         <input type="text" id="doctor_name" name="doctor_name" value="<?= htmlspecialchars($invoice['doctor_name'] ?? '') ?>">
 
         <label for="doctor_phone">تلفن دکتر</label>

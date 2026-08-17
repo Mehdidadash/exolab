@@ -34,26 +34,61 @@ $monthNames = [
 $monthName = $monthNames[$monthNumber - 1];
 $year = toPersianDigits($yearNumber);
 
-$doctorName = $invoice['doctor_name'] ?? 'پزشک';
-$invoiceTitle = "صورت حساب {$monthName} {$year} دکتر {$doctorName}";
+$invNum = (string) ($invoice['invoice_number'] ?? '');
+$isLabInvoice = str_starts_with($invNum, 'INV-LAB');
+$isClinicInvoice = str_starts_with($invNum, 'INV-CLN');
+$isGroupedInvoice = $isLabInvoice || $isClinicInvoice;
+$partyType = $isLabInvoice ? 'لابراتوار' : ($isClinicInvoice ? 'کلینیک' : 'پزشک');
+$doctorName = $invoice['doctor_name'] ?? $partyType;
+
+if ($isGroupedInvoice) {
+    // Clinic/lab invoices can be monthly, weekly, or daily – show the period if recorded
+    $periodPart = '';
+    if (!empty($invoice['notes']) && preg_match('/بازه:\s*([^—]+)/u', $invoice['notes'], $m)) {
+        $periodPart = ' — ' . trim($m[1]);
+    }
+    $invoiceTitle = "صورت حساب {$partyType} {$doctorName}{$periodPart}";
+} else {
+    $invoiceTitle = "صورت حساب {$monthName} {$year} دکتر {$doctorName}";
+}
 
 // ---- ساخت ردیف‌های جدول ----
 $itemsRowsHtml = '';
+$currentDoctor = null;
+
+// For lab invoices, group items by doctor with section headers
 foreach ($invoiceItems as $item) {
     $type = $item['price_title'] ?: $item['item_title'] ?: '—';
     $description = $item['item_description'] ?: $item['item_title'];
     $patient = $item['patient_name'] ?: '—';
     $quantity = toPersianDigits(number_format($item['quantity'], 0));
-    $totalPrice = formatAmountToman($item['total_amount']);
+    $amount = (float)$item['total_amount'];
+    $isNeg = $amount < 0;
+    $totalPrice = formatAmountToman(abs($amount));
+    $totalStyle = $isNeg ? ' style="color:#b91c1c; font-weight:bold;"' : '';
 
     $receivedDate = !empty($item['case_received_date']) ? toJalaliDateFormatted($item['case_received_date']) : '—';
+
+    // Doctor grouping header for lab/clinic invoices
+    if ($isGroupedInvoice) {
+        $doctorName = $item['case_doctor_name'] ?: 'بدون پزشک';
+        if ($doctorName !== $currentDoctor) {
+            $currentDoctor = $doctorName;
+            $itemsRowsHtml .= '<tr><td colspan="6" style="background:#0F172A; color:#fff; font-weight:bold; padding:6px 10px;">پزشک: ' . htmlspecialchars($doctorName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td></tr>';
+        }
+        // For lab_out show a marker
+        if (($item['case_type'] ?? '') === 'lab_out') {
+            $description = 'برونسپاری - ' . $description;
+        }
+    }
+
     $itemsRowsHtml .= '<tr>' .
         '<td>' . htmlspecialchars($type, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($description, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($patient, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . $quantity . '</td>' .
         '<td>' . $receivedDate . '</td>' .
-        '<td>' . $totalPrice . '</td>' .
+        '<td' . $totalStyle . '>' . $totalPrice . '</td>' .
         '</tr>';
 }
 
@@ -70,6 +105,7 @@ $doctorEmail = htmlspecialchars($invoice['doctor_email'] ?? '—', ENT_QUOTES | 
 $invoiceTotal = toPersianDigits(number_format(round($invoice['total_amount']), 0));
 $paymentStatus = $invoice['payment_status'] === 'paid' ? 'پرداخت شده' : 'پرداخت نشده';
 $invoiceNotes = htmlspecialchars($invoice['notes'] ?? '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$partySectionTitle = $isGroupedInvoice ? ('اطلاعات ' . $partyType) : 'اطلاعات پزشک';
 $generatedDate = toJalaliDateWithMonth(date('Y-m-d'));
 $generatedTime = toPersianDigits(date('H:i'));
 
@@ -169,7 +205,7 @@ $html = <<<HTML
             </td>
             <td style="width: 50%; vertical-align: top; padding-right: 10px; border: none;">
                 <div class="section" style="margin-bottom: 0;">
-                    <div class="section-title">اطلاعات پزشک</div>
+                    <div class="section-title">{$partySectionTitle}</div>
                     <p style="margin: 5px 0;">
                         <span class="info-label">نام:</span> {$doctorName}<br>
                         <span class="info-label">تلفن:</span> {$doctorPhone}<br>

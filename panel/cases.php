@@ -3,7 +3,7 @@
 require_once __DIR__ . '/auth.php';
 require_login();
 
-if (!has_permission('view_all_cases') && !has_permission('view_own_cases') && !has_permission('view_assigned_cases') && !has_permission('view_clinic_cases')) {
+if (!has_permission('view_all_cases') && !has_permission('view_own_cases') && !has_permission('view_assigned_cases') && !has_permission('view_clinic_cases') && !has_role('designer')) {
     die('دسترسی غیرمجاز');
 }
 
@@ -18,6 +18,12 @@ session_write_close();
 $doctors = getAllDoctors(); // now returns from users table
 $statusesStmt = db()->query('SELECT * FROM case_statuses ORDER BY name ASC');
 $statuses = $statusesStmt->fetchAll();
+$allowedStatusIds = getAllowedStatusIdsForUser();
+$user = current_user();
+$isDoctor = ($user['role'] === 'doctor');
+$isDesigner = ($user['role'] === 'designer');
+$designers = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name")->fetchAll();
+$prices = getAllPrices();
 // At the very top, after require_once
 date_default_timezone_set('Asia/Tehran');
 
@@ -28,6 +34,9 @@ $defaultDateFromJalali = toJalaliDateFormatted($defaultDateFromGregorian);
 // Filters
 $filterDoctorId = !empty($_GET['doctor_id']) ? (int) $_GET['doctor_id'] : 0;
 $filterStatusId = !empty($_GET['status_id']) ? (int) $_GET['status_id'] : 0;
+$filterDesignerId = !empty($_GET['designer_id']) ? (int) $_GET['designer_id'] : 0;
+$filterServiceId = !empty($_GET['service_id']) ? (int) $_GET['service_id'] : 0;
+$filterShade = trim((string) ($_GET['shade'] ?? ''));
 
 // Parse date_from
 if (!empty($_GET['date_from'])) {
@@ -64,7 +73,7 @@ panel_layout_start('مدیریت کیس‌ها');
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
         <div class="form-group">
             <label for="doctor_id">پزشک</label>
-            <select id="doctor_id" name="doctor_id">
+            <select id="doctor_id" name="doctor_id" class="searchable-select">
                 <option value="">همه پزشکان</option>
                 <?php foreach ($doctors as $doctor): ?>
                     <option value="<?= $doctor['id'] ?>" <?= $doctor['id'] === $filterDoctorId ? 'selected' : '' ?>>
@@ -74,10 +83,22 @@ panel_layout_start('مدیریت کیس‌ها');
             </select>
         </div>
 
+        <div class="form-group">
+            <label for="designer_id">طراح</label>
+            <select id="designer_id" name="designer_id" class="searchable-select">
+                <option value="">همه طراحان</option>
+                <?php foreach ($designers as $des): ?>
+                    <option value="<?= $des['id'] ?>" <?= (int) $des['id'] === $filterDesignerId ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($des['full_name']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
         <!-- ADDED: status filter dropdown -->
         <div class="form-group">
             <label for="status_id">وضعیت</label>
-            <select id="status_id" name="status_id">
+            <select id="status_id" name="status_id" class="searchable-select">
                 <option value="">همه وضعیت‌ها</option>
                 <?php foreach ($statuses as $status): ?>
                     <option value="<?= $status['id'] ?>" <?= $status['id'] === $filterStatusId ? 'selected' : '' ?>>
@@ -85,6 +106,27 @@ panel_layout_start('مدیریت کیس‌ها');
                     </option>
                 <?php endforeach; ?>
             </select>
+            <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-weight:600; font-size:0.9rem; cursor:pointer;">
+                <input type="checkbox" id="status_not" name="status_not" value="1" <?= !empty($_GET['status_not']) ? 'checked' : '' ?> style="width:auto;">
+                معکوس (غیر از این وضعیت)
+            </label>
+        </div>
+
+        <div class="form-group">
+            <label for="service_id">نوع کار</label>
+            <select id="service_id" name="service_id" class="searchable-select">
+                <option value="">همه خدمات</option>
+                <?php foreach ($prices as $price): ?>
+                    <option value="<?= $price['id'] ?>" <?= (int) $price['id'] === $filterServiceId ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($price['title']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+
+        <div class="form-group">
+            <label for="filter_shade">سایه</label>
+            <input type="text" id="filter_shade" name="shade" value="<?= htmlspecialchars($filterShade) ?>" placeholder="مثلاً A2">
         </div>
 
         <div class="form-group">
@@ -114,10 +156,14 @@ panel_layout_start('مدیریت کیس‌ها');
         <?php if (has_permission('export_csv')): ?>
         <button type="button" id="export-csv-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="exportSelectedCSV()">📥 خروجی CSV</button>
         <?php endif; ?>
+        <?php if (has_permission('edit_cases') || has_role('admin')): ?>
+        <button type="button" id="change-designer-btn" class="btn" style="background: #d97706; color: #fff;" onclick="openChangeDesignerModal()">🔁 تغییر طراح</button>
+        <?php endif; ?>
     </div>
 </form>
 
 <p style="margin-bottom: 16px; font-weight: 700;">تعداد کیس‌ها: <span id="cases-count">—</span></p>
+<p style="margin-bottom: 16px; font-size: 12px; color: #166534;">🟩 شماره کیس سبز = برچسب این کیس قبلاً چاپ شده است.</p>
 
 <table id="cases-table" class="display" style="width:100%">
     <thead>
@@ -125,6 +171,7 @@ panel_layout_start('مدیریت کیس‌ها');
         <th><input type="checkbox" id="select-all-cases" onchange="toggleAllCases(this.checked)"></th>
         <th>Case ID</th>
         <th>پزشک</th>
+        <th>طراح</th>
         <th>بیمار</th>
         <th>خدمت</th>
         <th>مکان</th>
@@ -134,6 +181,7 @@ panel_layout_start('مدیریت کیس‌ها');
         <th>تاریخ دریافت</th>
         <th>فاکتور</th>
         <th>لابراتوار</th>
+        <th>فایل‌ها</th>
         <th>عملیات</th>
     </tr>
     </thead>
@@ -149,6 +197,22 @@ panel_layout_start('مدیریت کیس‌ها');
             <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
             <input type="hidden" name="parent_id" id="case-parent-id" value="">
             <div class="grid" style="grid-template-columns: 1fr 1fr; gap:10px;">
+                <?php if ($isDoctor): ?>
+                <input type="hidden" id="case-type" name="case_type" value="doctor">
+                <input type="hidden" id="case-doctor-id" name="doctor_id" value="<?= (int) $user['id'] ?>">
+                <div class="form-group">
+                    <label>پزشک</label>
+                    <input type="text" value="<?= htmlspecialchars($user['full_name'] ?? '') ?>" disabled style="background:#f3f4f6;">
+                </div>
+                <?php else: ?>
+                <div class="form-group">
+                    <label for="case-type">نوع کیس</label>
+                    <select id="case-type" name="case_type" onchange="toggleCaseType(this.value)">
+                        <option value="doctor">کیس دکتر</option>
+                        <option value="lab_in">کار از لابراتوار همکار</option>
+                        <option value="lab_out">برونسپاری به لابراتوار</option>
+                    </select>
+                </div>
                 <div class="form-group">
                     <label for="case-doctor-id">پزشک</label>
                     <select id="case-doctor-id" name="doctor_id">
@@ -158,12 +222,13 @@ panel_layout_start('مدیریت کیس‌ها');
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <?php endif; ?>
                 <div class="form-group" id="lab-group">
-                    <label for="case-lab-id">برونسپاری به لابراتوار</label>
+                    <label for="case-lab-id" id="lab-label">لابراتوار</label>
                     <select id="case-lab-id" name="lab_id">
-                        <option value="">بدون برونسپاری</option>
-                        <?php $labs = db()->query("SELECT id, full_name FROM users WHERE role='outsource_lab' AND active=1 ORDER BY full_name"); foreach ($labs as $lab): ?>
-                        <option value="<?= $lab['id'] ?>"><?= htmlspecialchars($lab['full_name']) ?></option>
+                        <option value="">انتخاب لابراتوار...</option>
+                        <?php $labs = db()->query("SELECT id, full_name, role FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name"); foreach ($labs as $lab): ?>
+                        <option value="<?= $lab['id'] ?>" data-role="<?= $lab['role'] ?>"><?= htmlspecialchars($lab['full_name']) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -180,10 +245,12 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label for="case-patient-name">نام بیمار</label>
                     <input id="case-patient-name" name="patient_name" required>
                 </div>
+                <?php if (!$isDoctor): ?>
                 <div class="form-group">
                     <label for="case-receipt-number">شماره قبض</label>
                     <input type="number" id="case-receipt-number" name="receipt_number" min="0" placeholder="مثلاً 01020">
                 </div>
+                <?php endif; ?>
                 <div class="form-group">
                     <label for="case-service-id">خدمت</label>
                     <select id="case-service-id" name="service_id">
@@ -215,31 +282,53 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label for="case-quantity">تعداد</label>
                     <input type="number" id="case-quantity" name="quantity" value="1">
                 </div>
+                <?php if ($isDoctor): ?>
+                <input type="hidden" id="case-unit-price" name="unit_price" step="1">
+                <?php else: ?>
                 <div class="form-group">
                     <label for="case-unit-price">فی (تومان)</label>
                     <input type="number" id="case-unit-price" name="unit_price" step="1">
                 </div>
                 <div class="form-group">
+                    <label for="case-design-fee">هزینه طراحی (تومان)</label>
+                    <input type="number" id="case-design-fee" name="design_fee" step="1" min="0" value="0">
+                </div>
+                <?php endif; ?>
+                <?php if ($isDoctor): ?>
+                <input type="hidden" id="case-received-date" name="received_date" value="<?= htmlspecialchars(toJalaliDateFormatted(date('Y-m-d'))) ?>">
+                <?php else: ?>
+                <div class="form-group">
                     <label for="case-received-date">تاریخ دریافت</label>
                     <input type="text" id="case-received-date" name="received_date" placeholder="۱۴۰۳/۰۱/۰۱" style="cursor:pointer;">
                 </div>
+                <?php endif; ?>
+                <?php if ($isDoctor): ?>
+                <input type="hidden" id="case-status-id" name="status_id" value="1">
+                <?php else: ?>
                 <div class="form-group">
                     <label for="case-status-id">وضعیت</label>
                     <select id="case-status-id" name="status_id">
                         <option value="">انتخاب...</option>
                         <?php foreach ($statuses as $status): ?>
+                        <?php if (!empty($allowedStatusIds) && !in_array((int)$status['id'], $allowedStatusIds, true)) continue; ?>
                         <option value="<?= $status['id'] ?>"><?= htmlspecialchars($status['name']) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <?php endif; ?>
                 <div class="form-group" style="grid-column:1/3;">
                     <label for="case-description">توضیحات</label>
                     <textarea id="case-description" name="description" rows="3"></textarea>
                 </div>
+                <?php if (!$isDoctor): ?>
                 <div class="form-group" style="grid-column:1/3;">
                     <label for="case-files">فایل طراحی (STL / PLY)</label>
                     <input type="file" id="case-files" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.rar,.zip" multiple>
+                    <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-weight:600; font-size:0.9rem; cursor:pointer;">
+                        <input type="checkbox" id="case-files-compress" style="width:auto;"> همه فایل‌ها را یکجا به‌صورت ZIP ذخیره کن
+                    </label>
                 </div>
+                <?php endif; ?>
             </div>
             <div style="display:flex; gap:10px; margin-top:12px; justify-content:flex-end;">
                 <button type="button" id="case-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
@@ -271,6 +360,7 @@ panel_layout_start('مدیریت کیس‌ها');
             <select id="batch-status-select" style="width:100%;">
                 <option value="">انتخاب کنید...</option>
                 <?php foreach ($statuses as $s): ?>
+                    <?php if (!empty($allowedStatusIds) && !in_array((int)$s['id'], $allowedStatusIds, true)) continue; ?>
                     <option value="<?= $s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
                 <?php endforeach; ?>
             </select>
@@ -278,6 +368,28 @@ panel_layout_start('مدیریت کیس‌ها');
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
             <button id="batch-status-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
             <button id="batch-status-confirm" class="btn" style="background:#7c3aed; color:#fff;">تغییر وضعیت</button>
+        </div>
+    </div>
+</div>
+
+<!-- Change Designer Modal -->
+<div id="change-designer-modal" class="modal" style="display:none;">
+    <div class="modal-content form-card" style="max-width:420px; margin:auto; padding:24px;">
+        <h3 style="margin-bottom:12px;">تغییر طراح کیس‌ها</h3>
+        <p id="change-designer-count" style="margin-bottom:16px; color:#555;"></p>
+        <div class="form-group">
+            <label for="change-designer-select">طراح جدید</label>
+            <select id="change-designer-select" style="width:100%;">
+                <option value="">بدون طراح (حذف طراح)</option>
+                <?php foreach ($designers as $des): ?>
+                    <option value="<?= $des['id'] ?>"><?= htmlspecialchars($des['full_name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; margin-top:6px; color:#525252;">هزینه طراحی و جمع کل هر کیس بر اساس نرخ طراح جدید به‌صورت خودکار دوباره محاسبه می‌شود.</small>
+        </div>
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+            <button id="change-designer-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
+            <button id="change-designer-confirm" class="btn" style="background:#d97706; color:#fff;">تغییر طراح</button>
         </div>
     </div>
 </div>
@@ -294,6 +406,16 @@ panel_layout_start('مدیریت کیس‌ها');
     .action-icon svg { width: 18px; height: 18px; vertical-align: middle; }
     .action-icon:hover { background: #f3f4f6; }
     .action-icon.delete-case:hover { background: #fee2e2; }
+    /* Searchable select */
+    .ss-wrap { position: relative; }
+    .ss-display { width: 100%; min-height: 36px; text-align: right; background: #fff; color: #0F172A; border: 1px solid #d1d5db; border-radius: 6px; padding: 6px 10px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; box-sizing: border-box; }
+    .ss-display::after { content: "▼"; font-size: 0.6rem; color: #6b7280; margin-right: 6px; }
+    .ss-dd { position: absolute; top: calc(100% + 2px); right: 0; left: 0; background: #fff; border: 1px solid #d1d5db; border-radius: 6px; z-index: 3000; box-shadow: 0 6px 18px rgba(0,0,0,0.12); }
+    .ss-search { width: 100%; box-sizing: border-box; border: none; border-bottom: 1px solid #e5e7eb; padding: 8px 10px; outline: none; }
+    .ss-list { max-height: 200px; overflow: auto; }
+    .ss-option { padding: 7px 10px; cursor: pointer; }
+    .ss-option:hover, .ss-option.selected { background: #e0f2fe; }
+    .ss-option.empty { color: #9ca3af; text-align: center; }
     /* Hide lab/designer for restricted roles */
     <?php if (in_array($user['role'] ?? '', ['doctor', 'clinic'])): ?>
     #lab-group, #designer-group { display: none !important; }
@@ -332,6 +454,102 @@ panel_layout_start('مدیریت کیس‌ها');
 <script src="../assets/js/persian-datepicker.min.js"></script>
 
 <script>
+// Lightweight searchable select for filter dropdowns
+(function(){
+    function initSearchableSelect(select){
+        if (!select || select.dataset.ssInit) return;
+        select.dataset.ssInit = '1';
+        var wrapper = document.createElement('div');
+        wrapper.className = 'ss-wrap';
+        select.parentNode.insertBefore(wrapper, select);
+        wrapper.appendChild(select);
+        select.style.display = 'none';
+        var display = document.createElement('button');
+        display.type = 'button';
+        display.className = 'ss-display';
+        wrapper.appendChild(display);
+        var dd = document.createElement('div');
+        dd.className = 'ss-dd';
+        dd.style.display = 'none';
+        var search = document.createElement('input');
+        search.type = 'text';
+        search.className = 'ss-search';
+        search.placeholder = 'جستجو...';
+        var list = document.createElement('div');
+        list.className = 'ss-list';
+        dd.appendChild(search);
+        dd.appendChild(list);
+        wrapper.appendChild(dd);
+        function setDisplay(){
+            var sel = select.options[select.selectedIndex];
+            display.textContent = sel ? sel.text : '';
+        }
+        function render(filter){
+            list.innerHTML = '';
+            var shown = 0;
+            Array.prototype.forEach.call(select.options, function(opt){
+                if (filter && opt.text.indexOf(filter) === -1) return;
+                shown++;
+                var item = document.createElement('div');
+                item.className = 'ss-option' + (opt.selected ? ' selected' : '');
+                item.textContent = opt.text;
+                item.addEventListener('click', function(){
+                    select.value = opt.value;
+                    select.selectedIndex = opt.index;
+                    setDisplay();
+                    dd.style.display = 'none';
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                });
+                list.appendChild(item);
+            });
+            if (shown === 0) {
+                var empty = document.createElement('div');
+                empty.className = 'ss-option empty';
+                empty.textContent = 'موردی یافت نشد';
+                list.appendChild(empty);
+            }
+        }
+        setDisplay();
+        // Keep the shown value in sync whenever the native select value changes
+        select.addEventListener('change', setDisplay);
+        display.addEventListener('click', function(e){
+            e.stopPropagation();
+            var open = dd.style.display === 'block';
+            document.querySelectorAll('.ss-dd').forEach(function(x){ x.style.display = 'none'; });
+            if (!open) {
+                dd.style.display = 'block';
+                search.value = '';
+                render('');
+                search.focus();
+            }
+        });
+        search.addEventListener('input', function(){ render(search.value); });
+        document.addEventListener('click', function(e){
+            if (!wrapper.contains(e.target)) dd.style.display = 'none';
+        });
+    }
+    document.querySelectorAll('select.searchable-select').forEach(initSearchableSelect);
+})();
+</script>
+
+<script>
+    // Global: toggle lab field visibility based on case type
+    function toggleCaseType(type) {
+        var labGroup = document.getElementById('lab-group');
+        var labSelect = document.getElementById('case-lab-id');
+        var labLabel = document.getElementById('lab-label');
+        if (!labGroup || !labSelect) return;
+        if (type === 'doctor') {
+            labGroup.style.display = 'none';
+            labSelect.value = '';
+        } else if (type === 'lab_in') {
+            labGroup.style.display = 'block';
+            labLabel.textContent = 'لابراتوار همکار (پرداخت‌کننده)';
+        } else if (type === 'lab_out') {
+            labGroup.style.display = 'block';
+            labLabel.textContent = 'لابراتوار برونسپاری (گیرنده کار)';
+        }
+    }
     (function(){
         var todayJalali = '<?= toJalaliDateFormatted(date('Y-m-d')) ?>';
 
@@ -454,29 +672,35 @@ panel_layout_start('مدیریت کیس‌ها');
                     data: function(d) {
                         d.doctor_id = jQuery('#doctor_id').val();
                         d.status_id = jQuery('#status_id').val();
+                        d.status_not = jQuery('#status_not').is(':checked') ? '1' : '';
+                        d.designer_id = jQuery('#designer_id').val();
+                        d.service_id = jQuery('#service_id').val();
+                        d.shade = jQuery('#filter_shade').val();
                         d.date_from = jQuery('#date_from').val();
                         d.date_to = jQuery('#date_to').val();
                     }
                 },
-                order: [[<?= has_role('admin') ? 9 : 8 ?>, 'desc']], // received_date column
+                order: [[10, 'desc']], // received_date column
                 responsive: true,
                 pageLength: 25,
                 columns: [
                     { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
-                    { data: 0 },
+                    { data: 0, render: function(data, type, row){ if (type === 'display' && row[14]) { return '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>'; } return data; } },
                     { data: 1 },
+                    { data: 12 }, /* designer */
                     { data: 2 },
                     { data: 3 },
                     { data: 4 },
                     { data: 5 },
-                    { data: 6 },
+                    { data: 6, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* price – hidden for designers */
                     { data: 7 },
                     { data: 8 },
-                    { data: 9 },
+                    { data: 9, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* invoice – hidden for designers */
                     { data: 10, orderable: false, searchable: true, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
+                    { data: 13, orderable: false, searchable: false, render: function(data){ return data || 0; } }, /* files count */
                     { data: 11, orderable: false, searchable: false }
                 ],
-                order: [[9, 'desc']], // received_date column always at index 9
+                order: [[10, 'desc']], // received_date column always at index 10
                 language: {
                     search: "جستجو:",
                     lengthMenu: "نمایش _MENU_ در هر صفحه",
@@ -575,7 +799,9 @@ panel_layout_start('مدیریت کیس‌ها');
                 if (!jQuery('#case-received-date').val()) {
                     jQuery('#case-received-date').val(todayJalali);
                 }
+                <?php if (!$isDoctor): ?>
                 setTimeout(function(){ initCaseReceivedDate(); }, 100);
+                <?php endif; ?>
             }
             function closeCaseModal(){
                 jQuery('#case-modal').css({display: 'none'});
@@ -584,12 +810,22 @@ panel_layout_start('مدیریت کیس‌ها');
                 setTimeout(function(){ jQuery('#case-received-date').val(''); }, 100);
             }
             jQuery('#case-cancel').on('click', function(){ closeCaseModal(); });
+            jQuery(document).on('keydown', function(e){
+                if (e.key === 'Escape' || e.key === 'Esc') {
+                    if (jQuery('#case-modal').is(':visible')) {
+                        e.preventDefault();
+                        closeCaseModal();
+                    }
+                }
+            });
 
             // (action-menu toggle handled by icons.php action_menu_script)
 
             function populateCaseForm(data){
                 jQuery('#case-id').val(data.id || '');
                 jQuery('#case-parent-id').val(data.parent_id || '');
+                jQuery('#case-type').val(data.case_type || 'doctor');
+                toggleCaseType(jQuery('#case-type').val());
                 jQuery('#case-doctor-id').val(data.doctor_id || '');
                 jQuery('#case-patient-name').val(data.patient_name || '');
                 jQuery('#case-receipt-number').val(data.receipt_number || '');
@@ -599,6 +835,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-shade').val(data.shade || '');
                 jQuery('#case-quantity').val(data.quantity || 1);
                 jQuery('#case-unit-price').val(data.unit_price || '');
+                jQuery('#case-design-fee').val(data.design_fee || 0);
                 jQuery('#case-received-date').val(data.received_date || ''); // sets correct date
                 jQuery('#case-status-id').val(data.status_id || '');
                 jQuery('#case-lab-id').val(data.lab_id || '');
@@ -639,6 +876,8 @@ panel_layout_start('مدیریت کیس‌ها');
                                 for (var i = 0; i < fileInput.files.length; i++) {
                                     fd.append('case_files[]', fileInput.files[i]);
                                 }
+                                var compressCb = document.getElementById('case-files-compress');
+                                if (compressCb && compressCb.checked) fd.set('compress', '1');
                                 jQuery.ajax({
                                     url: 'upload_case_files.php?case_id=' + encodeURIComponent(j.id),
                                     type: 'POST',
@@ -672,11 +911,24 @@ panel_layout_start('مدیریت کیس‌ها');
                     }
                 });
             });
-            // Auto-update unit price when doctor or service changes in the modal
-            jQuery('#case-doctor-id, #case-service-id').on('change', function() {
-                var doctorId = jQuery('#case-doctor-id').val();
+            // Auto-update unit price when doctor, lab, service, or case type changes in the modal
+            jQuery('#case-doctor-id, #case-service-id, #case-lab-id, #case-type').on('change', function() {
+                var caseType = jQuery('#case-type').val();
                 var serviceId = jQuery('#case-service-id').val();
-                if (doctorId && serviceId) {
+                if (!serviceId) return;
+                var labId = jQuery('#case-lab-id').val();
+                var doctorId = jQuery('#case-doctor-id').val();
+                if ((caseType === 'lab_in' || caseType === 'lab_out') && labId) {
+                    // Lab-origin cases use the lab's applicable price regardless of doctor
+                    jQuery.ajax({
+                        url: 'get_price.php',
+                        data: { lab_id: labId, service_id: serviceId },
+                        dataType: 'json',
+                        success: function(resp) {
+                            jQuery('#case-unit-price').val(resp.price !== null ? resp.price : '');
+                        }
+                    });
+                } else if (doctorId) {
                     jQuery.ajax({
                         url: 'get_price.php',
                         data: { doctor_id: doctorId, service_id: serviceId },
@@ -685,12 +937,51 @@ panel_layout_start('مدیریت کیس‌ها');
                             if (resp.price !== null) {
                                 jQuery('#case-unit-price').val(resp.price);
                             } else {
-                                // If no price, clear the field or set to 0
                                 jQuery('#case-unit-price').val('');
                             }
                         }
                     });
                 }
+            });
+
+            var currentDesignUnitFee = null;
+
+            // Load per-unit design fee for the selected designer + service
+            function reloadDesignFee() {
+                var designerId = jQuery('#case-designer-id').val();
+                var serviceId = jQuery('#case-service-id').val();
+                if (!designerId) {
+                    currentDesignUnitFee = null;
+                    jQuery('#case-design-fee').val('0');
+                    return;
+                }
+                if (!serviceId) {
+                    currentDesignUnitFee = null;
+                    return;
+                }
+                jQuery.ajax({
+                    url: 'get_price.php',
+                    data: { doctor_id: designerId, service_id: serviceId, price_type: 'design_fee' },
+                    dataType: 'json',
+                    success: function(resp) {
+                        currentDesignUnitFee = (resp.price !== null) ? parseFloat(resp.price) : null;
+                        applyDesignFee();
+                    }
+                });
+            }
+
+            // design fee (تومان) = per-unit fee × quantity
+            function applyDesignFee() {
+                if (currentDesignUnitFee === null) return;
+                var qty = parseInt(jQuery('#case-quantity').val(), 10) || 1;
+                jQuery('#case-design-fee').val(Math.round(currentDesignUnitFee * qty));
+            }
+
+            jQuery('#case-designer-id, #case-service-id').on('change', function() {
+                reloadDesignFee();
+            });
+            jQuery('#case-quantity').on('input change', function() {
+                applyDesignFee();
             });
 
             // ─── Print labels for selected cases ───
@@ -784,6 +1075,46 @@ panel_layout_start('مدیریت کیس‌ها');
                         if (j.success) {
                             table.ajax.reload(null, false);
                             alert(j.updated + ' کیس با موفقیت بروزرسانی شد.');
+                        } else {
+                            alert('خطا: ' + (j.errors ? j.errors.join(', ') : j.error));
+                        }
+                    },
+                    error: function(){ alert('خطا در سرور'); }
+                });
+            });
+
+            // ─── Change designer ───
+            window.openChangeDesignerModal = function() {
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                if (checked.length === 0) {
+                    alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                    return;
+                }
+                document.getElementById('change-designer-count').textContent = checked.length + ' کیس انتخاب شده است.';
+                document.getElementById('change-designer-modal').style.display = 'flex';
+            };
+            jQuery('#change-designer-cancel').on('click', function(){
+                jQuery('#change-designer-modal').css({display: 'none'});
+            });
+            jQuery('#change-designer-confirm').on('click', function(){
+                var designerId = jQuery('#change-designer-select').val();
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                if (checked.length === 0) { alert('هیچ کیسی انتخاب نشده.'); return; }
+                var ids = [];
+                checked.forEach(function(cb) { ids.push(cb.value); });
+                jQuery('#change-designer-modal').css({display: 'none'});
+                jQuery.ajax({
+                    url: 'batch_update_designer.php',
+                    type: 'POST',
+                    data: { case_ids: ids, designer_id: designerId, _csrf_token: '<?= htmlspecialchars($csrf_token) ?>' },
+                    headers: { 'X-CSRF-Token': '<?= htmlspecialchars($csrf_token) ?>' },
+                    success: function(resp){
+                        try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
+                        if (j.success) {
+                            table.ajax.reload(null, false);
+                            var msg = j.updated + ' کیس بروزرسانی شد.';
+                            if (j.errors && j.errors.length) msg += '\n' + j.errors.join('\n');
+                            alert(msg);
                         } else {
                             alert('خطا: ' + (j.errors ? j.errors.join(', ') : j.error));
                         }

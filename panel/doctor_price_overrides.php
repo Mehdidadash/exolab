@@ -4,7 +4,7 @@ require_once __DIR__ . '/auth.php';
 require_role('admin');
 
 $overrides = getAllDoctorPriceOverrides();
-panel_layout_start('مدیریت قیمت‌های اختصاصی پزشکان');
+panel_layout_start('مدیریت قیمت‌های اختصاصی');
 ?>
 <div style="margin-bottom:18px;">
     <a class="btn" href="doctor_price_override_form.php">افزودن قیمت اختصاصی جدید</a>
@@ -12,8 +12,9 @@ panel_layout_start('مدیریت قیمت‌های اختصاصی پزشکان')
 <table class="datatable display">
     <thead>
         <tr>
-            <th>پزشک</th>
-            <th>خدمت</th>
+            <th>کاربر</th>
+            <th>نوع</th>
+            <th>مورد</th>
             <th>قیمت اختصاصی (تومان)</th>
             <th>عملیات</th>
         </tr>
@@ -22,6 +23,7 @@ panel_layout_start('مدیریت قیمت‌های اختصاصی پزشکان')
     <?php foreach ($overrides as $override): ?>
         <tr>
             <td><?= htmlspecialchars($override['doctor_name'] ?? '—') ?></td>
+            <td><?= htmlspecialchars($override['price_type'] === 'design_fee' ? 'هزینه طراحی' : 'قیمت خدمت') ?></td>
             <td><?= htmlspecialchars($override['service_title'] ?? '—') ?></td>
             <td><?= formatAmountToman($override['custom_price']) ?></td>
             <td class="actions">
@@ -30,7 +32,7 @@ panel_layout_start('مدیریت قیمت‌های اختصاصی پزشکان')
         </tr>
     <?php endforeach; ?>
     <?php if (empty($overrides)): ?>
-        <tr><td colspan="4" class="empty">هیچ قیمت اختصاصی ثبت نشده است.</td></tr>
+        <tr><td colspan="5" class="empty">هیچ قیمت اختصاصی ثبت نشده است.</td></tr>
     <?php endif; ?>
     </tbody>
 </table>

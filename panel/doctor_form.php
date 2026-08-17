@@ -5,6 +5,7 @@ require_once __DIR__ . '/auth.php';
 require_role('admin');
 $doctor = null;
 $editing = false;
+$clinicParents = getAllDoctorAndClinicUsers();
 
 if (!empty($_GET['id'])) {
     $doctor = getDoctor((int) $_GET['id']);
@@ -46,6 +47,22 @@ panel_layout_start($editing ? 'ویرایش پزشک' : 'افزودن پزشک �
             <small style="display:block; margin-top:6px; color:#525252;">
                 پزشک با شماره تلفن یا ایمیل ثبت‌شده در بالا، به همراه این رمز عبور، وارد پنل خودش می‌شود.
                 <?php if (!$editing): ?>در صورت خالی گذاشتن، پزشک تا تعیین رمز عبور امکان ورود نخواهد داشت.<?php endif; ?>
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="clinic_id">کلینیک/پدر (اختیاری)</label>
+            <select id="clinic_id" name="clinic_id">
+                <option value="">بدون کلینیک/پدر</option>
+                <?php foreach ($clinicParents as $parent): ?>
+                    <?php if (!empty($doctor) && (int) $parent['id'] === (int) $doctor['id']) continue; ?>
+                    <option value="<?= (int) $parent['id'] ?>" <?= (!empty($doctor) && (int) ($doctor['clinic_id'] ?? 0) === (int) $parent['id']) ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($parent['name']) ?> (<?= htmlspecialchars($parent['role'] === 'clinic' ? 'کلینیک' : 'پزشک') ?>)
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; margin-top:6px; color:#525252;">
+                اگر این پزشک مالک کلینیک است یا زیرمجموعه یک کلینیک/پزشک دیگر می‌شود، این گزینه را مشخص کنید.
             </small>
         </div>
 

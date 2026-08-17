@@ -14,7 +14,7 @@ if (!$fileId) {
 $user = current_user();
 
 // Fetch file record
-$stmt = db()->prepare('SELECT cf.*, c.doctor_id, c.lab_id FROM case_files cf JOIN cases c ON cf.case_id = c.id WHERE cf.id = ?');
+$stmt = db()->prepare('SELECT cf.*, c.doctor_id, c.lab_id, c.designer_id FROM case_files cf JOIN cases c ON cf.case_id = c.id WHERE cf.id = ?');
 $stmt->execute([$fileId]);
 $file = $stmt->fetch();
 
@@ -32,12 +32,16 @@ if ($user['role'] === 'doctor' || $user['role'] === 'clinic') {
 // Check specific permissions for other roles
 $isAdmin = has_permission('view_all_cases');
 $isLab = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab']);
+$isDesigner = ($user['role'] === 'designer');
 
 if (!$isAdmin) {
     if ($isLab && $file['lab_id'] != $user['id']) {
         http_response_code(403);
         die('دسترسی غیرمجاز');
-    } elseif (!has_permission('view_case_files')) {
+    } elseif ($isDesigner && $file['designer_id'] != $user['id']) {
+        http_response_code(403);
+        die('دسترسی غیرمجاز');
+    } elseif (!$isDesigner && !has_permission('view_case_files')) {
         http_response_code(403);
         die('دسترسی غیرمجاز');
     }

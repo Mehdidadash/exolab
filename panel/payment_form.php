@@ -12,10 +12,13 @@ if ($editing && !$payment) {
 
 $bankAccounts = getAllBankAccounts();
 $invoices = getAllInvoices();
-$doctors = getAllDoctors();
+$billingTargets = getAllBillingTargets();
 
 panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت جدید');
 ?>
+<link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
+<script src="../assets/js/persian-date.min.js"></script>
+<script src="../assets/js/persian-datepicker.min.js"></script>
 <form method="post" action="save_payment.php">
     <?= csrf_field() ?>
     <?php if ($editing): ?>
@@ -32,18 +35,15 @@ panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت
             <?php endforeach; ?>
         </select>
 
-        <label for="doctor_id">انتخاب دکتر</label>
+        <label for="doctor_id">انتخاب پزشک/طراح/کلینیک</label>
         <select id="doctor_id" name="doctor_id">
-            <option value="">انتخاب دکتر...</option>
-            <?php foreach ($doctors as $doctor): ?>
-                <option value="<?= $doctor['id'] ?>" <?= ($payment['doctor_id'] ?? '') == $doctor['id'] ? 'selected' : '' ?>>
-                    <?= htmlspecialchars($doctor['name']) ?>
+            <option value="">انتخاب...</option>
+            <?php foreach ($billingTargets as $target): ?>
+                <option value="<?= $target['id'] ?>" <?= ($payment['doctor_id'] ?? '') == $target['id'] ? 'selected' : '' ?>>
+                    <?= htmlspecialchars($target['name']) ?> (<?= htmlspecialchars($target['role'] === 'clinic' ? 'کلینیک' : ($target['role'] === 'designer' ? 'طراح' : 'پزشک')) ?>)
                 </option>
             <?php endforeach; ?>
         </select>
-
-        <label for="doctor_name">نام دکتر (در صورت نداشتن دکتر ثبت‌شده)</label>
-        <input type="text" id="doctor_name" name="doctor_name" value="<?= htmlspecialchars($payment['doctor_name'] ?? '') ?>">
 
         <label for="amount">مبلغ (تومان)</label>
         <input type="number" id="amount" name="amount" value="<?= round((float)($payment['amount'] ?? 0)) ?>" step="1" required>
@@ -52,13 +52,15 @@ panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت
         <select id="payment_method" name="payment_method" required>
             <option value="">انتخاب روش پرداخت...</option>
             <option value="کارت به کارت" <?= ($payment['payment_method'] ?? '') === 'کارت به کارت' ? 'selected' : '' ?>>کارت به کارت</option>
-            <option value="شبا" <?= ($payment['payment_method'] ?? '') === 'شبا' ? 'selected' : '' ?>>شبا</option>
+            <option value="پایا" <?= ($payment['payment_method'] ?? '') === 'پایا' ? 'selected' : '' ?>>پایا</option>
+            <option value="ساتنا" <?= ($payment['payment_method'] ?? '') === 'ساتنا' ? 'selected' : '' ?>>ساتنا</option>
+            <option value="پل" <?= ($payment['payment_method'] ?? '') === 'پل' ? 'selected' : '' ?>>پل</option>
             <option value="نقدی" <?= ($payment['payment_method'] ?? '') === 'نقدی' ? 'selected' : '' ?>>نقدی</option>
             <option value="چک" <?= ($payment['payment_method'] ?? '') === 'چک' ? 'selected' : '' ?>>چک</option>
         </select>
         
         <label for="payment_date">تاریخ پرداخت</label>
-        <input type="date" id="payment_date" name="payment_date" value="<?= $payment['payment_date'] ?? date('Y-m-d') ?>" required>
+        <input type="text" id="payment_date" name="payment_date" value="<?= htmlspecialchars(!empty($payment['payment_date']) ? toJalaliDate($payment['payment_date']) : toJalaliDate(date('Y-m-d'))) ?>" autocomplete="off" required>
         
         <label for="transaction_number">شماره تراکنش (اختیاری)</label>
         <input type="text" id="transaction_number" name="transaction_number" value="<?= htmlspecialchars($payment['transaction_number'] ?? '') ?>">
@@ -80,4 +82,36 @@ panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت
         <a href="payments.php" class="btn" style="background: #E5E7EB; color: #0F172A; margin-left: 10px;">انصراف</a>
     </div>
 </form>
+<script>
+(function ($) {
+    $(function () {
+        var $input = $('#payment_date');
+        var todayJalali = '<?= toJalaliDateFormatted(date('Y-m-d')) ?>';
+        if ($input.length && $.fn.persianDatepicker) {
+            $input.persianDatepicker({
+                format: 'YYYY/MM/DD',
+                calendarType: 'persian',
+                initialValue: true,
+                initialValueType: 'jalali',
+                persianDigit: true,
+                autoClose: true,
+                toolbox: {
+                    enabled: true,
+                    todayButton: { enabled: true, text: { fa: 'امروز', en: 'Today' } },
+                    submitButton: { enabled: true, text: { fa: 'تایید', en: 'Submit' } }
+                }
+            });
+            if (!$input.val()) {
+                $input.val(todayJalali);
+            }
+            $input.off('click focus').on('click focus', function () {
+                if (!$(this).val()) {
+                    $(this).val(todayJalali);
+                }
+                try { $(this).persianDatepicker('show'); } catch (e) {}
+            });
+        }
+    });
+})(jQuery);
+</script>
 <?php panel_layout_end();

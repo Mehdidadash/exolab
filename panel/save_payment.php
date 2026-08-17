@@ -16,7 +16,11 @@ $doctor_id = !empty($_POST['doctor_id']) ? (int) $_POST['doctor_id'] : null;
 $doctor_name = trim($_POST['doctor_name'] ?? '');
 $amount = isset($_POST['amount']) ? (float) $_POST['amount'] : 0;
 $payment_method = $_POST['payment_method'] ?? '';
-$payment_date = $_POST['payment_date'] ?? date('Y-m-d');
+$payment_date_input = trim($_POST['payment_date'] ?? '');
+$payment_date = parseJalaliToGregorian($payment_date_input);
+if ($payment_date === '') {
+    $payment_date = date('Y-m-d');
+}
 $transaction_number = trim($_POST['transaction_number'] ?? '');
 $bank_account_id = !empty($_POST['bank_account_id']) ? (int) $_POST['bank_account_id'] : null;
 $notes = trim($_POST['notes'] ?? '');

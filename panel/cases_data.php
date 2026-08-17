@@ -6,41 +6,53 @@ require_login();
 $user = current_user();
 $isAdmin = ($user['role'] === 'admin');
 $isDoctor = ($user['role'] === 'doctor');
+$isClinicOwner = $isDoctor && !empty(getClinicDoctorIds());
 $isLab = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab']);
+$isDesigner = ($user['role'] === 'designer');
 $doctorId = $isDoctor ? $user['id'] : null; // direct user id as doctor id
 
 $columns = [
     0 => 'c.id',
     1 => 'c.id',                // Case ID
     2 => 'u.full_name',         // doctor name from users
-    3 => 'c.patient_name',
-    4 => 'p.title',
-    5 => 'c.location_type',
-    6 => 'c.shade',
-    7 => 'c.total_price',
-    8 => 'cs.name',
-    9 => 'c.received_date',
-    10 => 'di.invoice_number',
-    11 => 'c.id'
+    3 => 'des.full_name',       // designer name
+    4 => 'c.patient_name',
+    5 => 'p.title',
+    6 => 'c.location_type',
+    7 => 'c.shade',
+    8 => 'c.total_price',
+    9 => 'cs.name',
+    10 => 'c.received_date',
+    11 => 'di.invoice_number',
+    12 => 'c.id',               // lab
+    13 => 'c.id',               // files count
+    14 => 'c.id'                // actions
 ];
 
 $draw = isset($_GET['draw']) ? (int) $_GET['draw'] : 1;
 $start = isset($_GET['start']) ? (int) $_GET['start'] : 0;
 $length = isset($_GET['length']) ? (int) $_GET['length'] : 25;
 $searchValue = trim($_GET['search']['value'] ?? '');
-$orderColumn = isset($_GET['order'][0]['column']) ? (int) $_GET['order'][0]['column'] : 8;
+$orderColumn = isset($_GET['order'][0]['column']) ? (int) $_GET['order'][0]['column'] : 10;
 $orderDir = isset($_GET['order'][0]['dir']) && in_array(strtolower($_GET['order'][0]['dir']), ['asc', 'desc']) ? $_GET['order'][0]['dir'] : 'desc';
 
 $whereClauses = ['1=1'];
 $params = [];
 
 // Scope enforcement
-if ($isDoctor) {
+// Doctors see only their own cases, labs their assigned cases,
+// clinics their subordinate doctors' cases, designers only the cases
+// they are assigned to; only admins/staff see all.
+if ($isDoctor && !$isClinicOwner) {
     $whereClauses[] = 'c.doctor_id = ?';
     $params[] = $doctorId;
 } elseif ($isLab) {
     // Lab users only see cases assigned to their lab
     $whereClauses[] = 'c.lab_id = ?';
+    $params[] = $user['id'];
+} elseif ($isDesigner) {
+    // Designers only see cases where they are assigned as the designer
+    $whereClauses[] = 'c.designer_id = ?';
     $params[] = $user['id'];
 } elseif (has_permission('view_clinic_cases')) {
     // Clinic users see cases of their subordinate doctors
@@ -57,10 +69,26 @@ if (!empty($_GET['doctor_id'])) {
     $params[] = (int) $_GET['doctor_id'];
 }
 
-// Filter by status
+// Filter by status (with optional reverse/exclude)
 if (!empty($_GET['status_id'])) {
-    $whereClauses[] = 'c.status_id = ?';
+    $statusNot = !empty($_GET['status_not']);
+    $whereClauses[] = 'c.status_id ' . ($statusNot ? '<>' : '=') . ' ?';
     $params[] = (int) $_GET['status_id'];
+}
+// Filter by designer
+if (!empty($_GET['designer_id'])) {
+    $whereClauses[] = 'c.designer_id = ?';
+    $params[] = (int) $_GET['designer_id'];
+}
+// Filter by service (type of work)
+if (!empty($_GET['service_id'])) {
+    $whereClauses[] = 'c.service_id = ?';
+    $params[] = (int) $_GET['service_id'];
+}
+// Filter by shade
+if (isset($_GET['shade']) && trim((string) $_GET['shade']) !== '') {
+    $whereClauses[] = 'c.shade LIKE ?';
+    $params[] = '%' . trim((string) $_GET['shade']) . '%';
 }
 // Filter by date range
 if (!empty($_GET['date_from'])) {
@@ -83,11 +111,14 @@ if ($searchValue !== '') {
 $db = db();
 
 // Total records (scoped)
-if ($isDoctor) {
+if ($isDoctor && !$isClinicOwner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE doctor_id = ?');
     $totalStmt->execute([$doctorId]);
 } elseif ($isLab) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE lab_id = ?');
+    $totalStmt->execute([$user['id']]);
+} elseif ($isDesigner) {
+    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE designer_id = ?');
     $totalStmt->execute([$user['id']]);
 } elseif (has_permission('view_clinic_cases')) {
     $clinicScope = getClinicScope('c');
@@ -114,7 +145,8 @@ $length = max(1, (int) $length);
 $start = max(0, (int) $start);
 
 $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
-        di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, des.full_name AS designer_name
+        di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, des.full_name AS designer_name,
+        (SELECT COUNT(*) FROM case_files cf WHERE cf.case_id = c.id) AS file_count
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id
     LEFT JOIN site_prices p ON c.service_id = p.id
@@ -135,6 +167,11 @@ foreach ($rows as $r) {
     $received = toJalaliDateFormatted($r['received_date']);
     $price = formatAmountToman($r['total_price'] ?? $r['unit_price'] ?? 0);
     $invoiceHtml = !empty($r['invoice_number']) ? '<a href="invoice_form.php?id=' . htmlspecialchars($r['invoice_id']) . '">' . htmlspecialchars($r['invoice_number']) . '</a>' : '—';
+    if ($isDesigner) {
+        // Designers must not see prices, totals, or invoice info
+        $price = '—';
+        $invoiceHtml = '—';
+    }
 
     if ($isAdmin) {
         $eye = svg_icon('eye', 'icon-sm');
@@ -169,7 +206,10 @@ foreach ($rows as $r) {
         $received,
         $invoiceHtml,
         $labHtml,
-        $actionDropdown
+        $actionDropdown,
+        $r['designer_name'] ?: '—',
+        $r['file_count'] ?: 0,
+        $r['label_printed_at'] ?? null
     ];
 }
 

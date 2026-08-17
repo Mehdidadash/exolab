@@ -2,7 +2,7 @@
 // panel\save_case.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_login();
 
 // Accepts POST for create/update; returns JSON
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -10,6 +10,24 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => false, 'error' => 'method']);
     exit;
+}
+
+// Permission check: creating requires create_cases, editing requires edit_cases
+$editingCase = !empty($_POST['id']);
+if ($editingCase) {
+    if (!has_role('admin') && !has_permission('edit_cases')) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'error' => 'forbidden', 'message' => 'شما مجوز ویرایش کیس را ندارید.']);
+        exit;
+    }
+} else {
+    if (!has_role('admin') && !has_permission('create_cases')) {
+        http_response_code(403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['success' => false, 'error' => 'forbidden', 'message' => 'شما مجوز ایجاد کیس را ندارید.']);
+        exit;
+    }
 }
 
 $sessionToken = $_SESSION['_csrf_token'] ?? '';
@@ -43,6 +61,8 @@ $teeth = trim($data['teeth'] ?? '');
 $shade = trim($data['shade'] ?? '');
 $quantity = !empty($data['quantity']) ? (int)$data['quantity'] : 1;
 $unit_price = !empty($data['unit_price']) ? (float)$data['unit_price'] : 0;
+$design_fee = !empty($data['design_fee']) ? (float)$data['design_fee'] : 0;
+// Total is the work price only – the design fee is billed separately
 $total_price = $quantity * $unit_price;
 $received_date = parseJalaliToGregorian($data['received_date'] ?? '');
 if ($received_date === '') {
@@ -53,9 +73,31 @@ if ($received_date === '') {
 }
 $status_id = !empty($data['status_id']) ? (int)$data['status_id'] : null;
 $lab_id = !empty($data['lab_id']) ? (int)$data['lab_id'] : null;
+$case_type = $data['case_type'] ?? 'doctor';
+if (!in_array($case_type, ['doctor', 'lab_in', 'lab_out'])) $case_type = 'doctor';
 $description = trim($data['description'] ?? '');
 $parent_id = !empty($data['parent_id']) ? (int)$data['parent_id'] : null;
 $designer_id = !empty($data['designer_id']) ? (int)$data['designer_id'] : null;
+
+// Doctors create only their own 'doctor' type cases via the restricted form
+$currentUser = current_user();
+if (!$editingCase && $currentUser['role'] === 'doctor') {
+    $case_type = 'doctor';
+    $doctor_id = (int) $currentUser['id'];
+    $lab_id = null;
+    $designer_id = null;
+    $received_date = date('Y-m-d');
+    $statusSt = db()->query("SELECT id FROM case_statuses WHERE name = 'ثبت شد' ORDER BY id LIMIT 1")->fetchColumn();
+    $status_id = $statusSt ? (int) $statusSt : 1;
+    // Force the unit price to the doctor's applicable price for the service
+    if ($service_id) {
+        $forcedPrice = getApplicablePrice($doctor_id, $service_id);
+        if ($forcedPrice !== null) {
+            $unit_price = $forcedPrice;
+            $total_price = $quantity * $unit_price;
+        }
+    }
+}
 
 if (empty($patient_name)) {
     http_response_code(400);
@@ -136,14 +178,14 @@ function handleCaseFileUploads(int $caseId, array $files): array
 
 try {
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, received_date = ?, status_id = ?, lab_id = ?, designer_id = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
-        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $designer_id, $description, $parent_id, $id];
+        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
+        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $description, $parent_id, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, received_date, status_id, lab_id, designer_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $received_date, $status_id, $lab_id, $designer_id, $description];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $description];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = (int) db()->lastInsertId();

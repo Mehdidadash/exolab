@@ -16,6 +16,7 @@ $phone = trim($_POST['phone'] ?? '');
 $email = trim($_POST['email'] ?? '');
 $notes = trim($_POST['notes'] ?? '');
 $password = trim($_POST['password'] ?? '');
+$clinicId = !empty($_POST['clinic_id']) ? (int) $_POST['clinic_id'] : null;
 
 if (empty($name)) {
     header('Location: doctor_form.php?error=missing');
@@ -27,6 +28,7 @@ $data = [
     'phone' => $phone ?: null,
     'email' => $email ?: null,
     'notes' => $notes ?: null,
+    'clinic_id' => $clinicId,
 ];
 
 // Only include 'password' in the data array if one was actually typed.

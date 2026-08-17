@@ -46,6 +46,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION[USER_SESSION_KEY] = $user['id'];
             $upd = db()->prepare('UPDATE users SET last_login = NOW() WHERE id = ?');
             $upd->execute([$user['id']]);
+            // Return the user to the page they originally requested (if internal)
+            $redirect = $_SESSION['login_redirect'] ?? '';
+            unset($_SESSION['login_redirect']);
+            if ($redirect !== '' && $redirect[0] === '/' && strpos($redirect, '//') !== 0 && strpos($redirect, '://') === false) {
+                $path = parse_url($redirect, PHP_URL_PATH) ?: '';
+                if (preg_match('#/panel/[A-Za-z0-9_\-]+\.php$#', $path) && !preg_match('#/panel/(login|logout)\.php$#', $path)) {
+                    header('Location: ' . $redirect);
+                    exit;
+                }
+            }
             header('Location: dashboard.php');
             exit;
         }

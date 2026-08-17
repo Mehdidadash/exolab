@@ -50,6 +50,14 @@ if (!$checkStatus->fetch()) {
     exit;
 }
 
+// Enforce per-role allowed statuses
+if (!canUserSetStatus($statusId)) {
+    http_response_code(403);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['success' => false, 'error' => 'status_not_allowed', 'message' => 'شما مجاز به تنظیم این وضعیت نیستید.']);
+    exit;
+}
+
 $user = current_user();
 $isAdmin = has_permission('view_all_cases');
 $isDoctor = ($user['role'] === 'doctor');

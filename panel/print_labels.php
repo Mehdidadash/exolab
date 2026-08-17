@@ -24,9 +24,10 @@ if (empty($caseIds)) {
 // ─── Fetch cases ────────────────────────────────────────────────
 $placeholders = implode(',', array_fill(0, count($caseIds), '?'));
 $stmt = db()->prepare("
-    SELECT c.*, u.full_name AS doctor_name, p.title AS service_title
+    SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, lab.full_name AS lab_name, lab.role AS lab_role
     FROM cases c
     LEFT JOIN users       u ON c.doctor_id = u.id
+    LEFT JOIN users       lab ON c.lab_id = lab.id
     LEFT JOIN site_prices p ON c.service_id = p.id
     WHERE c.id IN ({$placeholders})
     ORDER BY c.id
@@ -39,13 +40,35 @@ if (empty($cases)) {
 }
 
 // ─── Abbreviation helpers ───────────────────────────────────────
-function abbrDoctor(string $name): string
+function formatDoctorLabel(string $name): string
 {
     $name = trim($name);
     if ($name === '') return 'دکتر';
+
     $name = preg_replace('/^دکتر\s+/u', '', $name) ?? $name;
-    $parts = preg_split('/\s+/u', $name, 2);
-    return 'دکتر ' . mb_substr($parts[0], 0, 1, 'UTF-8') . '. ' . ($parts[1] ?? '');
+    $name = preg_replace('/\s+/u', ' ', $name);
+    $parts = preg_split('/\s+/u', $name, -1, PREG_SPLIT_NO_EMPTY);
+    if (empty($parts)) return 'دکتر';
+
+    $display = implode(' ', array_slice($parts, 0, 3));
+    return 'دکتر ' . $display;
+}
+
+function formatDoctorLine(array $case): string
+{
+    $doctor = formatDoctorLabel((string) ($case['doctor_name'] ?? ''));
+    $labName = trim((string) ($case['lab_name'] ?? ''));
+    $labRole = (string) ($case['lab_role'] ?? '');
+
+    // Append the lab name only when the lab is a customer lab (لابراتوار مشتری)
+    if ($labName !== '' && $labRole === 'customer_lab') {
+        $labName = preg_replace('/^دکتر\s+/u', '', $labName) ?? $labName;
+        $labName = preg_replace('/\s+/u', ' ', $labName);
+        $line = $doctor . ' / ' . $labName;
+        return mb_strimwidth($line, 0, 34, '…', 'UTF-8');
+    }
+
+    return mb_strimwidth($doctor, 0, 34, '…', 'UTF-8');
 }
 
 function abbrPatient(string $name): string
@@ -94,7 +117,7 @@ function buildLabelHtml(array $case, string $baseUrl): string
 {
     $caseId   = (int) $case['id'];
     $url      = $baseUrl . '/panel/view_case.php?id=' . $caseId;
-    $doctor   = htmlspecialchars(abbrDoctor((string) ($case['doctor_name'] ?? '')));
+    $doctor   = htmlspecialchars(formatDoctorLine($case));
     $patient  = htmlspecialchars((string) ($case['patient_name'] ?? ''));
     $receipt  = (string) ($case['receipt_number'] ?? '');
     // Append receipt number to patient name: e.g. "زهرا زنده دل/01020"
@@ -124,7 +147,7 @@ function buildLabelHtml(array $case, string $baseUrl): string
     $clip = 'overflow:hidden; white-space:nowrap; text-overflow:ellipsis;';
     $ct = 'font-size:8pt; padding:' . $pt . ' 0.3mm; vertical-align:middle;' . $clip;
 
-    return '<table style="width:90mm; border-collapse:collapse;' . $fs . '">'
+    return '<table style="width:90mm; table-layout:fixed; border-collapse:collapse;' . $fs . '">'
          . '<tr>'
          . '<td style="width:' . $w1 . ';' . $bs . $ct . 'font-weight:bold;">' . $doctor . '</td>'
          . '<td style="width:' . $w2 . ';' . $bs . $ct . 'color:#555;">' . htmlspecialchars($shade) . '</td>'
@@ -156,7 +179,7 @@ foreach (array_chunk($cases, 2) as $pair) {
 
 // ─── HTML / CSS ──────────────────────────────────────────────────
 $css = 'body{direction:rtl;font-family:vazir;font-size:6pt;}'
-     . 'table.labels-grid{width:180.3mm;margin:0 auto;border-collapse:collapse;}'
+     . 'table.labels-grid{width:180.3mm;margin:0 auto;border-collapse:collapse;table-layout:fixed;}'
      . '.label-cell{width:90mm;vertical-align:top;padding:0 0 0.3mm 0;}'
      . '.gap-cell{width:0.3mm;padding:0 0 0.3mm 0;}'
      . '.label-row{page-break-inside:avoid;}';
@@ -194,6 +217,14 @@ $mpdf = new Mpdf([
 ]);
 $mpdf->SetDirectionality('rtl');
 $mpdf->WriteHTML($html);
+
+// Mark labels as printed (used for the green highlight in the case list)
+$labelCaseIds = array_column($cases, 'id');
+if (!empty($labelCaseIds)) {
+    $ph = implode(',', array_fill(0, count($labelCaseIds), '?'));
+    $upd = db()->prepare("UPDATE cases SET label_printed_at = NOW() WHERE id IN ($ph)");
+    $upd->execute($labelCaseIds);
+}
 
 $filename = 'labels_' . implode('_', array_column($cases, 'id')) . '.pdf';
 $mpdf->Output($filename, 'I');

@@ -51,9 +51,9 @@ panel_layout_start('مدیریت کاربران');
             <td style="font-size:0.85rem;"><?= $u['last_login'] ? toJalaliDateFormatted($u['last_login']) : '—' ?></td>
             <td class="actions">
                 <?php if ($u['id'] !== 1): ?>
-                    <?= action_dropdown(null, 'user_form.php?id=' . $u['id'], 'delete_user.php', $u['id']) ?>
+                    <?= action_dropdown('user_view.php?id=' . $u['id'], 'user_form.php?id=' . $u['id'], 'delete_user.php', $u['id']) ?>
                 <?php else: ?>
-                    <?= action_dropdown(null, 'user_form.php?id=' . $u['id'], null, 0) ?>
+                    <?= action_dropdown('user_view.php?id=' . $u['id'], 'user_form.php?id=' . $u['id'], null, 0) ?>
                 <?php endif; ?>
             </td>
         </tr>
