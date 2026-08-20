@@ -13,7 +13,7 @@ panel_layout_start('نرخ‌های برون‌سپاری');
 <div style="margin-bottom: 18px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; align-items: center;">
     <div>
         <a class="btn" href="generate_outsource_invoice.php" style="background: #059669; color: #fff;">صدور فاکتور برون‌سپاری</a>
-        <a class="btn" href="outsource_invoices.php" style="background: #0F172A; color: #fff;">فاکتورهای برون‌سپاری</a>
+        <a class="btn" href="expenses.php" style="background: #0F172A; color: #fff;">فاکتورهای مخارج</a>
     </div>
 </div>
 

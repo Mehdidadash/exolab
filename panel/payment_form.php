@@ -60,7 +60,7 @@ panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت
         </select>
         
         <label for="payment_date">تاریخ پرداخت</label>
-        <input type="text" id="payment_date" name="payment_date" value="<?= htmlspecialchars(!empty($payment['payment_date']) ? toJalaliDate($payment['payment_date']) : toJalaliDate(date('Y-m-d'))) ?>" autocomplete="off" required>
+        <input type="text" id="payment_date" name="payment_date" value="<?= htmlspecialchars(!empty($payment['payment_date']) ? toJalaliDateFormatted($payment['payment_date']) : toJalaliDateFormatted(date('Y-m-d'))) ?>" autocomplete="off" required>
         
         <label for="transaction_number">شماره تراکنش (اختیاری)</label>
         <input type="text" id="transaction_number" name="transaction_number" value="<?= htmlspecialchars($payment['transaction_number'] ?? '') ?>">

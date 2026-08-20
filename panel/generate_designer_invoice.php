@@ -276,7 +276,7 @@ panel_layout_start('صدور فاکتور طراحی');
             </div>
         </div>
         <button type="submit" name="generate" class="btn" style="background:#0F172A; color:#fff;">پیش‌نمایش</button>
-        <a href="designer_invoices.php" class="btn" style="background:#E5E7EB; color:#0F172A;">بازگشت</a>
+        <a href="expenses.php" class="btn" style="background:#E5E7EB; color:#0F172A;">بازگشت</a>
     </form>
 </div>
 <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">

@@ -20,13 +20,16 @@ $doctorId = $isDoctor ? $user['id'] : null;
 
 if ($id) {
     $sql = 'SELECT c.*, u.full_name AS doctor_name, u.notes AS doctor_notes, p.title AS service_title, d.full_name AS designer_name,
-                   cs.name AS status_name, lab.full_name AS lab_name
+                   cs.name AS status_name, lab.full_name AS lab_name,
+                   olab.full_name AS outsourced_lab_name, os.title AS outsourced_service_title
             FROM cases c
             LEFT JOIN users u ON c.doctor_id = u.id
             LEFT JOIN site_prices p ON c.service_id = p.id
             LEFT JOIN users d ON c.designer_id = d.id
             LEFT JOIN case_statuses cs ON c.status_id = cs.id
             LEFT JOIN users lab ON c.lab_id = lab.id
+            LEFT JOIN users olab ON c.outsourced_lab_id = olab.id
+            LEFT JOIN site_prices os ON c.outsourced_service_id = os.id
             WHERE c.id = ?';
     $params = [$id];
     if ($isDoctor) {
@@ -76,6 +79,11 @@ if ($id) {
 
 $statuses = db()->query('SELECT * FROM case_statuses ORDER BY name ASC')->fetchAll();
 $designers = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name")->fetchAll();
+$doctors = getAllDoctors();
+$labs = db()->query("SELECT id, full_name, role FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name")->fetchAll();
+$prices = getAllPrices();
+// Whether the current user may edit this case (admin / staff / secretary …)
+$canEditCase = has_role('admin') || has_permission('edit_cases');
 
 panel_layout_start('مشاهده کیس');
 ?>
@@ -83,7 +91,12 @@ panel_layout_start('مشاهده کیس');
     <?php if (!$case): ?>
         <p>کیسی یافت نشد.</p>
     <?php else: ?>
-        <h3>کیس #<?= htmlspecialchars($case['id']) ?> - <?= htmlspecialchars($case['patient_name']) ?><?= !empty($case['receipt_number']) ? ' / ' . htmlspecialchars($case['receipt_number']) : '' ?></h3>
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
+            <h3 style="margin:0;">کیس #<?= htmlspecialchars($case['id']) ?> - <?= htmlspecialchars($case['patient_name']) ?><?= !empty($case['receipt_number']) ? ' / ' . htmlspecialchars($case['receipt_number']) : '' ?></h3>
+            <?php if ($canEditCase): ?>
+                <a href="#" id="edit-case-btn" class="btn" style="background:#06B6D4; color:#fff;">✏️ ویرایش کیس</a>
+            <?php endif; ?>
+        </div>
 
         <?php
         $isRestricted = in_array($user['role'] ?? '', ['doctor', 'clinic']);
@@ -155,6 +168,19 @@ panel_layout_start('مشاهده کیس');
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['designer_name'] ?? '—') ?></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
+            </tr>
+            <?php endif; ?>
+            <?php if (!$isRestricted && !empty($case['outsourced_lab_name']) && !empty($case['outsourced_qty'])): ?>
+            <tr style="background:#f0fdf4;">
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>برون‌سپاری جانبی:</strong></td>
+                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee;">
+                    <?= htmlspecialchars($case['outsourced_lab_name']) ?>
+                    — <?= htmlspecialchars($case['outsourced_service_title'] ?? 'خدمت') ?>
+                    (تعداد: <?= toPersianDigits((int) $case['outsourced_qty']) ?>)
+                    <?php if (isset($case['outsourced_rate']) && $case['outsourced_rate'] !== null): ?>
+                        — نرخ: <?= toPersianDigits(number_format((float) $case['outsourced_rate'])) ?> تومان
+                    <?php endif; ?>
+                </td>
             </tr>
             <?php endif; ?>
             <?php if (!$hideFinancial): ?>
@@ -497,8 +523,8 @@ panel_layout_start('مشاهده کیس');
                 </div>
             </div>
 
-            <!-- 3D Viewer -->
-            <div id="viewer" style="width:100%; height:520px; background:linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); border:1px solid #d1d5db; border-radius:12px; position:relative; overflow:hidden;">
+            <!-- 3D Viewer (hidden until a 3D file is selected) -->
+            <div id="viewer" style="display:none; width:100%; height:520px; background:linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%); border:1px solid #d1d5db; border-radius:12px; position:relative; overflow:hidden;">
                 <div id="viewer-overlay" style="position:absolute; right:8px; top:8px; background:rgba(255,255,255,0.95); border-radius:10px; padding:8px; box-shadow:0 4px 16px rgba(0,0,0,0.1); z-index:1000; font-size:13px; backdrop-filter:blur(4px);">
                     <div style="display:flex; gap:4px; margin-bottom:6px;">
                         <button id="rot-left" class="btn" style="padding:4px 8px; font-size:1rem;" title="چرخش به چپ">⟲</button>
@@ -523,6 +549,11 @@ panel_layout_start('مشاهده کیس');
                 </div>
             </div>
             <!-- Rename modal -->
+            <style>
+                /* Modals must be fixed/centered overlays (view_case has no style block) */
+                .modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); z-index: 9999; }
+                .modal .modal-content { max-height: 90vh; overflow: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.2); background: #fff; border-radius: 4px; }
+            </style>
             <div id="rename-modal" class="modal" style="display:none;">
                 <div class="modal-content form-card" style="max-width:420px; margin:auto;">
                     <h3>ویرایش نام فایل</h3>
@@ -577,6 +608,9 @@ panel_layout_start('مشاهده کیس');
                         var url = btn.getAttribute('data-file');
                         imgEl.src = url;
                         imgContainer.style.display = 'block';
+                        // Hide the 3D viewer while showing an image
+                        var v3d = document.getElementById('viewer');
+                        if (v3d) v3d.style.display = 'none';
                         // Scroll to image
                         imgContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     });
@@ -669,6 +703,10 @@ panel_layout_start('مشاهده کیس');
                 }
 
                 function loadFile(url) {
+                    // Show the 3D viewer only when a model is actually selected
+                    container.style.display = 'block';
+                    var imgCont = document.getElementById('image-viewer-container');
+                    if (imgCont) imgCont.style.display = 'none';
                     if (placeholder) placeholder.style.display = 'none';
                     if (currentMesh) {
                         scene.remove(currentMesh);
@@ -932,5 +970,263 @@ panel_layout_start('مشاهده کیس');
         <?php endif; ?>
     <?php endif; ?>
 </div>
+
+<?php if ($canEditCase): ?>
+<link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
+<script src="../assets/js/persian-date.min.js"></script>
+<script src="../assets/js/persian-datepicker.min.js"></script>
+
+<div id="edit-case-modal" class="modal" style="display:none;">
+    <div class="modal-content form-card" style="width:820px; max-width:95%; padding:20px; box-sizing:border-box;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="margin:0;">✏️ ویرایش کیس #<?= (int) $case['id'] ?> - <?= htmlspecialchars($case['patient_name']) ?></h3>
+            <button type="button" id="edit-case-close" class="btn" style="background:#E5E7EB; color:#0F172A; padding:4px 12px;">✕</button>
+        </div>
+        <form id="edit-case-form">
+            <input type="hidden" name="id" value="<?= (int) $case['id'] ?>">
+            <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div class="form-group">
+                    <label>نوع کیس</label>
+                    <select name="case_type" id="ec-case-type">
+                        <option value="doctor" <?= ($case['case_type'] ?? 'doctor') === 'doctor' ? 'selected' : '' ?>>کیس دکتر</option>
+                        <option value="lab_in" <?= ($case['case_type'] ?? '') === 'lab_in' ? 'selected' : '' ?>>کار از لابراتوار (ورودی)</option>
+                        <option value="lab_out" <?= ($case['case_type'] ?? '') === 'lab_out' ? 'selected' : '' ?>>برون‌سپاری به لابراتوار</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>پزشک</label>
+                    <select name="doctor_id">
+                        <option value="">— انتخاب —</option>
+                        <?php foreach ($doctors as $doctor): ?>
+                            <option value="<?= (int) $doctor['id'] ?>" <?= (int) ($case['doctor_id'] ?? 0) === (int) $doctor['id'] ? 'selected' : '' ?>><?= htmlspecialchars($doctor['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group" id="ec-lab-group">
+                    <label id="ec-lab-label">لابراتوار</label>
+                    <select name="lab_id">
+                        <option value="">— انتخاب —</option>
+                        <?php foreach ($labs as $lab): ?>
+                            <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?> (<?= htmlspecialchars($lab['role']) ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>طراح</label>
+                    <select name="designer_id">
+                        <option value="">بدون طراح</option>
+                        <?php foreach ($designers as $des): ?>
+                            <option value="<?= (int) $des['id'] ?>" <?= (int) ($case['designer_id'] ?? 0) === (int) $des['id'] ? 'selected' : '' ?>><?= htmlspecialchars($des['full_name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>نام بیمار *</label>
+                    <input type="text" name="patient_name" value="<?= htmlspecialchars($case['patient_name'] ?? '') ?>" required>
+                </div>
+                <div class="form-group">
+                    <label>شماره قبض</label>
+                    <input type="text" name="receipt_number" value="<?= htmlspecialchars($case['receipt_number'] ?? '') ?>">
+                </div>
+                <div class="form-group">
+                    <label>خدمت</label>
+                    <select name="service_id">
+                        <option value="">— انتخاب —</option>
+                        <?php foreach ($prices as $price): ?>
+                            <option value="<?= (int) $price['id'] ?>" <?= (int) ($case['service_id'] ?? 0) === (int) $price['id'] ? 'selected' : '' ?>><?= htmlspecialchars($price['title']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>مکان</label>
+                    <select name="location_type">
+                        <option value="">— انتخاب —</option>
+                        <option value="upper" <?= ($case['location_type'] ?? '') === 'upper' ? 'selected' : '' ?>>فک بالا</option>
+                        <option value="lower" <?= ($case['location_type'] ?? '') === 'lower' ? 'selected' : '' ?>>فک پایین</option>
+                        <option value="both" <?= ($case['location_type'] ?? '') === 'both' ? 'selected' : '' ?>>هر دو فک</option>
+                        <option value="teeth" <?= ($case['location_type'] ?? '') === 'teeth' ? 'selected' : '' ?>>دندان</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>دندان</label>
+                    <input type="text" name="teeth" value="<?= htmlspecialchars($case['teeth'] ?? '') ?>">
+                </div>
+                <div class="form-group">
+                    <label>سایه</label>
+                    <input type="text" name="shade" value="<?= htmlspecialchars($case['shade'] ?? '') ?>">
+                </div>
+                <div class="form-group">
+                    <label>تعداد</label>
+                    <input type="number" name="quantity" min="1" value="<?= (int) ($case['quantity'] ?? 1) ?>">
+                </div>
+                <div class="form-group">
+                    <label>فی واحد (تومان)</label>
+                    <input type="number" name="unit_price" min="0" step="1" value="<?= (int) ($case['unit_price'] ?? 0) ?>">
+                </div>
+                <div class="form-group">
+                    <label>هزینه طراحی (تومان)</label>
+                    <input type="number" name="design_fee" min="0" step="1" value="<?= (int) ($case['design_fee'] ?? 0) ?>">
+                </div>
+                <div class="form-group">
+                    <label>تاریخ دریافت</label>
+                    <input type="text" id="ec-received-date" name="received_date" value="<?= htmlspecialchars(toJalaliDateFormatted($case['received_date'] ?? date('Y-m-d'))) ?>" style="cursor:pointer;">
+                </div>
+                <div class="form-group">
+                    <label>وضعیت</label>
+                    <select name="status_id">
+                        <?php foreach ($statuses as $st): ?>
+                            <option value="<?= (int) $st['id'] ?>" <?= (int) ($case['status_id'] ?? 0) === (int) $st['id'] ? 'selected' : '' ?>><?= htmlspecialchars($st['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>برون‌سپاری جانبی: لابراتوار</label>
+                    <select name="outsourced_lab_id">
+                        <option value="">ندارد</option>
+                        <?php foreach ($labs as $lab): ?>
+                            <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['outsourced_lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>برون‌سپاری جانبی: خدمت</label>
+                    <select name="outsourced_service_id">
+                        <option value="">— انتخاب —</option>
+                        <?php foreach ($prices as $price): ?>
+                            <option value="<?= (int) $price['id'] ?>" <?= (int) ($case['outsourced_service_id'] ?? 0) === (int) $price['id'] ? 'selected' : '' ?>><?= htmlspecialchars($price['title']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>تعداد برون‌سپاری</label>
+                    <input type="number" name="outsourced_qty" min="0" value="<?= (int) ($case['outsourced_qty'] ?? 0) ?>">
+                </div>
+                <div class="form-group">
+                    <label>نرخ برون‌سپاری (تومان)</label>
+                    <input type="number" id="ec-outsourced-rate" name="outsourced_rate" min="0" step="1" value="<?= isset($case['outsourced_rate']) && $case['outsourced_rate'] !== null ? (float) $case['outsourced_rate'] : '' ?>" placeholder="خودکار از نرخ‌ها">
+                </div>
+                <div class="form-group" style="grid-column:1 / -1;">
+                    <label>توضیحات</label>
+                    <textarea name="description" rows="3" style="width:100%;"><?= htmlspecialchars($case['description'] ?? '') ?></textarea>
+                </div>
+            </div>
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+                <button type="button" id="edit-case-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
+                <button type="submit" id="edit-case-save" class="btn" style="background:#06B6D4; color:#fff;">💾 ذخیره تغییرات</button>
+            </div>
+            <div id="edit-case-msg" style="margin-top:10px; font-weight:bold;"></div>
+        </form>
+    </div>
+</div>
+
+<script>
+(function(){
+    var modal = document.getElementById('edit-case-modal');
+    var openBtn = document.getElementById('edit-case-btn');
+    var closeBtn = document.getElementById('edit-case-close');
+    var cancelBtn = document.getElementById('edit-case-cancel');
+    var form = document.getElementById('edit-case-form');
+    var msgEl = document.getElementById('edit-case-msg');
+    var csrf = window.CSRF_TOKEN || '<?= htmlspecialchars($csrf_token) ?>';
+    var dp = null;
+
+    function toggleLabGroup(){
+        var typeSel = document.getElementById('ec-case-type');
+        var labGroup = document.getElementById('ec-lab-group');
+        var isLabIn = typeSel && typeSel.value === 'lab_in';
+        if (labGroup) labGroup.style.display = isLabIn ? '' : 'none';
+    }
+    document.addEventListener('change', function(e){
+        if (e.target && e.target.id === 'ec-case-type') toggleLabGroup();
+    });
+
+    // Auto-fill the side-outsourcing rate from outsource_rates when lab+service are chosen.
+    var ecOsLab = null, ecOsSvc = null;
+    function ecFetchOutsourceRate(){
+        ecOsLab = document.querySelector('[name="outsourced_lab_id"]');
+        ecOsSvc = document.querySelector('[name="outsourced_service_id"]');
+        var rateInput = document.getElementById('ec-outsourced-rate');
+        if (!ecOsLab || !ecOsSvc || !rateInput) return;
+        var lab = ecOsLab.value, svc = ecOsSvc.value;
+        if (!lab || !svc) return;
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', 'get_outsource_rate.php?lab_id=' + encodeURIComponent(lab) + '&service_id=' + encodeURIComponent(svc), true);
+        xhr.setRequestHeader('X-CSRF-Token', csrf);
+        xhr.setRequestHeader('Accept', 'application/json');
+        xhr.onload = function(){
+            var resp = null;
+            try { resp = JSON.parse(xhr.responseText); } catch(e){}
+            if (resp && resp.rate != null) {
+                rateInput.value = resp.rate;
+            } else if (rateInput.value === '' || rateInput.value == null) {
+                // No dedicated rate and nothing saved → default to 0 (manually editable).
+                rateInput.value = 0;
+            }
+        };
+        xhr.send();
+    }
+    document.addEventListener('change', function(e){
+        if (e.target && (e.target.name === 'outsourced_lab_id' || e.target.name === 'outsourced_service_id')) {
+            ecFetchOutsourceRate();
+        }
+    });
+
+    function openModal(){
+        if (!modal) return;
+        modal.style.display = 'flex';
+        if (msgEl) msgEl.textContent = '';
+        toggleLabGroup();
+        if (typeof $.fn !== 'undefined' && $.fn.persianDatepicker && !dp) {
+            try {
+                dp = $('#ec-received-date').persianDatepicker({
+                    format: 'YYYY/MM/DD',
+                    persianDigit: false,
+                    autoClose: true,
+                    initialValue: $('#ec-received-date').val() || false
+                });
+            } catch(e) {}
+        }
+    }
+    function closeModal(){ if (modal) modal.style.display = 'none'; }
+
+    if (openBtn) openBtn.addEventListener('click', function(e){ e.preventDefault(); openModal(); });
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+    if (modal) modal.addEventListener('click', function(e){ if (e.target === modal) closeModal(); });
+
+    if (form) form.addEventListener('submit', function(e){
+        e.preventDefault();
+        if (msgEl) { msgEl.textContent = 'در حال ذخیره...'; msgEl.style.color = '#0F172A'; }
+        var saveBtn = document.getElementById('edit-case-save');
+        if (saveBtn) saveBtn.disabled = true;
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', 'save_case.php', true);
+        xhr.setRequestHeader('X-CSRF-Token', csrf);
+        xhr.setRequestHeader('Accept', 'application/json');
+        xhr.onload = function(){
+            var resp = null;
+            try { resp = JSON.parse(xhr.responseText); } catch(e){}
+            if (xhr.status === 200 && resp && resp.success) {
+                if (msgEl) { msgEl.textContent = '✅ ذخیره شد. در حال بازنشانی صفحه...'; msgEl.style.color = '#166534'; }
+                setTimeout(function(){ location.reload(); }, 500);
+            } else {
+                var errMsg = 'خطا در ذخیره تغییرات.';
+                if (resp && resp.message) errMsg = resp.message;
+                else if (resp && resp.error) errMsg = 'خطا: ' + resp.error;
+                if (msgEl) { msgEl.textContent = errMsg; msgEl.style.color = '#b91c1c'; }
+                if (saveBtn) saveBtn.disabled = false;
+            }
+        };
+        xhr.onerror = function(){
+            if (msgEl) { msgEl.textContent = 'خطا در اتصال به سرور.'; msgEl.style.color = '#b91c1c'; }
+            if (saveBtn) saveBtn.disabled = false;
+        };
+        var fd = new FormData(form);
+        xhr.send(fd);
+    });
+})();
+</script>
+<?php endif; ?>
 
 <?php panel_layout_end(); ?>

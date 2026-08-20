@@ -78,6 +78,23 @@ if (!in_array($case_type, ['doctor', 'lab_in', 'lab_out'])) $case_type = 'doctor
 $description = trim($data['description'] ?? '');
 $parent_id = !empty($data['parent_id']) ? (int)$data['parent_id'] : null;
 $designer_id = !empty($data['designer_id']) ? (int)$data['designer_id'] : null;
+// Side outsourcing: part of this case's work is performed by another lab (we owe them)
+$outsourced_lab_id = !empty($data['outsourced_lab_id']) ? (int)$data['outsourced_lab_id'] : null;
+$outsourced_service_id = !empty($data['outsourced_service_id']) ? (int)$data['outsourced_service_id'] : null;
+$outsourced_qty = !empty($data['outsourced_qty']) ? (int)$data['outsourced_qty'] : 0;
+if ($outsourced_qty < 0) $outsourced_qty = 0;
+// Per-case side outsourcing rate. NULL means "use the outsource_rates table at billing time".
+$outsourced_rate = (isset($data['outsourced_rate']) && $data['outsourced_rate'] !== '')
+    ? (float) $data['outsourced_rate']
+    : null;
+if ($outsourced_rate !== null && $outsourced_rate < 0) $outsourced_rate = 0;
+// If no lab or service selected, treat as no side outsourcing
+if (!$outsourced_lab_id || !$outsourced_service_id || $outsourced_qty <= 0) {
+    $outsourced_lab_id = null;
+    $outsourced_service_id = null;
+    $outsourced_qty = 0;
+    $outsourced_rate = null;
+}
 
 // Doctors create only their own 'doctor' type cases via the restricted form
 $currentUser = current_user();
@@ -178,14 +195,14 @@ function handleCaseFileUploads(int $caseId, array $files): array
 
 try {
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
-        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $description, $parent_id, $id];
+        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
+        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $description];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = (int) db()->lastInsertId();

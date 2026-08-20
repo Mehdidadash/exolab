@@ -65,6 +65,73 @@ function toJalaliDate($gregorianDate) {
     }
 }
 
+/**
+ * Convert Persian (Farsi) text to a readable Finglish (Latin) transliteration.
+ * Used e.g. for ZIP file names so Persian patient names become Latin.
+ * Example: "خانوم حیدری" => "khanoum heydari".
+ * This is a best-effort approximation (Persian omits most short vowels).
+ */
+function persian_to_finglish($text) {
+    $text = trim((string) $text);
+    $text = preg_replace('/[\x{064B}-\x{0652}\x{0640}\x{200C}]/u', '', $text);
+    $chars = preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY);
+    $out = '';
+    $lastVowel = true;          // avoid inserting a short vowel at word start
+    $wordStart = true;
+    $vowelLetters = ['ا', 'آ', 'و', 'ی'];
+    $consonantMap = [
+        'ب' => 'b', 'پ' => 'p', 'ت' => 't', 'ث' => 's', 'ج' => 'j', 'چ' => 'ch', 'ح' => 'h', 'خ' => 'kh', 'د' => 'd',
+        'ذ' => 'z', 'ر' => 'r', 'ز' => 'z', 'ژ' => 'zh', 'س' => 's', 'ش' => 'sh', 'ص' => 's', 'ض' => 'z', 'ط' => 't',
+        'ظ' => 'z', 'غ' => 'gh', 'ف' => 'f', 'ق' => 'gh', 'ک' => 'k', 'گ' => 'g', 'ل' => 'l', 'م' => 'm', 'ن' => 'n',
+        'ه' => 'h', 'و' => 'v', 'ی' => 'y',
+    ];
+    $vowelMap = ['ا' => 'a', 'آ' => 'a', 'ء' => '', 'ة' => 'h'];
+    foreach ($chars as $i => $ch) {
+        $next = $chars[$i + 1] ?? '';
+        $prev = $chars[$i - 1] ?? '';
+
+        if ($ch === 'ع') {
+            // Word-initial ع carries the "a" vowel; otherwise silent but acts as a vowel.
+            if ($wordStart) {
+                $out .= 'a';
+                $lastVowel = true;
+            } else {
+                $lastVowel = true;
+            }
+            $wordStart = false;
+            continue;
+        }
+        if ($ch === 'و') {
+            // Consonant "v" at word start or before a vowel letter; otherwise vowel "ou".
+            if ($wordStart || in_array($next, $vowelLetters, true)) { $seg = 'v'; $isV = false; }
+            else { $seg = 'ou'; $isV = true; }
+        } elseif ($ch === 'ی') {
+            if ($wordStart || in_array($next, $vowelLetters, true)) { $seg = 'y'; $isV = false; }
+            elseif ($prev !== '' && !in_array($prev, $vowelLetters, true) && $next !== '' && !in_array($next, $vowelLetters, true)) { $seg = 'ey'; $isV = true; }
+            else { $seg = 'i'; $isV = true; }
+        } elseif (isset($vowelMap[$ch])) {
+            $seg = $vowelMap[$ch];
+            $isV = true;
+        } elseif (isset($consonantMap[$ch])) {
+            $seg = $consonantMap[$ch];
+            $isV = false;
+        } else {
+            // Space or punctuation: keep as-is, reset word state.
+            $out .= $ch;
+            $lastVowel = true;
+            $wordStart = true;
+            continue;
+        }
+        if (!$isV && !$lastVowel && $out !== '') {
+            $out .= 'a'; // insert a short "a" between consecutive consonants for readability
+        }
+        $out .= $seg;
+        $lastVowel = $isV;
+        $wordStart = false;
+    }
+    return $out;
+}
+
 function toJalaliDateFormatted($gregorianDate) {
     if (empty($gregorianDate)) return '';
     try {

@@ -84,7 +84,22 @@ $compress = !empty($_POST['compress']) || !empty($_GET['compress']);
 $fileCount = isset($files['name']) && is_array($files['name']) ? count($files['name']) : 0;
 
 if ($compress && $fileCount > 1) {
-    $zipName = 'case_' . $caseId . '_' . time() . '.zip';
+    // Readable filename: caseNo_patientNameFinglish_Shade_teethNumber.zip
+    $caseInfo = db()->prepare('SELECT patient_name, shade, teeth FROM cases WHERE id = ?');
+    $caseInfo->execute([$caseId]);
+    $caseRow = $caseInfo->fetch() ?: [];
+    $finglish = persian_to_finglish($caseRow['patient_name'] ?? '');
+    $shade = trim((string) ($caseRow['shade'] ?? ''));
+    $teeth = trim((string) ($caseRow['teeth'] ?? ''));
+    $nameParts = array_filter([(string) $caseId, $finglish, $shade, $teeth], function ($p) { return $p !== ''; });
+    $zipBase = implode('_', $nameParts);
+    $zipBase = preg_replace('/[<>:"\/\\|?*\x00-\x1F]+/u', '_', $zipBase);
+    $zipBase = preg_replace('/_+/', '_', $zipBase);
+    $zipBase = trim($zipBase, " _.");
+    if ($zipBase === '') {
+        $zipBase = 'case_' . $caseId;
+    }
+    $zipName = $zipBase . '.zip';
     $zipPath = $uploadDir . $zipName;
     $zip = new ZipArchive();
     if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
@@ -122,7 +137,7 @@ if ($compress && $fileCount > 1) {
         } else {
             try {
                 $ins = db()->prepare('INSERT INTO case_files (case_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, "application/zip", ?, NOW())');
-                $ins->execute([$caseId, $zipName, 'case_' . $caseId . '.zip', $size]);
+                $ins->execute([$caseId, $zipName, $zipBase . '.zip', $size]);
                 $uploaded = 1;
             } catch (\Throwable $e) {
                 $errors[] = 'db_insert_error';

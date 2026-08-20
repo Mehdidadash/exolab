@@ -29,6 +29,10 @@ $columns = [
     14 => 'c.id'                // actions
 ];
 
+// Client-side mode: return ALL scoped rows (no pagination) for DataTables
+// client-side + SearchPanes.
+$clientAll = isset($_GET['mode']) && $_GET['mode'] === 'all';
+
 $draw = isset($_GET['draw']) ? (int) $_GET['draw'] : 1;
 $start = isset($_GET['start']) ? (int) $_GET['start'] : 0;
 $length = isset($_GET['length']) ? (int) $_GET['length'] : 25;
@@ -141,8 +145,13 @@ $countStmt->execute($params);
 $recordsFiltered = (int) $countStmt->fetchColumn();
 
 $orderBy = $columns[$orderColumn] ?? 'c.received_date';
-$length = max(1, (int) $length);
-$start = max(0, (int) $start);
+if ($clientAll) {
+    $length = 0;   // no limit
+    $start = 0;
+} else {
+    $length = max(1, (int) $length);
+    $start = max(0, (int) $start);
+}
 
 $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
         di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, des.full_name AS designer_name,
@@ -155,8 +164,11 @@ $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs
     LEFT JOIN users lab ON c.lab_id = lab.id
     LEFT JOIN users des ON c.designer_id = des.id
     WHERE " . implode(' AND ', $whereClauses) . "
-    ORDER BY $orderBy $orderDir
-    LIMIT $length OFFSET $start";
+    ORDER BY $orderBy $orderDir";
+
+if (!$clientAll) {
+    $dataSql .= " LIMIT $length OFFSET $start";
+}
 
 $stmt = $db->prepare($dataSql);
 $stmt->execute($params);
@@ -209,7 +221,9 @@ foreach ($rows as $r) {
         $actionDropdown,
         $r['designer_name'] ?: '—',
         $r['file_count'] ?: 0,
-        $r['label_printed_at'] ?? null
+        $r['label_printed_at'] ?? null,
+        $r['status_name'] ?: '—',
+        $r['receipt_number'] ?: ''
     ];
 }
 

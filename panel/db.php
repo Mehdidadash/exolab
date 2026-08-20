@@ -16,6 +16,7 @@ function db() {
             ensureNotificationsTable($pdo);
             ensureCasesDesignFeeColumn($pdo);
             ensureDoctorPriceOverrideTypeColumn($pdo);
+            ensureCasesOutsourcedRateColumn($pdo);
         } catch (Throwable $e) {}
     }
     return $pdo;
@@ -50,6 +51,15 @@ function ensureDoctorPriceOverrideTypeColumn($pdo) {
     try {
         $pdo->exec("ALTER TABLE doctor_price_overrides MODIFY COLUMN service_id INT NULL");
     } catch (Throwable $e) {}
+}
+
+function ensureCasesOutsourcedRateColumn($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cases' AND COLUMN_NAME = 'outsourced_rate'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int)$row['cnt'] === 0) {
+        $pdo->exec("ALTER TABLE cases ADD COLUMN outsourced_rate DECIMAL(15,2) NULL AFTER outsourced_qty");
+    }
 }
 
 // ----- Price functions (unchanged) -----
@@ -435,6 +445,11 @@ function saveInvoice($data) {
         if ($itemTitle === '') continue;
         $quantity = max(1, (int) ($item['quantity'] ?? 1));
         $unitPrice = (float) ($item['unit_price'] ?? 0);
+        // The "جمع" (total) column is editable – use the submitted total when present.
+        $submittedTotal = $item['total_amount'] ?? null;
+        $total = ($submittedTotal !== null && $submittedTotal !== '')
+            ? (float) $submittedTotal
+            : round($quantity * $unitPrice);
         $items[] = [
             'price_id' => !empty($item['price_id']) ? (int) $item['price_id'] : null,
             'case_id' => !empty($item['case_id']) ? (int) $item['case_id'] : null,
@@ -443,7 +458,7 @@ function saveInvoice($data) {
             'patient_name' => trim($item['patient_name'] ?? '') ?: null,
             'quantity' => $quantity,
             'unit_price' => $unitPrice,
-            'total_amount' => round($quantity * $unitPrice),
+            'total_amount' => round($total),
         ];
     }
     $totalAmount = round(array_sum(array_column($items, 'total_amount')));
@@ -1002,23 +1017,46 @@ function deleteOutsourceRate(int $id): void {
     $stmt->execute([$id]);
 }
 
-/** Uninvoiced outsourced (lab_out) cases for a lab within a date range. */
+/**
+ * Uninvoiced cases that create a payable (expense) to a given lab, within a date range.
+ * Includes:
+ *  - fully outsourced cases (case_type = lab_out, lab_id = lab)
+ *  - side-outsourced cases (outsourced_lab_id = lab, outsourced_qty > 0) where part
+ *    of the work was performed by that lab.
+ * Each returned case is annotated with unit_rate, _bill_qty, _bill_service_id and
+ * _bill_service_title so createOutsourceInvoice can bill correctly for either kind.
+ */
 function getUninvoicedOutsourceCases(int $labId, string $startDate, string $endDate): array {
     $stmt = db()->prepare('
-        SELECT c.*, p.title AS service_title, u.full_name AS doctor_name
+        SELECT c.*, p.title AS service_title, os.title AS outsourced_service_title, u.full_name AS doctor_name
         FROM cases c
         LEFT JOIN site_prices p ON c.service_id = p.id
+        LEFT JOIN site_prices os ON c.outsourced_service_id = os.id
         LEFT JOIN users u ON c.doctor_id = u.id
-        WHERE c.case_type = "lab_out"
-          AND c.lab_id = ?
-          AND c.outsource_invoice_id IS NULL
+        WHERE c.outsource_invoice_id IS NULL
           AND c.received_date BETWEEN ? AND ?
+          AND (
+            (c.case_type = "lab_out" AND c.lab_id = ?)
+            OR (c.outsourced_lab_id = ? AND c.outsourced_qty > 0)
+          )
         ORDER BY c.received_date ASC, c.id ASC
     ');
-    $stmt->execute([$labId, $startDate, $endDate]);
+    $stmt->execute([$startDate, $endDate, $labId, $labId]);
     $cases = $stmt->fetchAll();
     foreach ($cases as &$c) {
-        $c['unit_rate'] = getOutsourceRate($labId, (int) ($c['service_id'] ?? 0));
+        if ($c['case_type'] === 'lab_out' && (int) $c['lab_id'] === $labId) {
+            $svcId = (int) ($c['service_id'] ?? 0);
+            $qty = (int) ($c['quantity'] ?? 1);
+            $svcTitle = $c['service_title'] ?? null;
+        } else {
+            $svcId = (int) ($c['outsourced_service_id'] ?? 0);
+            $qty = (int) ($c['outsourced_qty'] ?? 0);
+            $svcTitle = $c['outsourced_service_title'] ?? $c['service_title'] ?? null;
+        }
+        $c['unit_rate'] = $c['outsourced_rate'] !== null ? (float) $c['outsourced_rate'] : getOutsourceRate($labId, $svcId);
+        $c['_bill_qty'] = $qty;
+        $c['_bill_service_id'] = $svcId;
+        $c['_bill_service_title'] = $svcTitle;
     }
     return $cases;
 }
@@ -1036,12 +1074,17 @@ function createOutsourceInvoice(int $labId, array $cases, string $invoiceDate, ?
     $total = 0;
     $rows = [];
     foreach ($cases as $c) {
-        $rate = getOutsourceRate($labId, (int) ($c['service_id'] ?? 0));
+        // Use the billing qty/service annotated by getUninvoicedOutsourceCases.
+        // Falls back to full-case billing (quantity, service_id) for safety.
+        $qty = isset($c['_bill_qty']) ? (int) $c['_bill_qty'] : (int) ($c['quantity'] ?? 1);
+        $svcId = isset($c['_bill_service_id']) ? (int) $c['_bill_service_id'] : (int) ($c['service_id'] ?? 0);
+        $svcTitle = $c['_bill_service_title'] ?? $c['service_title'] ?? null;
+        // Prefer the per-case saved rate; fall back to the outsource_rates lookup.
+        $rate = ($c['outsourced_rate'] ?? null) !== null ? (float) $c['outsourced_rate'] : getOutsourceRate($labId, $svcId);
         if ($rate === null) $rate = 0.0;
-        $qty = (int) ($c['quantity'] ?? 1);
         $amount = round($rate * $qty);
         $total += $amount;
-        $rows[] = [$c, $rate, $qty, $amount];
+        $rows[] = [$c, $rate, $qty, $amount, $svcId, $svcTitle];
     }
 
     $notes = 'فاکتور برون‌سپاری' . ($periodLabel ? ' — بازه: ' . $periodLabel : '');
@@ -1050,14 +1093,14 @@ function createOutsourceInvoice(int $labId, array $cases, string $invoiceDate, ?
     $invoiceId = (int) db()->lastInsertId();
 
     $item = db()->prepare('INSERT INTO outsource_invoice_items (invoice_id, case_id, doctor_id, doctor_name, service_id, service_title, patient_name, quantity, unit_rate, total_amount, received_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-    foreach ($rows as [$c, $rate, $qty, $amount]) {
+    foreach ($rows as [$c, $rate, $qty, $amount, $svcId, $svcTitle]) {
         $item->execute([
             $invoiceId,
             $c['id'],
             $c['doctor_id'] ?? null,
             $c['doctor_name'] ?? null,
-            $c['service_id'] ?? null,
-            $c['service_title'] ?? null,
+            $svcId ?: null,
+            $svcTitle ?: null,
             $c['patient_name'] ?? null,
             $qty,
             $rate,

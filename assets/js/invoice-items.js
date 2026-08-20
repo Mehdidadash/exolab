@@ -49,6 +49,8 @@ document.addEventListener('DOMContentLoaded', function () {
         var patient = (item.patient_name || '').replace(/"/g, '&quot;');
         var qty = item.quantity || 1;
         var typeLabel = (item.service_title || item.item_title || (isNeg ? 'تخفیف' : '')).replace(/"/g, '&quot;');
+        // If a saved total was passed (editing an existing invoice), keep it.
+        var initialTotal = (item.total_amount !== undefined && item.total_amount !== null && item.total_amount !== '') ? Math.round(Number(item.total_amount)) : null;
 
         tr.innerHTML =
             '<td style="text-align:center; vertical-align:middle;">' + (typeLabel || '—') + '</td>' +
@@ -61,7 +63,7 @@ document.addEventListener('DOMContentLoaded', function () {
             '<td><input type="text" class="item-patient" value="' + patient + '" style="width:96%;"></td>' +
             '<td><input type="number" class="item-quantity" min="1" value="' + qty + '" style="width:70px;"></td>' +
             '<input type="hidden" class="item-unit-price" value="' + price + '">' +
-            '<td class="item-total">0</td>' +
+            '<td><input type="number" class="item-total" value="' + (initialTotal !== null ? initialTotal : 0) + '" step="1" style="width:90px;"></td>' +
             '<td><button type="button" class="remove-item-btn" style="background:#fee2e2; color:#991b1b; border:none; border-radius:6px; padding:6px 12px; cursor:pointer;">حذف</button></td>';
 
         // Event listeners
@@ -82,7 +84,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         itemRows.appendChild(tr);
         refreshRowNames();
-        updateRowTotal(tr);
+        if (initialTotal !== null) { updateInvoiceTotal(); } else { updateRowTotal(tr); }
     }
 
     // ─── Add a CASE row (with price select, patient, quantity, case link) ───
@@ -97,6 +99,8 @@ document.addEventListener('DOMContentLoaded', function () {
         desc = desc.replace(/^کیس #\d+ - /, '').replace(/^دندان /, '');
         // Use unit_price (not total_price) – updateRowTotal multiplies qty × price
         var price = Math.round(c.unit_price || c.total_price || 0);
+        // If a saved total was passed (editing an existing invoice), keep it.
+        var initialTotal = (c.total_amount !== undefined && c.total_amount !== null && c.total_amount !== '') ? Math.round(Number(c.total_amount)) : null;
 
         // Build price select
         var selectHtml = '<select class="form-control" style="width:100%;">';
@@ -118,7 +122,7 @@ document.addEventListener('DOMContentLoaded', function () {
             '<td><input type="text" class="item-patient" value="' + patient + '" style="width:96%;"></td>' +
             '<td><input type="number" class="item-quantity" min="1" value="' + (c.quantity || 1) + '" style="width:70px;"></td>' +
             '<input type="hidden" class="item-unit-price" value="' + price + '">' +
-            '<td class="item-total">0</td>' +
+            '<td><input type="number" class="item-total" value="' + (initialTotal !== null ? initialTotal : 0) + '" step="1" style="width:90px;"></td>' +
             '<td><button type="button" class="remove-item-btn" style="background:#fee2e2; color:#991b1b; border:none; border-radius:6px; padding:6px 12px; cursor:pointer;">حذف</button></td>';
 
         // Wire events
@@ -152,7 +156,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         itemRows.appendChild(tr);
         refreshRowNames();
-        updateRowTotal(tr);
+        if (initialTotal !== null) { updateInvoiceTotal(); } else { updateRowTotal(tr); }
     }
 
     // ─── Update single row total ───
@@ -161,7 +165,7 @@ document.addEventListener('DOMContentLoaded', function () {
         var price = Number(row.querySelector('.item-unit-price')?.value || 0);
         var total = qty * price;
         var td = row.querySelector('.item-total');
-        if (td) td.textContent = fmt(total);
+        if (td) td.value = Math.round(total);
         updateInvoiceTotal();
     }
 
@@ -169,11 +173,19 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateInvoiceTotal() {
         var sum = 0;
         itemRows.querySelectorAll('tr.invoice-item-row').forEach(function(row) {
-            var qty = Number(row.querySelector('.item-quantity')?.value || 1);
-            var price = Number(row.querySelector('.item-unit-price')?.value || 0);
-            sum += qty * price;
+            var t = Number(row.querySelector('.item-total')?.value || 0);
+            sum += t;
         });
         totalAmountField.value = Math.round(sum);
+    }
+
+    // ─── Manual edit of a row's جمع (total) – update grand total live ───
+    if (itemRows) {
+        itemRows.addEventListener('input', function(e) {
+            if (e.target && e.target.classList && e.target.classList.contains('item-total')) {
+                updateInvoiceTotal();
+            }
+        });
     }
 
     // ─── Button: افزودن آیتم جدید (simple, positive) ───

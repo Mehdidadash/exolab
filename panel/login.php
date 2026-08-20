@@ -46,6 +46,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION[USER_SESSION_KEY] = $user['id'];
             $upd = db()->prepare('UPDATE users SET last_login = NOW() WHERE id = ?');
             $upd->execute([$user['id']]);
+            // Log the successful login to the activity log
+            audit_log('login', 'user', (int) $user['id'], 'ورود موفق به سیستم (' . ($user['username'] ?? $user['full_name'] ?? '') . ')');
             // Return the user to the page they originally requested (if internal)
             $redirect = $_SESSION['login_redirect'] ?? '';
             unset($_SESSION['login_redirect']);

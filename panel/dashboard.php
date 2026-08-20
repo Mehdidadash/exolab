@@ -70,6 +70,14 @@ if ($role === 'admin') {
             <a class="btn" href="payments.php">رفتن</a>
         </div>
         <div class="card">
+            <h3>بررسی درآمد و هزینه</h3>
+            <a class="btn" href="financial_overview.php">رفتن</a>
+        </div>
+        <div class="card">
+            <h3>فاکتورهای مخارج (بدهی‌ها)</h3>
+            <a class="btn" href="expenses.php">رفتن</a>
+        </div>
+        <div class="card">
             <h3>حساب‌های بانکی</h3>
             <a class="btn" href="bank_accounts.php">رفتن</a>
         </div>

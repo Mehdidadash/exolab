@@ -72,6 +72,7 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
                     'quantity' => $quantity,
                     'unit_price' => $unitPrice,
                     'total_price' => $unitPrice * $quantity,
+                    'total_amount' => round((float) $item['total_amount']),
                 ];
             }, $invoiceItems), JSON_UNESCAPED_UNICODE) ?>'>
             </tbody>

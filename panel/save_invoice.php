@@ -52,6 +52,7 @@ if (!empty($_POST['items']) && is_array($_POST['items'])) {
             'patient_name' => trim($item['patient_name'] ?? ''),
             'quantity' => max(1, (int) ($item['quantity'] ?? 1)),
             'unit_price' => $unitPrice,
+            'total_amount' => isset($item['total_amount']) ? $item['total_amount'] : null,
         ];
         if ($caseId) {
             $caseIds[] = $caseId;

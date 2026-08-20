@@ -82,7 +82,8 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
             $total = 0;
             foreach ($cases as $c) {
                 $unitRate = (float)($c['unit_rate'] ?? 0);
-                $total += round($unitRate * (int)($c['quantity'] ?? 1));
+                $bqty = isset($c['_bill_qty']) ? (int) $c['_bill_qty'] : (int) ($c['quantity'] ?? 1);
+                $total += round($unitRate * $bqty);
             }
             $lab = db()->prepare('SELECT full_name FROM users WHERE id = ?');
             $lab->execute([$labId]);
@@ -141,14 +142,15 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                                 <tbody>
                                 <?php foreach ($gCases as $c):
                                     $unitRate = (float)($c['unit_rate'] ?? 0);
-                                    $qty = (int)($c['quantity'] ?? 1);
+                                    $qty = isset($c['_bill_qty']) ? (int) $c['_bill_qty'] : (int) ($c['quantity'] ?? 1);
+                                    $svcTitle = $c['_bill_service_title'] ?? $c['service_title'] ?? '—';
                                     $lineTotal = round($unitRate * $qty);
                                 ?>
                                     <tr>
                                         <td><input type="checkbox" class="case-checkbox" name="case_ids[]" value="<?= $c['id'] ?>" checked></td>
                                         <td><?= $c['id'] ?></td>
                                         <td><?= htmlspecialchars($c['patient_name']) ?></td>
-                                        <td><?= htmlspecialchars($c['service_title'] ?? '—') ?></td>
+                                        <td><?= htmlspecialchars($svcTitle) ?></td>
                                         <td><?= toPersianDigits($qty) ?></td>
                                         <td>
                                             <?php if ($unitRate > 0): ?>
@@ -290,7 +292,7 @@ panel_layout_start('صدور فاکتور برون‌سپاری');
             </div>
         </div>
         <button type="submit" name="generate" class="btn" style="background:#0F172A; color:#fff;">پیش‌نمایش</button>
-        <a href="outsource_invoices.php" class="btn" style="background:#E5E7EB; color:#0F172A;">بازگشت</a>
+        <a href="expenses.php" class="btn" style="background:#E5E7EB; color:#0F172A;">بازگشت</a>
     </form>
 </div>
 <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">

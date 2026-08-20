@@ -32,7 +32,7 @@ panel_layout_start('لاگ فعالیت‌ها');
 </div>
 
 <form method="get" style="margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-    <input type="text" name="action" placeholder="فیلتر بر اساس نوع عملیات (create، update، delete)..." value="<?= htmlspecialchars($filterAction) ?>" style="flex: 1; min-width: 200px;">
+    <input type="text" name="action" placeholder="فیلتر بر اساس نوع عملیات (create، update، delete، login)..." value="<?= htmlspecialchars($filterAction) ?>" style="flex: 1; min-width: 200px;">
     <button type="submit" style="background: #0F172A;">فیلتر</button>
     <?php if ($filterAction): ?>
         <a href="audit_log.php" class="btn" style="background: #E5E7EB; color: #0F172A;">پاک کردن فیلتر</a>

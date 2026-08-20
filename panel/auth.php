@@ -275,13 +275,14 @@ function panel_layout_start($title = 'پنل مدیریت') {
                     <a href="doctor_price_overrides.php">قیمت‌های اختصاصی</a>
                     <a href="works.php">نمونه کار</a>
                     <a href="bank_accounts.php">حساب‌های بانکی</a>
+                    <a href="financial_overview.php">بررسی درآمد و هزینه</a>
                     <a href="audit_log.php">لاگ فعالیت‌ها</a>
                     <a href="roles.php">نقش‌ها</a>
                 <?php endif; ?>
                 <?php if (has_permission('view_invoices') || has_permission('view_clinic_invoices')): ?>
                     <a href="invoices.php">فاکتورها</a>
-                    <a href="designer_invoices.php">فاکتورهای طراحی</a>
-                    <a href="outsource_invoices.php">فاکتورهای برون‌سپاری</a>
+                    <a href="expenses.php">فاکتورهای مخارج (بدهی‌ها)</a>
+                    <a href="case_expenses.php">کیس‌های مخارج</a>
                 <?php endif; ?>
                 <?php if (has_permission('view_own_payments') || has_role('admin') || has_permission('view_clinic_payments')): ?>
                     <a href="payments.php">پرداخت‌ها</a>
@@ -359,7 +360,11 @@ function panel_layout_end() {
         }
     });
     </script>
-    <?php if ($user): ?>
+    <?php
+    // panel_layout_end is a separate function scope from panel_layout_start,
+    // so re-fetch the current user here.
+    $user = current_user();
+    if ($user): ?>
     <script>
     // Browser notifications for logged-in users
     (function(){

@@ -69,98 +69,40 @@ panel_layout_start('مدیریت کیس‌ها');
     </div>
 </div>
 
-<form method="get" class="form-card" style="margin-bottom: 20px;">
-    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px;">
-        <div class="form-group">
-            <label for="doctor_id">پزشک</label>
-            <select id="doctor_id" name="doctor_id" class="searchable-select">
-                <option value="">همه پزشکان</option>
-                <?php foreach ($doctors as $doctor): ?>
-                    <option value="<?= $doctor['id'] ?>" <?= $doctor['id'] === $filterDoctorId ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($doctor['name']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
-        <div class="form-group">
-            <label for="designer_id">طراح</label>
-            <select id="designer_id" name="designer_id" class="searchable-select">
-                <option value="">همه طراحان</option>
-                <?php foreach ($designers as $des): ?>
-                    <option value="<?= $des['id'] ?>" <?= (int) $des['id'] === $filterDesignerId ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($des['full_name']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
-        <!-- ADDED: status filter dropdown -->
-        <div class="form-group">
-            <label for="status_id">وضعیت</label>
-            <select id="status_id" name="status_id" class="searchable-select">
-                <option value="">همه وضعیت‌ها</option>
-                <?php foreach ($statuses as $status): ?>
-                    <option value="<?= $status['id'] ?>" <?= $status['id'] === $filterStatusId ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($status['name']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-            <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-weight:600; font-size:0.9rem; cursor:pointer;">
-                <input type="checkbox" id="status_not" name="status_not" value="1" <?= !empty($_GET['status_not']) ? 'checked' : '' ?> style="width:auto;">
-                معکوس (غیر از این وضعیت)
-            </label>
-        </div>
-
-        <div class="form-group">
-            <label for="service_id">نوع کار</label>
-            <select id="service_id" name="service_id" class="searchable-select">
-                <option value="">همه خدمات</option>
-                <?php foreach ($prices as $price): ?>
-                    <option value="<?= $price['id'] ?>" <?= (int) $price['id'] === $filterServiceId ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($price['title']) ?>
-                    </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
-
-        <div class="form-group">
-            <label for="filter_shade">سایه</label>
-            <input type="text" id="filter_shade" name="shade" value="<?= htmlspecialchars($filterShade) ?>" placeholder="مثلاً A2">
-        </div>
-
-        <div class="form-group">
-            <label for="date_from">از تاریخ دریافت</label>
-            <input type="text" id="date_from" name="date_from" 
-       value="<?= htmlspecialchars(toJalaliDateFormatted($filterDateFrom)) ?>" 
-       placeholder="۱۴۰۳/۰۱/۰۱">
-        </div>
-
-        <div class="form-group">
-            <label for="date_to">تا تاریخ دریافت</label>
-            <input type="text" id="date_to" name="date_to" 
-       value="<?= htmlspecialchars($filterDateTo ? toJalaliDateFormatted($filterDateTo) : '') ?>" 
-       placeholder="۱۴۰۳/۰۱/۰۱">
+<div class="form-card" style="margin-bottom: 20px;">
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="button" id="toggle-filters-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="toggleFilters()">🔍 فیلترها</button>
+            <?php if (has_permission('batch_print_labels')): ?>
+            <button type="button" id="print-labels-btn" class="btn" style="background: #059669; color: #fff;" onclick="printSelectedLabels()">🖨 پرینت برچسب</button>
+            <?php endif; ?>
+            <?php if (has_permission('batch_update_status')): ?>
+            <button type="button" id="batch-status-btn" class="btn" style="background: #7c3aed; color: #fff;" onclick="openBatchStatusModal()">📋 تغییر وضعیت گروهی</button>
+            <?php endif; ?>
+            <?php if (has_permission('export_csv')): ?>
+            <button type="button" id="export-csv-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="exportSelectedCSV()">📥 خروجی CSV</button>
+            <?php endif; ?>
+            <?php if (has_permission('edit_cases') || has_role('admin')): ?>
+            <button type="button" id="change-designer-btn" class="btn" style="background: #d97706; color: #fff;" onclick="openChangeDesignerModal()">🔁 تغییر طراح</button>
+            <?php endif; ?>
         </div>
     </div>
-
-    <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px;">
-        <button type="submit" class="btn">اعمال فیلتر</button>
-        <a href="cases.php" class="btn" style="background: #E5E7EB; color: #0F172A;">پاک کردن فیلترها</a>
-        <?php if (has_permission('batch_print_labels')): ?>
-        <button type="button" id="print-labels-btn" class="btn" style="background: #059669; color: #fff;" onclick="printSelectedLabels()">🖨 پرینت برچسب</button>
-        <?php endif; ?>
-        <?php if (has_permission('batch_update_status')): ?>
-        <button type="button" id="batch-status-btn" class="btn" style="background: #7c3aed; color: #fff;" onclick="openBatchStatusModal()">📋 تغییر وضعیت گروهی</button>
-        <?php endif; ?>
-        <?php if (has_permission('export_csv')): ?>
-        <button type="button" id="export-csv-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="exportSelectedCSV()">📥 خروجی CSV</button>
-        <?php endif; ?>
-        <?php if (has_permission('edit_cases') || has_role('admin')): ?>
-        <button type="button" id="change-designer-btn" class="btn" style="background: #d97706; color: #fff;" onclick="openChangeDesignerModal()">🔁 تغییر طراح</button>
-        <?php endif; ?>
+    <div id="filters-area" style="display:none;">
+        <form id="date-filter-form" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; border-top:1px solid #e5e7eb; padding-top:12px;">
+            <div class="form-group" style="margin:0; min-width:150px;">
+                <label for="date_from">از تاریخ دریافت</label>
+                <input type="text" id="date_from" name="date_from" value="<?= htmlspecialchars($filterDateFrom ? toJalaliDateFormatted($filterDateFrom) : '') ?>" placeholder="۱۴۰۳/۰۱/۰۱" style="cursor:pointer;">
+            </div>
+            <div class="form-group" style="margin:0; min-width:150px;">
+                <label for="date_to">تا تاریخ دریافت</label>
+                <input type="text" id="date_to" name="date_to" value="<?= htmlspecialchars($filterDateTo ? toJalaliDateFormatted($filterDateTo) : '') ?>" placeholder="۱۴۰۳/۰۱/۰۱" style="cursor:pointer;">
+            </div>
+            <button type="submit" class="btn" style="background:#0F172A; color:#fff;">اعمال بازه تاریخ</button>
+            <button type="button" id="clear-date-filter" class="btn" style="background:#E5E7EB; color:#0F172A;">پاک کردن بازه</button>
+        </form>
+        <div id="searchpanes-host" style="border-top:1px solid #e5e7eb; margin-top:12px; padding-top:8px;"></div>
     </div>
-</form>
+</div>
 
 <p style="margin-bottom: 16px; font-weight: 700;">تعداد کیس‌ها: <span id="cases-count">—</span></p>
 <p style="margin-bottom: 16px; font-size: 12px; color: #166534;">🟩 شماره کیس سبز = برچسب این کیس قبلاً چاپ شده است.</p>
@@ -182,7 +124,9 @@ panel_layout_start('مدیریت کیس‌ها');
         <th>فاکتور</th>
         <th>لابراتوار</th>
         <th>فایل‌ها</th>
+        <th>شماره قبض</th>
         <th>عملیات</th>
+        <th style="display:none;">وضعیت (متن)</th>
     </tr>
     </thead>
     <tbody></tbody>
@@ -236,11 +180,46 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label for="case-designer-id">طراح</label>
                     <select id="case-designer-id" name="designer_id">
                         <option value="">بدون طراح</option>
-                        <?php $designers = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name"); foreach ($designers as $des): ?>
+                        <?php $caseModalDesigners = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name"); foreach ($caseModalDesigners as $des): ?>
                         <option value="<?= $des['id'] ?>"><?= htmlspecialchars($des['full_name']) ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
+                <?php if (!$isDoctor): ?>
+                <div class="form-group" id="side-outsource-group" style="grid-column:1/3; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:12px;">
+                    <strong style="color:#15803d; font-size:0.95rem;">برون‌سپاری جانبی (بدهی به لابراتوار)</strong>
+                    <small style="display:block; color:#525252; margin:4px 0 8px;">اگر بخشی از این کیس توسط لابراتوار همکار/برون‌سپاری/مشتری انجام شود (مثلاً ۵ واحد روکش کار خودتان است ولی پرینت کست یک فک را لابراتوار دیگر انجام می‌دهد)، این‌جا مشخص کنید تا در فاکتور مخارج همان لابراتوار لحاظ شود.</small>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+                        <div style="flex:1; min-width:150px;">
+                            <label for="case-outsourced-lab">لابراتوار (گیرنده بخشی از کار)</label>
+                            <select id="case-outsourced-lab" name="outsourced_lab_id">
+                                <option value="">ندارد</option>
+                                <?php $sideOutsourceLabs = db()->query("SELECT id, full_name, role FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name"); foreach ($sideOutsourceLabs as $lab): ?>
+                                <option value="<?= $lab['id'] ?>"><?= htmlspecialchars($lab['full_name']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div style="flex:1; min-width:150px;">
+                            <label for="case-outsourced-service">خدمت برون‌سپاری‌شده</label>
+                            <select id="case-outsourced-service" name="outsourced_service_id">
+                                <option value="">انتخاب...</option>
+                                <?php foreach ($prices as $price): ?>
+                                <option value="<?= $price['id'] ?>"><?= htmlspecialchars($price['title']) ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div style="width:110px;">
+                            <label for="case-outsourced-qty">تعداد برون‌سپاری</label>
+                            <input type="number" id="case-outsourced-qty" name="outsourced_qty" min="0" step="1" value="0">
+                        </div>
+                        <div style="width:130px;">
+                            <label for="case-outsourced-rate">نرخ (تومان)</label>
+                            <input type="number" id="case-outsourced-rate" name="outsourced_rate" min="0" step="1" placeholder="خودکار از نرخ‌ها">
+                        </div>
+                    </div>
+                    <small style="display:block; color:#525252; margin-top:6px;">با انتخاب لابراتوار و خدمت، نرخ اختصاصی آن‌ها به‌صورت خودکار وارد می‌شود. اگر نرخی ثبت نشده باشد، می‌توانید به‌صورت دستی وارد کنید.</small>
+                </div>
+                <?php endif; ?>
                 <div class="form-group">
                     <label for="case-patient-name">نام بیمار</label>
                     <input id="case-patient-name" name="patient_name" required>
@@ -327,6 +306,13 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-weight:600; font-size:0.9rem; cursor:pointer;">
                         <input type="checkbox" id="case-files-compress" style="width:auto;"> همه فایل‌ها را یکجا به‌صورت ZIP ذخیره کن
                     </label>
+                    <span id="case-files-selection" style="display:none; font-weight:bold; color:#0369a1; background:#e0f2fe; padding:4px 10px; border-radius:6px; font-size:0.85rem; margin-top:6px;"></span>
+                    <div id="case-files-progress" style="display:none; margin-top:8px;">
+                        <div style="background:#e5e7eb; border-radius:6px; overflow:hidden; height:16px;">
+                            <div id="case-files-bar" style="width:0%; height:100%; background:#06B6D4; transition:width .2s;"></div>
+                        </div>
+                        <div id="case-files-percent" style="font-size:0.8rem; color:#555; margin-top:4px;"></div>
+                    </div>
                 </div>
                 <?php endif; ?>
             </div>
@@ -591,14 +577,6 @@ panel_layout_start('مدیریت کیس‌ها');
             return true;
         }
 
-        initJalaliPicker('#date_from');
-        initJalaliPicker('#date_to');
-        // Ensure date_from has the correct default value (30 days ago)
-        var defaultDateFrom = '<?= toJalaliDateFormatted($defaultDateFromGregorian) ?>';
-        if (jQuery('#date_from').val() === '') {
-            jQuery('#date_from').val(defaultDateFrom);
-        }
-
         function initCaseReceivedDate() {
             var $input = jQuery('#case-received-date');
             if (!$input.length) return;
@@ -663,26 +641,42 @@ panel_layout_start('مدیریت کیس‌ها');
             console.log('initCaseReceivedDate: final input value =', $input.val());
         }
 
+        // Jalali date-range filter for the cases list (از تاریخ / تا تاریخ)
+        initJalaliPicker('#date_from');
+        initJalaliPicker('#date_to');
+
         if (window.jQuery && typeof jQuery.fn.DataTable === 'function') {
             var table = jQuery('#cases-table').DataTable({
                 processing: true,
-                serverSide: true,
+                serverSide: false,
                 ajax: {
-                    url: 'cases_data.php',
+                    url: 'cases_data.php?mode=all',
+                    dataSrc: 'data',
                     data: function(d) {
-                        d.doctor_id = jQuery('#doctor_id').val();
-                        d.status_id = jQuery('#status_id').val();
-                        d.status_not = jQuery('#status_not').is(':checked') ? '1' : '';
-                        d.designer_id = jQuery('#designer_id').val();
-                        d.service_id = jQuery('#service_id').val();
-                        d.shade = jQuery('#filter_shade').val();
-                        d.date_from = jQuery('#date_from').val();
-                        d.date_to = jQuery('#date_to').val();
+                        // Server-side jalali date-range filter (converted in cases_data.php)
+                        d.date_from = jQuery('#date_from').val() || '';
+                        d.date_to = jQuery('#date_to').val() || '';
                     }
                 },
                 order: [[10, 'desc']], // received_date column
                 responsive: true,
                 pageLength: 25,
+                // Place the SearchPanes feature into the table layout (DataTables 2.x)
+                layout: {
+                    top1: 'searchPanes'
+                },
+                searchPanes: {
+                    layout: 'columns-2',
+                    // INTEGER column positions -> creates panes ONLY for these columns.
+                    // If empty, SearchPanes would create a pane for EVERY column.
+                    columns: [2, 3, 5, 7, 12, 16]  /* doctor, designer, service, shade, lab, status(text) */
+                },
+                columnDefs: [
+                    // location (col 6): fixed-ish width only – no pane
+                    { targets: [6], width: '110px', createdCell: function(td){ td.style.whiteSpace = 'nowrap'; } },
+                    // clean header for the plain-status pane (its <th> says "وضعیت (متن)")
+                    { targets: [16], searchPanes: { header: 'وضعیت' } }
+                ],
                 columns: [
                     { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
                     { data: 0, render: function(data, type, row){ if (type === 'display' && row[14]) { return '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>'; } return data; } },
@@ -698,7 +692,9 @@ panel_layout_start('مدیریت کیس‌ها');
                     { data: 9, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* invoice – hidden for designers */
                     { data: 10, orderable: false, searchable: true, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
                     { data: 13, orderable: false, searchable: false, render: function(data){ return data || 0; } }, /* files count */
-                    { data: 11, orderable: false, searchable: false }
+                    { data: 16 }, /* receipt number */
+                    { data: 11, orderable: false, searchable: false }, /* actions */
+                    { data: 15, visible: false, searchable: true } /* plain status text for SearchPanes */
                 ],
                 order: [[10, 'desc']], // received_date column always at index 10
                 language: {
@@ -728,8 +724,42 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#cases-count').text(info.recordsDisplay);
             });
 
-            jQuery('form.form-card').on('submit', function(e){
+            // Move the SearchPanes container into the collapsible filters area.
+            // DataTables renders panes into a .dtsp-panesContainer node above the table.
+            table.on('init', function(){
+                var host = document.getElementById('searchpanes-host');
+                if (!host) return;
+                var wrapper = table.table().container();
+                var panes = wrapper ? wrapper.querySelector('.dtsp-panesContainer') : null;
+                if (panes && panes.parentNode && panes.parentNode !== host) {
+                    host.appendChild(panes);
+                }
+            });
+
+            // Toggle the filters (date range + SearchPanes) visibility
+            window.toggleFilters = function(){
+                var area = document.getElementById('filters-area');
+                var btn = document.getElementById('toggle-filters-btn');
+                if (!area) return;
+                var hidden = (area.style.display === 'none' || area.style.display === '');
+                area.style.display = hidden ? 'block' : 'none';
+                if (btn) btn.textContent = hidden ? '🙈 مخفی کردن فیلترها' : '🔍 فیلترها';
+                // Ask SearchPanes to re-layout the panes after being shown/hidden
+                try { if (table && table.searchPanes) table.searchPanes.resize(); } catch(e){}
+            };
+
+            // Date-range filter (reload with the jalali range → server converts to gregorian)
+            jQuery('#date-filter-form').on('submit', function(e){
                 e.preventDefault();
+                table.ajax.reload();
+            });
+            jQuery('#clear-date-filter').on('click', function(){
+                jQuery('#date_from').val('');
+                jQuery('#date_to').val('');
+                try { jQuery('#date_from').persianDatepicker('destroy'); } catch(e){}
+                try { jQuery('#date_to').persianDatepicker('destroy'); } catch(e){}
+                initJalaliPicker('#date_from');
+                initJalaliPicker('#date_to');
                 table.ajax.reload();
             });
 
@@ -807,9 +837,66 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-modal').css({display: 'none'});
                 jQuery('#case-form')[0].reset();
                 jQuery('#case-save').prop('disabled', false).text('ذخیره');
+                var selSpan = document.getElementById('case-files-selection');
+                if (selSpan) selSpan.style.display = 'none';
+                var progWrap = document.getElementById('case-files-progress');
+                if (progWrap) progWrap.style.display = 'none';
                 setTimeout(function(){ jQuery('#case-received-date').val(''); }, 100);
             }
             jQuery('#case-cancel').on('click', function(){ closeCaseModal(); });
+
+            // Auto-fill the side-outsourcing rate from outsource_rates when lab+service are chosen.
+            function fetchOutsourceRate(){
+                var lab = jQuery('#case-outsourced-lab').val();
+                var svc = jQuery('#case-outsourced-service').val();
+                var rateInput = jQuery('#case-outsourced-rate');
+                if (!lab || !svc) return;
+                var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+                jQuery.ajax({
+                    url: 'get_outsource_rate.php',
+                    type: 'GET',
+                    data: { lab_id: lab, service_id: svc },
+                    headers: { 'X-CSRF-Token': csrf },
+                    dataType: 'json',
+                    success: function(resp){
+                        if (resp && resp.rate != null) {
+                            rateInput.val(resp.rate);
+                            rateInput.attr('placeholder', 'نرخ اختصاصی');
+                        } else if (rateInput.val() === '' || rateInput.val() == null) {
+                            // No dedicated rate and nothing saved on this case yet → default to 0 (manually editable).
+                            rateInput.val(0);
+                        }
+                    }
+                });
+            }
+            jQuery(document).on('change', '#case-outsourced-lab, #case-outsourced-service', fetchOutsourceRate);
+
+
+            // Show selected file count + total size for the case modal file input
+            var caseFilesInput = document.getElementById('case-files');
+            var caseFilesSel = document.getElementById('case-files-selection');
+            if (caseFilesInput && caseFilesSel) {
+                function caseFilesFormat(bytes){
+                    if (bytes <= 0) return '0';
+                    var u = ['B','KB','MB','GB'];
+                    var i = Math.floor(Math.log(bytes) / Math.log(1024));
+                    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + u[i];
+                }
+                caseFilesInput.addEventListener('change', function(){
+                    if (!caseFilesInput.files.length) { caseFilesSel.style.display = 'none'; return; }
+                    var total = 0;
+                    for (var i = 0; i < caseFilesInput.files.length; i++) total += caseFilesInput.files[i].size || 0;
+                    var cb = document.getElementById('case-files-compress');
+                    var note = (cb && cb.checked && caseFilesInput.files.length > 1) ? ' — یکجا ZIP می‌شود' : '';
+                    caseFilesSel.textContent = caseFilesInput.files.length + ' فایل انتخاب شد — مجموع ' + caseFilesFormat(total) + note;
+                    caseFilesSel.style.display = 'inline-block';
+                });
+                var cfCb = document.getElementById('case-files-compress');
+                if (cfCb) cfCb.addEventListener('change', function(){
+                    if (caseFilesInput.files.length) caseFilesInput.dispatchEvent(new Event('change'));
+                });
+            }
+
             jQuery(document).on('keydown', function(e){
                 if (e.key === 'Escape' || e.key === 'Esc') {
                     if (jQuery('#case-modal').is(':visible')) {
@@ -840,6 +927,11 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-status-id').val(data.status_id || '');
                 jQuery('#case-lab-id').val(data.lab_id || '');
                 jQuery('#case-designer-id').val(data.designer_id || '');
+                jQuery('#case-outsourced-lab').val(data.outsourced_lab_id || '');
+                jQuery('#case-outsourced-service').val(data.outsourced_service_id || '');
+                jQuery('#case-outsourced-qty').val(data.outsourced_qty || 0);
+                // Keep the saved per-case rate (do NOT overwrite with lookup on edit; user can re-pick to re-fetch)
+                jQuery('#case-outsourced-rate').val(data.outsourced_rate != null && data.outsourced_rate !== '' ? data.outsourced_rate : '');
                 jQuery('#case-description').val(data.description || '');
             }
 
@@ -878,29 +970,52 @@ panel_layout_start('مدیریت کیس‌ها');
                                 }
                                 var compressCb = document.getElementById('case-files-compress');
                                 if (compressCb && compressCb.checked) fd.set('compress', '1');
-                                jQuery.ajax({
-                                    url: 'upload_case_files.php?case_id=' + encodeURIComponent(j.id),
-                                    type: 'POST',
-                                    data: fd,
-                                    processData: false,
-                                    contentType: false,
-                                    headers: {
-                                        'X-CSRF-Token': csrf,
-                                        'X-Case-Id': j.id
-                                    },
-                                    success: function(resp2){
-                                        try { var j2 = (typeof resp2 === 'string') ? JSON.parse(resp2) : resp2; } catch(e){ j2 = { success: false }; }
-                                        if (!j2.success && j2.errors && j2.errors.length) {
-                                            alert('برخی فایل‌ها آپلود نشدند:\n' + j2.errors.join('\n'));
-                                        }
-                                    },
-                                    error: function(xhr){
-                                        alert('خطا در آپلود فایل‌ها: ' + (xhr.responseText || ''));
+                                // Show a prominent in-progress indicator while uploading.
+                                // The modal stays OPEN until the upload finishes so the user sees the %.
+                                var progressWrap = document.getElementById('case-files-progress');
+                                var bar = document.getElementById('case-files-bar');
+                                var pct = document.getElementById('case-files-percent');
+                                var selSpan = document.getElementById('case-files-selection');
+                                if (progressWrap) progressWrap.style.display = 'block';
+                                if (bar) bar.style.width = '0%';
+                                if (pct) pct.textContent = 'در حال آپلود... 0%';
+                                if (selSpan) selSpan.style.display = 'none';
+                                var xhr = new XMLHttpRequest();
+                                xhr.open('POST', 'upload_case_files.php?case_id=' + encodeURIComponent(j.id), true);
+                                xhr.setRequestHeader('X-CSRF-Token', csrf);
+                                xhr.setRequestHeader('X-Case-Id', j.id);
+                                xhr.upload.onprogress = function(ev){
+                                    if (ev.lengthComputable) {
+                                        var p = Math.round((ev.loaded / ev.total) * 100);
+                                        if (bar) bar.style.width = p + '%';
+                                        if (pct) pct.textContent = 'در حال آپلود... ' + p + '%';
                                     }
-                                });
+                                };
+                                xhr.onload = function(){
+                                    try { var resp2 = JSON.parse(xhr.responseText); } catch(e){ var resp2 = { success: false }; }
+                                    if (pct) pct.textContent = 'آپلود کامل شد.';
+                                    if (bar) bar.style.width = '100%';
+                                    if (!resp2.success && resp2.errors && resp2.errors.length) {
+                                        alert('برخی فایل‌ها آپلود نشدند:\n' + resp2.errors.join('\n'));
+                                    }
+                                    // Close modal + refresh only AFTER upload is done
+                                    setTimeout(function(){
+                                        if (progressWrap) progressWrap.style.display = 'none';
+                                        closeCaseModal();
+                                        table.ajax.reload(null, false);
+                                    }, 600);
+                                };
+                                xhr.onerror = function(){
+                                    if (pct) pct.textContent = 'خطا در آپلود فایل‌ها.';
+                                    alert('خطا در آپلود فایل‌ها.');
+                                    closeCaseModal();
+                                    table.ajax.reload(null, false);
+                                };
+                                xhr.send(fd);
+                            } else {
+                                closeCaseModal();
+                                table.ajax.reload(null, false);
                             }
-                            closeCaseModal();
-                            table.ajax.reload(null, false);
                         } else {
                             alert('ذخیره انجام نشد: ' + (j.message || ''));
                         }
