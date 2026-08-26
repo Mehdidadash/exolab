@@ -2,7 +2,7 @@
 // panel\doctor_form.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 $doctor = null;
 $editing = false;
 $clinicParents = getAllDoctorAndClinicUsers();
@@ -63,6 +63,22 @@ panel_layout_start($editing ? 'ویرایش پزشک' : 'افزودن پزشک �
             </select>
             <small style="display:block; margin-top:6px; color:#525252;">
                 اگر این پزشک مالک کلینیک است یا زیرمجموعه یک کلینیک/پزشک دیگر می‌شود، این گزینه را مشخص کنید.
+            </small>
+        </div>
+
+        <div class="form-group">
+            <label for="lab_id">لابراتوار زیرمجموعه (اختیاری)</label>
+            <select id="lab_id" name="lab_id">
+                <option value="">بدون لابراتوار</option>
+                <?php $labsForForm = db()->query("SELECT id, full_name FROM users WHERE role IN ('outsource_lab','customer_lab','partner_lab','lab') AND active=1 ORDER BY full_name")->fetchAll(); ?>
+                <?php foreach ($labsForForm as $lf): ?>
+                    <option value="<?= (int) $lf['id'] ?>" <?= (!empty($doctor) && (int) ($doctor['lab_id'] ?? 0) === (int) $lf['id']) ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($lf['full_name']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; margin-top:6px; color:#525252;">
+                اگر این پزشک زیرمجموعه یک لابراتوار است (مثل شعبه)، مشخص کنید.
             </small>
         </div>
 

@@ -2,7 +2,7 @@
 // panel\doctors.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 $doctors = getAllDoctors();
 panel_layout_start('لیست پزشکان');
 ?>

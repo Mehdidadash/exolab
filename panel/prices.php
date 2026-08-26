@@ -2,7 +2,7 @@
 // panel\prices.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 // CSRF token for the inline AJAX save/delete
 if (empty($_SESSION['_csrf_token'])) {
@@ -18,36 +18,47 @@ panel_layout_start('لیست قیمت‌ها');
     <a class="btn" href="price_form.php">افزودن قیمت جدید</a>
     <small style="color:#525252;">برای ویرایش، مقدار را در همان جدول تغییر دهید و روی «ذخیره» بزنید. با کشیدن ردیفها میتوانید ترتیب را تغییر دهید.</small>
 </div>
+<div class="table-scroll">
 <table>
     <thead>
     <tr>
-        <th>ردیف</th>
+        <th class="th-narrow">ردیف</th>
         <th>عنوان</th>
         <th>دسته</th>
-        <th>قیمت (تومان)</th>
-        <th>ترتیب</th>
-        <th>فعال</th>
-        <th>عملیات</th>
+        <th class="th-price">قیمت (تومان)</th>
+        <th class="th-narrow">ترتیب</th>
+        <th class="th-narrow">فعال</th>
+        <th class="th-narrow">عملیات</th>
     </tr>
     </thead>
     <tbody id="sortable-prices">
     <?php foreach ($prices as $index => $price): ?>
         <tr draggable="true" data-id="<?= (int) $price['id'] ?>">
             <td class="price-index"><?= $index + 1 ?></td>
-            <td><input type="text" class="ed-title" value="<?= htmlspecialchars($price['title']) ?>" style="width:96%;"></td>
-            <td><input type="text" class="ed-category" value="<?= htmlspecialchars($price['category']) ?>" style="width:96%;"></td>
-            <td><input type="number" class="ed-price" value="<?= htmlspecialchars($price['price']) ?>" min="0" step="1" style="width:110px;"></td>
-            <td><input type="number" class="ed-order" value="<?= isset($price['display_order']) ? (int)$price['display_order'] : 0 ?>" min="0" step="1" style="width:70px;"></td>
+            <td><input type="text" class="ed-title" value="<?= htmlspecialchars($price['title']) ?>" style="width:96%; min-width:160px;"></td>
+            <td><input type="text" class="ed-category" value="<?= htmlspecialchars($price['category']) ?>" style="width:96%; min-width:100px;"></td>
+            <td><input type="number" class="ed-price" value="<?= htmlspecialchars(formatTomanInput($price['price'])) ?>" min="0" step="1" style="width:170px; font-weight:bold;"></td>
+            <td><input type="number" class="ed-order" value="<?= isset($price['display_order']) ? (int)$price['display_order'] : 0 ?>" min="0" step="1" style="width:56px;"></td>
             <td style="text-align:center;"><input type="checkbox" class="ed-active" <?= $price['active'] ? 'checked' : '' ?> style="width:auto;"></td>
             <td class="actions" style="white-space:nowrap;">
-                <button type="button" class="btn save-price-row" style="background:#06B6D4; color:#fff; padding:4px 10px;">ذخیره</button>
-                <button type="button" class="btn delete-price-row" style="background:#fee2e2; color:#991b1b; padding:4px 10px;">حذف</button>
+                <button type="button" class="btn save-price-row" style="background:#06B6D4; color:#fff; padding:3px 8px; font-size:0.85rem;">ذخیره</button>
+                <button type="button" class="btn delete-price-row" style="background:#fee2e2; color:#991b1b; padding:3px 8px; font-size:0.85rem;">حذف</button>
                 <input type="hidden" class="ed-desc" value="<?= htmlspecialchars($price['description'] ?? '') ?>">
             </td>
         </tr>
     <?php endforeach; ?>
     </tbody>
 </table>
+</div>
+<style>
+    /* Compact price table: less padding, narrow helper columns, price column prominent */
+    #sortable-prices th,
+    #sortable-prices td { padding: 5px 8px; }
+    #sortable-prices .th-narrow { width: 40px; white-space: nowrap; }
+    #sortable-prices .th-price { white-space: nowrap; }
+    #sortable-prices .price-index { text-align: center; color: #64748b; }
+    #sortable-prices input { padding: 6px 8px; }
+</style>
 <script src="../assets/js/admin-order.js"></script>
 <script>
 (function(){

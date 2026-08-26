@@ -19,6 +19,84 @@ function formatAmountToman($value) {
     return toPersianDigits($formatted) . ' تومان';
 }
 
+/**
+ * Integer string of a toman amount for use inside <input> value attributes.
+ * Prices never need decimals, so "1000000.00" → "1000000".
+ */
+function formatTomanInput($value) {
+    if ($value === '' || $value === null) return '';
+    return number_format((float) $value, 0, '.', '');
+}
+
+/**
+ * Read-only dental chart for the VIEW-CASE page: renders the standard 32-tooth
+ * chart and highlights the teeth selected on the case (and bridge connectors).
+ * $teeth uses the same format as the picker, e.g. "26,42_43_44_45" or "11,12".
+ */
+function renderTeethChart($teeth) {
+    $arches = [
+        'upper' => [['18','17','16','15','14','13','12','11'], ['21','22','23','24','25','26','27','28']],
+        'lower' => [['48','47','46','45','44','43','42','41'], ['31','32','33','34','35','36','37','38']],
+    ];
+
+    $selected = [];
+    $bridges = [];
+    $raw = str_replace('،', ',', (string) $teeth);
+    foreach (explode(',', $raw) as $group) {
+        $group = trim($group);
+        if ($group === '') continue;
+        $parts = array_filter(array_map('trim', explode('_', $group)), fn($t) => $t !== '');
+        foreach ($parts as $t) {
+            $n = (int) $t;
+            if ($n > 0) $selected[$n] = true;
+        }
+        for ($i = 0; $i < count($parts) - 1; $i++) {
+            $a = (int) $parts[$i];
+            $b = (int) $parts[$i + 1];
+            if ($a > 0 && $b > 0) $bridges[min($a, $b) . '-' . max($a, $b)] = true;
+        }
+    }
+
+    $toothHtml = function ($t) use ($selected) {
+        $sel = isset($selected[(int) $t]);
+        $bg = $sel ? '#06b6d4' : '#ffffff';
+        $color = $sel ? '#ffffff' : '#334155';
+        return '<span style="display:inline-flex;flex-direction:column;align-items:center;gap:2px;min-width:30px;">'
+            . '<span style="width:26px;height:26px;border:1px solid #cbd5e1;border-radius:50%;background:' . $bg . ';color:' . $color
+            . ';font-size:11px;font-weight:' . ($sel ? '700' : '400') . ';display:flex;align-items:center;justify-content:center;">' . $t . '</span>'
+            . '<span style="font-size:9px;color:#475569;">' . $t . '</span>'
+            . '</span>';
+    };
+    $bridgeHtml = function ($a, $b) use ($bridges) {
+        $active = isset($bridges[min($a, $b) . '-' . max($a, $b)]);
+        $bg = $active ? '#d97706' : '#ffffff';
+        $bd = $active ? '#b45309' : '#94a3b8';
+        return '<span style="display:inline-block;width:11px;height:16px;border:1px solid ' . $bd . ';border-radius:3px;background:' . $bg . ';margin:0 1px;align-self:flex-end;"></span>';
+    };
+    $halfHtml = function ($quad) use ($toothHtml, $bridgeHtml) {
+        $h = '';
+        foreach ($quad as $i => $t) {
+            $h .= $toothHtml($t);
+            if ($i < count($quad) - 1) $h .= $bridgeHtml($t, $quad[$i + 1]);
+        }
+        return $h;
+    };
+    $archHtml = function ($quads) use ($halfHtml) {
+        return '<div class="ctc-row">'
+            . '<div class="ctc-half">' . $halfHtml($quads[0]) . '</div>'
+            . '<div class="ctc-midline"></div>'
+            . '<div class="ctc-half">' . $halfHtml($quads[1]) . '</div>'
+            . '</div>';
+    };
+
+    return '<div class="case-teeth-chart">'
+        . '<div class="ctc-arch-label">فک بالا</div>'
+        . $archHtml($arches['upper'])
+        . '<div class="ctc-arch-label">فک پایین</div>'
+        . $archHtml($arches['lower'])
+        . '</div>';
+}
+
 function normalizePersianDigits($input) {
     $numbers = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
     $latin = ['0','1','2','3','4','5','6','7','8','9'];
@@ -138,6 +216,61 @@ function toJalaliDateFormatted($gregorianDate) {
         $date = new DateTime($gregorianDate);
         $jalaliDate = \Morilog\Jalali\Jalalian::fromDateTime($date);
         return toPersianDigits($jalaliDate->format('Y/m/d'));
+    } catch (\Throwable $e) {
+        return $gregorianDate;
+    }
+}
+
+/**
+ * Human-readable elapsed time (e.g. "۲ ساعت و ۱۵ دقیقه پیش").
+ * Used to show how long ago scan files were added / how long a case is waiting.
+ * Returns '' on invalid input.
+ */
+function formatElapsedTime($datetime) {
+    if (empty($datetime)) return '';
+    try {
+        $dt = new DateTime($datetime);
+    } catch (\Throwable $e) {
+        return '';
+    }
+    $now = new DateTime();
+    $diff = $now->diff($dt);
+    if ($diff->invert) return ''; // future date → treat as just now
+
+    $days = (int) $diff->days;
+    $hours = (int) $diff->h;
+    $mins = (int) $diff->i;
+
+    if ($days >= 365) {
+        $y = intdiv($days, 365);
+        return toPersianDigits((string) $y) . ' سال پیش';
+    }
+    if ($days >= 30) {
+        $m = intdiv($days, 30);
+        return toPersianDigits((string) $m) . ' ماه پیش';
+    }
+    if ($days >= 1) {
+        return toPersianDigits((string) $days) . ' روز و ' . toPersianDigits((string) $hours) . ' ساعت پیش';
+    }
+    if ($hours >= 1) {
+        return toPersianDigits((string) $hours) . ' ساعت و ' . toPersianDigits((string) $mins) . ' دقیقه پیش';
+    }
+    if ($mins >= 1) {
+        return toPersianDigits((string) $mins) . ' دقیقه پیش';
+    }
+    return 'لحظاتی پیش';
+}
+
+/**
+ * Jalali date + time for display (e.g. "۱۴۰۵/۰۵/۲۸ - ۱۴:۳۰").
+ */
+function toJalaliDateTimeFormatted($gregorianDate) {
+    if (empty($gregorianDate)) return '';
+    try {
+        $date = new DateTime($gregorianDate);
+        $jalaliDate = \Morilog\Jalali\Jalalian::fromDateTime($date);
+        $time = $date->format('H:i');
+        return toPersianDigits($jalaliDate->format('Y/m/d')) . ' - ' . toPersianDigits($time);
     } catch (\Throwable $e) {
         return $gregorianDate;
     }

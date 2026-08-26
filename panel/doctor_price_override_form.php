@@ -1,7 +1,7 @@
 <?php
 // panel/doctor_price_override_form.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 $editing = !empty($_GET['id']);
 $override = null;
@@ -77,7 +77,7 @@ panel_layout_start($editing ? 'ویرایش قیمت اختصاصی' : 'افزو
 
         <div class="form-group">
             <label for="custom_price">قیمت اختصاصی (تومان) – به‌ازای هر واحد</label>
-            <input type="number" id="custom_price" name="custom_price" step="1" min="0" value="<?= $override['custom_price'] ?? '' ?>" required>
+            <input type="number" id="custom_price" name="custom_price" step="1" min="0" value="<?= htmlspecialchars(formatTomanInput($override['custom_price'] ?? '')) ?>" required>
             <small style="display:block; margin-top:6px; color:#525252;">
                 این مبلغ به‌ازای هر واحد است. برای «هزینه طراحی» در فرم کیس، این مبلغ در تعداد واحد ضرب می‌شود (مثلاً ۵ واحد × ۱۲۰,۰۰۰ = ۶۰۰,۰۰۰ تومان).
             </small>

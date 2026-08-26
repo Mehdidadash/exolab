@@ -1,7 +1,7 @@
 <?php
 // panel/user_form.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_root_admin();
 
 $allRoles = [];
 foreach (getAllRoles() as $r) {
@@ -67,6 +67,16 @@ panel_layout_start($editing ? 'ویرایش کاربر' : 'افزودن کارب
             </select>
             <small style="color:#525252;">⚠️ توجه: نقش کاربر باید «دندانپزشک» باشد. نقش «کلینیک» فقط برای حساب کلینیک (سازمان مادر) است، نه برای پزشکان.</small>
         </div>
+        <div class="form-group">
+            <label for="branch_id">شعبه</label>
+            <select id="branch_id" name="branch_id">
+                <option value="">— کل/سراسری (فقط ادمین اصلی) —</option>
+                <?php foreach (getAllBranches() as $b): ?>
+                    <option value="<?= (int) $b['id'] ?>" <?= (int) ($user['branch_id'] ?? 0) === (int) $b['id'] ? 'selected' : '' ?>><?= htmlspecialchars($b['name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small style="color:#525252;">کاربران شعب‌های فقط داده‌های همان شعبه را می‌بینند.</small>
+        </div>
         <script>
         function toggleClinicField(role) {
             document.getElementById('clinic-field').style.display = (role === 'doctor') ? 'block' : 'none';
@@ -92,6 +102,13 @@ panel_layout_start($editing ? 'ویرایش کاربر' : 'افزودن کارب
                 <input type="checkbox" id="is_designer" name="is_designer" value="1" <?= !empty($user['is_designer']) ? 'checked' : '' ?>>
                 طراح (می‌تواند در کیس‌ها به عنوان طراح انتخاب شود)
             </label>
+        </div>
+        <div class="form-group" id="default-designer-field">
+            <label>
+                <input type="checkbox" id="is_default_designer" name="is_default_designer" value="1" <?= !empty($user['is_default_designer']) ? 'checked' : '' ?>>
+                طراح پیش‌فرض (هنگام ایجاد کیس توسط لابراتوار/شعبه خودکار انتخاب شود)
+            </label>
+            <small style="color:#525252;">فقط یک طراح می‌تواند پیش‌فرض باشد؛ انتخاب این گزینه، قبلی را حذف می‌کند.</small>
         </div>
         <script>
         function toggleDesignerField(role) {

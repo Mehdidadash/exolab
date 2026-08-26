@@ -4,9 +4,24 @@ require_once __DIR__ . '/auth.php';
 require_login();
 
 $user = current_user();
-$isAdmin = ($user['role'] === 'admin');
+$isAdmin = is_admin();
 $isDoctor = ($user['role'] === 'doctor');
 $doctorId = $isDoctor ? $user['id'] : null;
+
+// Branch scoping for staff/branch admins
+$invBranchFilter = '';
+$invBranchParams = [];
+if (is_branch_scoped() && !$isDoctor) {
+    $bid = currentBranchId();
+    $granted = accessibleDoctorIds();
+    $invBranchFilter = ' AND (i.branch_id = ' . (int) $bid;
+    if (!empty($granted)) {
+        $ph = implode(',', array_fill(0, count($granted), '?'));
+        $invBranchFilter .= " OR i.doctor_id IN ({$ph})";
+        $invBranchParams = array_merge($invBranchParams, $granted);
+    }
+    $invBranchFilter .= ')';
+}
 
 // Fetch ALL invoices – DataTables handles client-side pagination/search
 if ($isDoctor) {
@@ -18,7 +33,7 @@ if ($isDoctor) {
          ORDER BY i.invoice_date DESC, i.id DESC"
     );
     $stmt->execute([$doctorId]);
-} elseif (has_permission('view_clinic_invoices')) {
+} elseif (has_permission('view_clinic_invoices') && $user['role'] === 'clinic') {
     $clinicScope = getClinicScope('i');
     $stmt = db()->prepare(
         "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
@@ -33,9 +48,10 @@ if ($isDoctor) {
         "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
          FROM doctor_invoices i
          LEFT JOIN users u ON i.doctor_id = u.id
+         WHERE 1=1{$invBranchFilter}
          ORDER BY i.invoice_date DESC, i.id DESC"
     );
-    $stmt->execute();
+    $stmt->execute($invBranchParams);
 }
 $invoices = $stmt->fetchAll();
 

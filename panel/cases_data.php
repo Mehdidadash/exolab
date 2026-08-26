@@ -4,7 +4,7 @@ require_once __DIR__ . '/auth.php';
 require_login();
 
 $user = current_user();
-$isAdmin = ($user['role'] === 'admin');
+$isAdmin = is_admin();
 $isDoctor = ($user['role'] === 'doctor');
 $isClinicOwner = $isDoctor && !empty(getClinicDoctorIds());
 $isLab = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab']);
@@ -42,6 +42,14 @@ $orderDir = isset($_GET['order'][0]['dir']) && in_array(strtolower($_GET['order'
 
 $whereClauses = ['1=1'];
 $params = [];
+
+// Branch scoping: a branch-scoped user sees only their branch's cases
+// (owned by their branch OR where their branch is the partner/source branch).
+if (is_branch_scoped()) {
+    $bScope = branchCaseScope('c');
+    $whereClauses[] = $bScope['sql'];
+    $params = array_merge($params, $bScope['params']);
+}
 
 // Scope enforcement
 // Doctors see only their own cases, labs their assigned cases,
@@ -124,10 +132,14 @@ if ($isDoctor && !$isClinicOwner) {
 } elseif ($isDesigner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE designer_id = ?');
     $totalStmt->execute([$user['id']]);
-} elseif (has_permission('view_clinic_cases')) {
+} elseif (has_permission('view_clinic_cases') && $user['role'] === 'clinic') {
     $clinicScope = getClinicScope('c');
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE ' . $clinicScope['sql']);
     $totalStmt->execute($clinicScope['params']);
+} elseif (is_branch_scoped()) {
+    $bScope = branchCaseScope('c');
+    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases c WHERE ' . $bScope['sql']);
+    $totalStmt->execute($bScope['params']);
 } else {
     $totalStmt = $db->query('SELECT COUNT(*) FROM cases');
 }
@@ -155,6 +167,7 @@ if ($clientAll) {
 
 $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
         di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, des.full_name AS designer_name,
+        b.name AS branch_name, sb.name AS source_branch_name,
         (SELECT COUNT(*) FROM case_files cf WHERE cf.case_id = c.id) AS file_count
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id
@@ -163,6 +176,8 @@ $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs
     LEFT JOIN doctor_invoices di ON c.invoice_id = di.id
     LEFT JOIN users lab ON c.lab_id = lab.id
     LEFT JOIN users des ON c.designer_id = des.id
+    LEFT JOIN branches b ON c.branch_id = b.id
+    LEFT JOIN branches sb ON c.source_branch_id = sb.id
     WHERE " . implode(' AND ', $whereClauses) . "
     ORDER BY $orderBy $orderDir";
 
@@ -203,8 +218,40 @@ foreach ($rows as $r) {
         $actionDropdown = '<a class="btn" href="view_case.php?id=' . htmlspecialchars($r['id']) . '">مشاهده</a>';
     }
 
-    $labHtml = $isAdmin && !empty($r['lab_name']) ? htmlspecialchars($r['lab_name']) : '';
-    if ($isAdmin && empty($r['lab_name'])) $labHtml = '—';
+    // ─── Cross-branch indicator ───
+    // A branch user sees cases either owned by their branch (branch_id = theirs)
+    // or shared from a partner branch (source_branch_id = theirs). Show a
+    // perspective-aware badge so the RECEIVING branch sees outsourced work as
+    // "کار از لابراتوار همکار" and the OWNING branch sees it as "برون‌سپاری".
+    $myBranch = currentBranchId();
+    $caseBranch   = !empty($r['branch_id']) ? (int) $r['branch_id'] : 0;
+    $caseSrcBranch = !empty($r['source_branch_id']) ? (int) $r['source_branch_id'] : 0;
+    $inboundPartner = $myBranch !== null && $caseSrcBranch === $myBranch && $caseBranch !== $myBranch;
+    $outboundPartner = $myBranch !== null && $caseBranch === $myBranch && $caseSrcBranch !== 0 && $caseSrcBranch !== $myBranch;
+    $isLabInCase = ($r['case_type'] ?? '') === 'lab_in' && $caseSrcBranch !== 0 && $caseSrcBranch !== $caseBranch;
+
+    $labHtml = '';
+    if ($isAdmin) {
+        if ($inboundPartner) {
+            // We received this work from a partner branch → کار از لابراتوار همکار
+            $recvAmt = getInboundReceivableAmount($r);
+            $labHtml = '<span class="badge" style="background:#dcfce7; color:#166534;" title="این کیس توسط یک شعبه/لابراتوار همکار به ما ارسال شده است">کار از لابراتوار همکار</span>'
+                     . ($r['source_branch_name'] ? ' <small style="color:#166534;">(' . htmlspecialchars($r['source_branch_name']) . ')</small>' : '')
+                     . ' <div style="margin-top:4px; font-size:0.8rem; color:#166534;">طلب از شعبه مبدا: <b>' . formatAmountToman($recvAmt) . '</b></div>';
+        } elseif ($outboundPartner) {
+            // We outsourced this case to a partner branch
+            $ownAmt = getInboundReceivableAmount($r);
+            $labHtml = '<span class="badge" style="background:#fef3c7; color:#92400e;" title="بخشی از این کیس به شعبه/لابراتوار همکار برون‌سپاری شده است">برون‌سپاری</span>'
+                     . ($r['source_branch_name'] ? ' <small style="color:#92400e;">(' . htmlspecialchars($r['source_branch_name']) . ')</small>' : '')
+                     . ' <div style="margin-top:4px; font-size:0.8rem; color:#92400e;">بدهی به شعبه گیرنده: <b>' . formatAmountToman($ownAmt) . '</b></div>';
+        } elseif ($isLabInCase) {
+            // lab_in received from a partner lab (owned by us, originated there)
+            $labHtml = '<span class="badge" style="background:#dcfce7; color:#166534;">کار از لابراتوار همکار</span>'
+                     . ($r['source_branch_name'] ? ' <small style="color:#166534;">(' . htmlspecialchars($r['source_branch_name']) . ')</small>' : '');
+        } else {
+            $labHtml = !empty($r['lab_name']) ? htmlspecialchars($r['lab_name']) : '—';
+        }
+    }
 
     $data[] = [
         $r['id'],
@@ -219,7 +266,7 @@ foreach ($rows as $r) {
         $invoiceHtml,
         $labHtml,
         $actionDropdown,
-        $r['designer_name'] ?: '—',
+        canSeeDesignerInfo() ? ($r['designer_name'] ?: '—') : '—',
         $r['file_count'] ?: 0,
         $r['label_printed_at'] ?? null,
         $r['status_name'] ?: '—',

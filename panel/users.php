@@ -1,7 +1,7 @@
 <?php
 // panel/users.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_root_admin();
 
 $allRoles = [];
 foreach (getAllRoles() as $r) {
@@ -30,6 +30,7 @@ panel_layout_start('مدیریت کاربران');
         <th>ایمیل</th>
         <th>تلفن</th>
         <th>نقش</th>
+        <th>شعبه</th>
         <th>طراح</th>
         <th>وضعیت</th>
         <th>آخرین ورود</th>
@@ -44,6 +45,10 @@ panel_layout_start('مدیریت کاربران');
             <td><?= htmlspecialchars($u['email'] ?? '—') ?></td>
             <td><?= htmlspecialchars($u['phone'] ?? '—') ?></td>
             <td><span class="badge"><?= htmlspecialchars($allRoles[$u['role']] ?? $u['role']) ?></span></td>
+            <td><?php
+                $ub = $u['branch_id'] ? getBranch((int) $u['branch_id']) : null;
+                echo $ub ? htmlspecialchars($ub['name']) : '<span style="color:#9ca3af;">کل/سراسری</span>';
+            ?></td>
             <td><?= $u['is_designer'] ? '✅' : '—' ?></td>
             <td><span class="badge" style="background:<?= $u['active'] ? '#dcfce7' : '#fee2e2' ?>; color:<?= $u['active'] ? '#166534' : '#991b1b' ?>;">
                 <?= $u['active'] ? 'فعال' : 'غیرفعال' ?>

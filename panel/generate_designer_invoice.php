@@ -3,11 +3,11 @@
 // Design fee (freelance designer) invoice: monthly or custom range,
 // per-unit fee = designer's design-fee override for that service.
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 use Morilog\Jalali\Jalalian;
 
-$designers = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name")->fetchAll();
+$designers = getAllDesigners();
 $message = '';
 $generatedInvoiceId = null;
 

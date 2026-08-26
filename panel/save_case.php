@@ -57,7 +57,10 @@ $patient_name = trim($data['patient_name'] ?? '');
 $receipt_number = !empty($data['receipt_number']) ? trim($data['receipt_number']) : null;
 $service_id = !empty($data['service_id']) ? (int)$data['service_id'] : null;
 $location_type = trim($data['location_type'] ?? '');
-$teeth = trim($data['teeth'] ?? '');
+// Normalize teeth: convert Persian digits + Persian comma/separators to the
+// ASCII format the teeth picker uses (e.g. "26،42_43_44_45" → "26,42_43_44_45").
+$teeth = normalizePersianDigits(trim($data['teeth'] ?? ''));
+$teeth = str_replace(['،', ';'], ',', $teeth);
 $shade = trim($data['shade'] ?? '');
 $quantity = !empty($data['quantity']) ? (int)$data['quantity'] : 1;
 $unit_price = !empty($data['unit_price']) ? (float)$data['unit_price'] : 0;
@@ -78,6 +81,14 @@ if (!in_array($case_type, ['doctor', 'lab_in', 'lab_out'])) $case_type = 'doctor
 $description = trim($data['description'] ?? '');
 $parent_id = !empty($data['parent_id']) ? (int)$data['parent_id'] : null;
 $designer_id = !empty($data['designer_id']) ? (int)$data['designer_id'] : null;
+// If no designer chosen (e.g. partner lab / branch creating a case), auto-assign
+// the DEFAULT designer (is_default_designer=1) so a designer is always present.
+if (!$designer_id && !$editingCase) {
+    $defaultDesigner = getDefaultDesigner();
+    if ($defaultDesigner) {
+        $designer_id = (int) $defaultDesigner['id'];
+    }
+}
 // Side outsourcing: part of this case's work is performed by another lab (we owe them)
 $outsourced_lab_id = !empty($data['outsourced_lab_id']) ? (int)$data['outsourced_lab_id'] : null;
 $outsourced_service_id = !empty($data['outsourced_service_id']) ? (int)$data['outsourced_service_id'] : null;
@@ -114,6 +125,41 @@ if (!$editingCase && $currentUser['role'] === 'doctor') {
             $total_price = $quantity * $unit_price;
         }
     }
+}
+
+// ─── Branch assignment ───
+// branch_id = the branch that OWNS the case (whose books it is in).
+// source_branch_id = the partner branch that sent us the work (lab_in) or
+//                    that we're outsourcing to (lab_out / side outsourcing).
+$branch_id = currentBranchId() ?? 1;   // root admin defaults to main branch (1)
+$source_branch_id = null;
+
+if ($lab_id) {
+    // The lab user's branch = the partner branch involved
+    $labBranch = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+    $labBranch->execute([(int) $lab_id]);
+    $lb = $labBranch->fetchColumn();
+    if ($lb && (int) $lb !== (int) $branch_id) {
+        if ($case_type === 'lab_in') {
+            // We received work FROM this lab's branch → they are the source
+            $source_branch_id = (int) $lb;
+        } elseif ($case_type === 'lab_out') {
+            // We outsourced work TO this lab's branch → they are the source (shared case)
+            $source_branch_id = (int) $lb;
+        }
+    }
+} elseif (!empty($data['outsourced_lab_id']) && $outsourced_qty > 0) {
+    $labBranch = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+    $labBranch->execute([(int) $data['outsourced_lab_id']]);
+    $lb = $labBranch->fetchColumn();
+    if ($lb && (int) $lb !== (int) $branch_id) {
+        $source_branch_id = (int) $lb;
+    }
+}
+
+// A branch-scoped user cannot create a case owned by another branch.
+if (is_branch_scoped() && $branch_id !== currentBranchId()) {
+    $branch_id = currentBranchId();
 }
 
 if (empty($patient_name)) {
@@ -170,6 +216,9 @@ function handleCaseFileUploads(int $caseId, array $files): array
             continue;
         }
 
+        // Dedup display name: if a file with the same name already exists for this case, append _YYYYMMDD
+        $displayName = uniqueCaseFileName($caseId, $orig);
+
         $safe = bin2hex(random_bytes(8)) . '.' . $ext;
         $dest = $uploadDir . $safe;
 
@@ -179,7 +228,7 @@ function handleCaseFileUploads(int $caseId, array $files): array
                 $ins = db()->prepare(
                     'INSERT INTO case_files (case_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, NOW())'
                 );
-                $ins->execute([$caseId, $safe, $orig, $mime, $size]);
+                $ins->execute([$caseId, $safe, $displayName, $mime, $size]);
             } catch (\Throwable $e) {
                 $errors[] = "db_insert_error";
                 error_log("save_case: DB insert failed for $orig: " . $e->getMessage());
@@ -201,8 +250,8 @@ try {
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = (int) db()->lastInsertId();

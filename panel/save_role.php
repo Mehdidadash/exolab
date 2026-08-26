@@ -1,7 +1,7 @@
 <?php
 // panel/save_role.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_root_admin();
 require_csrf();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {

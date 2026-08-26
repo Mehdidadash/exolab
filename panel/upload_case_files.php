@@ -79,6 +79,13 @@ if (empty($_FILES['case_files'])) {
 
 $files = $_FILES['case_files'];
 
+// Optional description applied to all files uploaded in this request
+$description = trim($_POST['description'] ?? '');
+if ($description === '') {
+    $description = trim($_GET['description'] ?? '');
+}
+$description = $description !== '' ? $description : null;
+
 // ─── Optional: package all selected files into a single ZIP ───
 $compress = !empty($_POST['compress']) || !empty($_GET['compress']);
 $fileCount = isset($files['name']) && is_array($files['name']) ? count($files['name']) : 0;
@@ -99,7 +106,8 @@ if ($compress && $fileCount > 1) {
     if ($zipBase === '') {
         $zipBase = 'case_' . $caseId;
     }
-    $zipName = $zipBase . '.zip';
+    // Dedup: if this ZIP display name already exists for the case, append _YYYYMMDD
+    $zipName = uniqueCaseFileName($caseId, $zipBase . '.zip');
     $zipPath = $uploadDir . $zipName;
     $zip = new ZipArchive();
     if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
@@ -136,8 +144,8 @@ if ($compress && $fileCount > 1) {
             @unlink($zipPath);
         } else {
             try {
-                $ins = db()->prepare('INSERT INTO case_files (case_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, "application/zip", ?, NOW())');
-                $ins->execute([$caseId, $zipName, $zipBase . '.zip', $size]);
+                $ins = db()->prepare('INSERT INTO case_files (case_id, filename, original_name, description, mime, size, created_at) VALUES (?, ?, ?, ?, "application/zip", ?, NOW())');
+                $ins->execute([$caseId, $zipName, $zipName, $description, $size]);
                 $uploaded = 1;
             } catch (\Throwable $e) {
                 $errors[] = 'db_insert_error';
@@ -175,6 +183,9 @@ foreach ($files['error'] as $idx => $err) {
         continue;
     }
 
+    // Dedup display name: if a file with the same name exists for this case, append _YYYYMMDD
+    $displayName = uniqueCaseFileName($caseId, $orig);
+
     $safe = bin2hex(random_bytes(8)) . '.' . $ext;
     $dest = $uploadDir . $safe;
 
@@ -182,9 +193,9 @@ foreach ($files['error'] as $idx => $err) {
         @chmod($dest, 0644);
         try {
             $ins = db()->prepare(
-                'INSERT INTO case_files (case_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, NOW())'
+                'INSERT INTO case_files (case_id, filename, original_name, description, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())'
             );
-            $ins->execute([$caseId, $safe, $orig, $mime, $size]);
+            $ins->execute([$caseId, $safe, $displayName, $description, $mime, $size]);
             $uploaded++;
         } catch (\Throwable $e) {
             $errors[] = "db_insert_error";

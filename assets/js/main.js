@@ -52,6 +52,28 @@ window.toggleMobileMenu = function(e) {
     nav.classList.toggle('mobile-open');
 };
 
+// Toggle grouped nav dropdowns (open one at a time)
+window.toggleNavGroup = function(btn) {
+    const group = btn.closest('.nav-group');
+    if (!group) return;
+    const wasOpen = group.classList.contains('open');
+    // close all other groups
+    document.querySelectorAll('.site-nav .nav-group.open').forEach(function(g){
+        if (g !== group) g.classList.remove('open');
+    });
+    group.classList.toggle('open', !wasOpen);
+};
+
+// Close nav groups when clicking outside of the nav
+document.addEventListener('click', function(event) {
+    const nav = document.querySelector('.site-nav');
+    if (!nav || !event.target.closest('.site-nav')) {
+        document.querySelectorAll('.site-nav .nav-group.open').forEach(function(g){
+            g.classList.remove('open');
+        });
+    }
+});
+
 // Close mobile nav when any nav link is clicked
 (function attachNavLinkHandlers(){
     const nav = document.querySelector('.site-nav');

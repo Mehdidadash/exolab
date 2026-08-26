@@ -2,7 +2,7 @@
 // panel/generate_lab_invoice.php
 // Monthly invoice for partner/outsource labs, grouped by doctor, with +/- amounts
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 use Morilog\Jalali\Jalalian;
 

@@ -1,7 +1,7 @@
 <?php
 // panel/save_doctor_price_override.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 require_csrf();
 
@@ -24,6 +24,15 @@ if ($doctor_id <= 0 || $custom_price <= 0) {
 if ($price_type === 'service' && $service_id <= 0) {
     header('Location: doctor_price_override_form.php?error=missing');
     exit;
+}
+
+// Only the central (root) admin may change SHARED inter-branch / lab rates.
+if (!is_root_admin()) {
+    $overrideBranch = currentBranchId();
+    if (isSharedPriceOverrideTarget($doctor_id, $overrideBranch)) {
+        http_response_code(403);
+        die('دسترسی غیرمجاز — نرخ‌های بین شعب/لابراتوار فقط توسط شعبه مرکزی قابل تغییر است.');
+    }
 }
 
 $data = [

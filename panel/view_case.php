@@ -41,6 +41,13 @@ if ($id) {
     } elseif (!has_permission('view_all_cases')) {
         die('دسترسی غیرمجاز');
     }
+    // Branch scoping: any branch-scoped user (including branch_admin) may only
+    // access cases of their own branch or where their branch is the partner.
+    if (is_branch_scoped()) {
+        $bScope = branchCaseScope('c');
+        $sql .= ' AND ' . $bScope['sql'];
+        $params = array_merge($params, $bScope['params']);
+    }
     $stmt = db()->prepare($sql);
     $stmt->execute($params);
     $case = $stmt->fetch();
@@ -78,12 +85,12 @@ if ($id) {
 }
 
 $statuses = db()->query('SELECT * FROM case_statuses ORDER BY name ASC')->fetchAll();
-$designers = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name")->fetchAll();
+$designers = getAllDesigners();
+$labs = getAllLabs();
 $doctors = getAllDoctors();
-$labs = db()->query("SELECT id, full_name, role FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name")->fetchAll();
 $prices = getAllPrices();
 // Whether the current user may edit this case (admin / staff / secretary …)
-$canEditCase = has_role('admin') || has_permission('edit_cases');
+$canEditCase = has_role('admin') || has_role('branch_admin') || has_permission('edit_cases');
 
 panel_layout_start('مشاهده کیس');
 ?>
@@ -121,15 +128,65 @@ panel_layout_start('مشاهده کیس');
             'lab_out' => 'برونسپاری به لابراتوار',
         ];
         $caseTypeLabel = $typeLabels[$case['case_type'] ?? 'doctor'] ?? 'کیس دکتر';
+
+        // Cross-branch perspective: when a branch user views a case, show whether
+        // it is work received from a partner branch ("کار از لابراتوار همکار")
+        // or work we outsourced to a partner branch ("برون‌سپاری").
+        $myBranchId = currentBranchId();
+        $caseBranchId   = !empty($case['branch_id']) ? (int) $case['branch_id'] : 0;
+        $caseSrcBranchId = !empty($case['source_branch_id']) ? (int) $case['source_branch_id'] : 0;
+        $inboundPartner = $myBranchId !== null && $caseSrcBranchId === $myBranchId && $caseBranchId !== $myBranchId;
+        $outboundPartner = $myBranchId !== null && $caseBranchId === $myBranchId && $caseSrcBranchId !== 0 && $caseSrcBranchId !== $myBranchId;
+        $isLabInCross = ($case['case_type'] ?? '') === 'lab_in' && $caseSrcBranchId !== 0 && $caseSrcBranchId !== $caseBranchId;
+
+        $branchLabel = '';
+        $branchBadge = '';
+        if ($inboundPartner) {
+            $branchBadge = '<span class="badge" style="background:#dcfce7; color:#166534;">کار از لابراتوار همکار</span>';
+            $branchLabel = 'شعبه/لابراتوار ارسال‌کننده';
+        } elseif ($outboundPartner) {
+            $branchBadge = '<span class="badge" style="background:#fef3c7; color:#92400e;">برون‌سپاری به همکار</span>';
+            $branchLabel = 'شعبه/لابراتوار گیرنده';
+        } elseif ($isLabInCross) {
+            $branchBadge = '<span class="badge" style="background:#dcfce7; color:#166534;">کار از لابراتوار همکار</span>';
+            $branchLabel = 'شعبه/لابراتوار مبدا';
+        }
+        // Fetch the partner branch name for display
+        $partnerBranchName = '';
+        if (($inboundPartner || $isLabInCross || $outboundPartner) && !empty($case['source_branch_id'])) {
+            $pb = db()->prepare('SELECT name FROM branches WHERE id = ?');
+            $pb->execute([(int) $case['source_branch_id']]);
+            $partnerBranchName = (string) $pb->fetchColumn();
+        }
         ?>
 
-        <table style="width:100%; border-collapse:collapse; margin:12px 0;">
+        <table class="case-info-table" style="width:100%; border-collapse:collapse; margin:12px 0;">
             <tr>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>نوع کیس:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($caseTypeLabel) ?></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;">
+                    <?= htmlspecialchars($caseTypeLabel) ?>
+                    <?php if ($branchBadge): ?> <?= $branchBadge ?><?php endif; ?>
+                </td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>پزشک:</strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?php if ($canViewDoctorProfile): ?><a href="doctor_view.php?id=<?= (int) $case['doctor_id'] ?>"><?= htmlspecialchars($case['doctor_name'] ?? '—') ?></a><?php else: ?><?= htmlspecialchars($case['doctor_name'] ?? '—') ?><?php endif; ?></td>
             </tr>
+            <?php if ($branchBadge && $partnerBranchName): ?>
+            <tr style="background:#f8fafc;">
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong><?= htmlspecialchars($branchLabel) ?>:</strong></td>
+                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($partnerBranchName) ?></td>
+            </tr>
+            <?php endif; ?>
+            <?php if (!$hideFinancial && ($inboundPartner || $outboundPartner)): $crossAmt = getInboundReceivableAmount($case); ?>
+            <tr style="background:<?= $inboundPartner ? '#f0fdf4' : '#fffbeb' ?>;">
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong><?= $inboundPartner ? 'طلب ما از شعبه مبدا' : 'بدهی ما به شعبه گیرنده' ?>:</strong></td>
+                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee; color:<?= $inboundPartner ? '#166534' : '#92400e' ?>; font-weight:bold;">
+                    <?= formatAmountToman($crossAmt) ?> تومان
+                    <small style="font-weight:normal; color:#525252; display:block; margin-top:2px;">
+                        <?= $inboundPartner ? 'این مبلغ همان هزینه برون‌سپاری است که شعبه مبدا برای این کیس به ما پرداخت می‌کند.' : 'این مبلغ همان هزینه برون‌سپاری است که ما برای این کیس به شعبه گیرنده می‌پردازیم.' ?>
+                    </small>
+                </td>
+            </tr>
+            <?php endif; ?>
             <tr>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>شماره قبض:</strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['receipt_number'] ?? '—') ?></td>
@@ -142,6 +199,14 @@ panel_layout_start('مشاهده کیس');
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>مکان / دندان:</strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars(formatCaseLocation($case['location_type'], $case['teeth'])) ?></td>
             </tr>
+            <?php if (($case['location_type'] ?? '') === 'teeth' && !empty($case['teeth'])): ?>
+            <tr>
+                <td colspan="4" style="padding:6px 8px; border-bottom:1px solid #eee;">
+                    <strong>دندان‌های انتخاب‌شده:</strong>
+                    <div style="margin-top:8px;"><?= renderTeethChart($case['teeth']) ?></div>
+                </td>
+            </tr>
+            <?php endif; ?>
             <tr>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>سایه:</strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['shade'] ?? '—') ?></td>
@@ -162,7 +227,7 @@ panel_layout_start('مشاهده کیس');
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
             </tr>
             <?php endif; ?>
-            <?php if (!$isRestricted): ?>
+            <?php if (canSeeDesignerInfo()): ?>
             <tr>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>طراح:</strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['designer_name'] ?? '—') ?></td>
@@ -271,7 +336,7 @@ panel_layout_start('مشاهده کیس');
         </script>
         <?php endif; ?>
 
-        <?php if (has_role('admin') || has_permission('edit_cases')): ?>
+        <?php if (canSeeDesignerInfo() && (has_role('admin') || has_permission('edit_cases'))): ?>
         <div class="form-card" style="margin-top:20px;">
             <h4>تغییر طراح کیس</h4>
             <?php if (!empty($case['designer_invoice_id'])): ?>
@@ -380,6 +445,63 @@ panel_layout_start('مشاهده کیس');
         <?php endif; ?>
 
         <h4>فایل‌ها</h4>
+
+        <?php
+        // ── Scan-file timing / follow-up panel ──
+        // The designer must add design files within 48h of the first scan upload.
+        if (!empty($files)) {
+            $firstFile = $files[0];
+            $firstScanAt = $firstFile['created_at'] ?? null;
+            $nowTs = time();
+            $scanTs = $firstScanAt ? strtotime($firstScanAt) : 0;
+            $elapsedHours = $scanTs ? ($nowTs - $scanTs) / 3600 : null;
+
+            $designExts = ['stl', 'ply', 'stp', 'step', 'obj', '3mf'];
+            $hasDesignFile = false;
+            $designAt = null;
+            foreach ($files as $f) {
+                $ext = strtolower(pathinfo($f['filename'], PATHINFO_EXTENSION));
+                if (in_array($ext, $designExts, true)) {
+                    $hasDesignFile = true;
+                    $designAt = $f['created_at'] ?? null;
+                    break;
+                }
+            }
+            $isOverdue = $elapsedHours !== null && $elapsedHours > 48;
+            ?>
+            <div style="margin:12px 0; padding:12px 14px; border-radius:10px; border:1px solid <?= $hasDesignFile ? '#bbf7d0' : ($isOverdue ? '#fca5a5' : '#fde68a') ?>; background:<?= $hasDesignFile ? '#f0fdf4' : ($isOverdue ? '#fef2f2' : '#fffbeb') ?>;">
+                <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center;">
+                    <div>
+                        <div style="font-size:0.78rem; color:#525252;">اولین فایل (اسکن) اضافه‌شده</div>
+                        <strong><?= $firstScanAt ? toJalaliDateTimeFormatted($firstScanAt) : '—' ?></strong>
+                        <div style="font-size:0.85rem; color:#525252; margin-top:2px;">
+                            <?= $scanTs ? 'مدت گذشته: <strong>' . htmlspecialchars(formatElapsedTime($firstScanAt)) . '</strong>' : '' ?>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.78rem; color:#525252;">فایل طراحی</div>
+                        <?php if ($hasDesignFile): ?>
+                            <strong style="color:#15803d;">✓ اضافه شده</strong>
+                            <?php if ($designAt): ?><div style="font-size:0.8rem; color:#525252;"><?= toJalaliDateTimeFormatted($designAt) ?> (<?= htmlspecialchars(formatElapsedTime($designAt)) ?>)</div><?php endif; ?>
+                        <?php else: ?>
+                            <strong style="color:<?= $isOverdue ? '#b91c1c' : '#b45309' ?>;">هنوز اضافه نشده</strong>
+                        <?php endif; ?>
+                    </div>
+                    <?php if (!$hasDesignFile && $elapsedHours !== null): ?>
+                        <div style="flex:1; min-width:180px;">
+                            <?php if ($isOverdue): ?>
+                                <strong style="color:#b91c1c;">⚠️ بیش از ۴۸ ساعت گذشته — لطفاً پیگیری شود!</strong>
+                            <?php else: ?>
+                                <div style="font-size:0.85rem; color:#525252;">مهلت ۴۸ ساعته طراحی</div>
+                                <?php $remaining = 48 - $elapsedHours; ?>
+                                <strong style="color:#b45309;"><?= $remaining >= 1 ? toPersianDigits(floor($remaining)) . ' ساعت مانده' : 'کمتر از یک ساعت مانده' ?></strong>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+        <?php } ?>
+
         <?php if (has_role('admin') || has_permission('upload_design_files') || has_permission('upload_files') || has_permission('edit_cases')): ?>
         <div style="margin:12px 0; padding:12px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px;">
             <strong>آپلود فایل</strong>
@@ -390,6 +512,7 @@ panel_layout_start('مشاهده کیس');
                 <label style="display:flex; align-items:center; gap:6px; width:100%; margin:4px 0 0; font-weight:600; font-size:0.9rem; cursor:pointer;">
                     <input type="checkbox" id="case-upload-compress" style="width:auto;"> همه فایل‌ها را یکجا به‌صورت ZIP ذخیره کن
                 </label>
+                <textarea id="case-upload-description" name="description" rows="2" style="width:100%; margin-top:6px;" placeholder="توضیحات (اختیاری) – مثلاً: اصلاح طراحی، نوع پرسلن، ..."></textarea>
             </form>
             <div id="case-upload-msg" style="margin-top:6px; font-weight:bold;"></div>
             <div id="case-upload-progress" style="display:none; margin-top:8px;">
@@ -446,6 +569,8 @@ panel_layout_start('مشاهده کیس');
                 for (var i = 0; i < input.files.length; i++) fd.append('case_files[]', input.files[i]);
                 var compressCb = document.getElementById('case-upload-compress');
                 if (compressCb && compressCb.checked) fd.append('compress', '1');
+                var descEl = document.getElementById('case-upload-description');
+                if (descEl && descEl.value.trim()) fd.append('description', descEl.value.trim());
                 var xhr = new XMLHttpRequest();
                 xhr.open('POST', 'upload_case_files.php', true);
                 xhr.setRequestHeader('X-CSRF-Token', csrf);
@@ -490,14 +615,16 @@ panel_layout_start('مشاهده کیس');
                     $ext = strtolower(pathinfo($f['filename'], PATHINFO_EXTENSION));
                     $isImage = in_array($ext, $imageExts);
                     $fileUrl = '../assets/uploads/cases/'.$case['id'].'/'.$f['filename'];
+                    $fileDesc = trim((string) ($f['description'] ?? ''));
                 ?>
-                    <div style="display:flex; gap:4px; align-items:center; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:4px 8px;">
+                    <div class="file-chip" style="display:flex; flex-direction:column; gap:4px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 8px;">
+                        <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">
                         <?php if ($isImage): ?>
-                            <button class="btn file-image" data-file="<?= htmlspecialchars($fileUrl) ?>" style="background:#e0f2fe; color:#0369a1; padding:4px 10px; font-size:0.85rem;">
+                            <button class="btn file-image" data-file="<?= htmlspecialchars($fileUrl) ?>" style="background:#e0f2fe; color:#0369a1; padding:4px 10px; font-size:0.85rem;" title="<?= htmlspecialchars($fileDesc) ?>">
                                 🖼 <?= htmlspecialchars($f['original_name']) ?>
                             </button>
                         <?php else: ?>
-                            <button class="btn file-load" data-file="<?= htmlspecialchars($fileUrl) ?>" style="padding:4px 10px; font-size:0.85rem;">
+                            <button class="btn file-load" data-file="<?= htmlspecialchars($fileUrl) ?>" style="padding:4px 10px; font-size:0.85rem;" title="<?= htmlspecialchars($fileDesc) ?>">
                                 <?= htmlspecialchars($f['original_name']) ?>
                             </button>
                         <?php endif; ?>
@@ -508,8 +635,15 @@ panel_layout_start('مشاهده کیس');
                             <button class="btn file-action-archive" style="background:#fef3c7; color:#92400e; padding:4px 6px; font-size:0.8rem;" data-id="<?= (int) $f['id'] ?>" data-name="<?= htmlspecialchars($f['original_name']) ?>">🗜 محتوا</button>
                         <?php endif; ?>
                         <?php if (has_permission('edit_cases') || has_permission('upload_files')): ?>
-                            <button class="btn file-action-rename" style="background:#F3F4F6; color:#111; padding:4px 6px; font-size:0.8rem;" data-id="<?= $f['id'] ?>" data-name="<?= htmlspecialchars($f['original_name']) ?>">✏️</button>
+                            <button class="btn file-action-rename" style="background:#F3F4F6; color:#111; padding:4px 6px; font-size:0.8rem;" data-id="<?= $f['id'] ?>" data-name="<?= htmlspecialchars($f['original_name']) ?>" data-desc="<?= htmlspecialchars($fileDesc) ?>">✏️</button>
                             <button class="btn file-action-delete" style="background:#fee2e2; color:#a00; padding:4px 6px; font-size:0.8rem;" data-id="<?= $f['id'] ?>" data-name="<?= htmlspecialchars($f['original_name']) ?>">🗑</button>
+                        <?php endif; ?>
+                        </div>
+                        <?php if ($fileDesc !== ''): ?>
+                            <div class="file-desc" style="font-size:0.8rem; color:#374151; background:#f3f4f6; border-radius:6px; padding:4px 6px; white-space:pre-wrap; line-height:1.6;"><?= htmlspecialchars($fileDesc) ?></div>
+                        <?php endif; ?>
+                        <?php if (!empty($f['created_at'])): ?>
+                            <div style="font-size:0.72rem; color:#6b7280;">📅 <?= toJalaliDateTimeFormatted($f['created_at']) ?> — <?= htmlspecialchars(formatElapsedTime($f['created_at'])) ?></div>
                         <?php endif; ?>
                     </div>
                 <?php endforeach; ?>
@@ -555,11 +689,18 @@ panel_layout_start('مشاهده کیس');
                 .modal .modal-content { max-height: 90vh; overflow: auto; box-shadow: 0 8px 24px rgba(0,0,0,0.2); background: #fff; border-radius: 4px; }
             </style>
             <div id="rename-modal" class="modal" style="display:none;">
-                <div class="modal-content form-card" style="max-width:420px; margin:auto;">
-                    <h3>ویرایش نام فایل</h3>
+                <div class="modal-content form-card" style="max-width:460px; margin:auto;">
+                    <h3>ویرایش فایل</h3>
                     <form id="rename-form">
                         <input type="hidden" id="rename-file-id" name="id">
-                        <input type="text" id="rename-file-name" name="name" style="width:100%; margin-top:8px;">
+                        <div class="form-group">
+                            <label for="rename-file-name">نام فایل</label>
+                            <input type="text" id="rename-file-name" name="name" style="width:100%; margin-top:8px;">
+                        </div>
+                        <div class="form-group" style="margin-top:10px;">
+                            <label for="rename-file-desc">توضیحات</label>
+                            <textarea id="rename-file-desc" name="description" rows="3" style="width:100%; margin-top:8px;" placeholder="توضیحات این فایل..."></textarea>
+                        </div>
                         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px;">
                             <button type="button" id="rename-cancel" class="btn">انصراف</button>
                             <button type="submit" class="btn" style="background:#06B6D4;">ذخیره</button>
@@ -875,6 +1016,7 @@ panel_layout_start('مشاهده کیس');
                         const id = btn.dataset.id; const name = btn.dataset.name;
                         document.getElementById('rename-file-id').value = id;
                         document.getElementById('rename-file-name').value = name;
+                        document.getElementById('rename-file-desc').value = (btn.dataset.desc || '');
                         document.getElementById('rename-modal').style.display = 'flex';
                     });
                 });
@@ -940,16 +1082,38 @@ panel_layout_start('مشاهده کیس');
                     e.preventDefault();
                     var id = document.getElementById('rename-file-id').value;
                     var name = document.getElementById('rename-file-name').value.trim();
+                    var desc = document.getElementById('rename-file-desc').value.trim();
                     if (!name) return alert('نام نباید خالی باشد');
-                    fetch('rename_case_file.php', { method: 'POST', headers: {'Accept':'application/json', 'X-CSRF-Token': window.CSRF_TOKEN }, body: new URLSearchParams({ id: id, name: name, _csrf_token: window.CSRF_TOKEN }) }).then(r=>r.json()).then(function(data){
+                    var body = new URLSearchParams({ id: id, name: name, description: desc, _csrf_token: window.CSRF_TOKEN });
+                    fetch('rename_case_file.php', { method: 'POST', headers: {'Accept':'application/json', 'X-CSRF-Token': window.CSRF_TOKEN }, body: body }).then(r=>r.json()).then(function(data){
                         if (data && data.success) {
                             document.querySelectorAll('.file-action-rename, .file-action-delete, .file-load').forEach(function(el){
                                 if (el.dataset.id == id) el.dataset.name = name;
                             });
+                            document.querySelectorAll('.file-action-rename').forEach(function(el){
+                                if (el.dataset.id == id) el.dataset.desc = desc;
+                            });
                             document.querySelectorAll('.file-load').forEach(function(b){ if (b.dataset.file && b.nextElementSibling && b.nextElementSibling.dataset && b.nextElementSibling.dataset.id == id) { b.textContent = name; } });
+                            // Update the visible description block for this file
+                            document.querySelectorAll('.file-action-rename').forEach(function(el){
+                                if (el.dataset.id == id) {
+                                    var chip = el.closest('.file-chip');
+                                    if (chip) {
+                                        var oldDesc = chip.querySelector('.file-desc');
+                                        if (oldDesc) oldDesc.remove();
+                                        if (desc) {
+                                            var d = document.createElement('div');
+                                            d.className = 'file-desc';
+                                            d.style.cssText = 'font-size:0.8rem; color:#374151; background:#f3f4f6; border-radius:6px; padding:4px 6px; white-space:pre-wrap; line-height:1.6;';
+                                            d.textContent = desc;
+                                            chip.appendChild(d);
+                                        }
+                                    }
+                                }
+                            });
                             document.getElementById('rename-modal').style.display='none';
                         } else {
-                            alert('خطا در تغییر نام فایل');
+                            alert('خطا در تغییر فایل');
                         }
                     }).catch(function(){ alert('خطا در درخواست'); });
                 });
@@ -976,6 +1140,8 @@ panel_layout_start('مشاهده کیس');
 <script src="../assets/js/persian-date.min.js"></script>
 <script src="../assets/js/persian-datepicker.min.js"></script>
 
+<link rel="stylesheet" href="../assets/css/case-teeth-picker.css">
+<script src="../assets/js/case-teeth-picker.js"></script>
 <div id="edit-case-modal" class="modal" style="display:none;">
     <div class="modal-content form-card" style="width:820px; max-width:95%; padding:20px; box-sizing:border-box;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
@@ -1008,7 +1174,7 @@ panel_layout_start('مشاهده کیس');
                     <select name="lab_id">
                         <option value="">— انتخاب —</option>
                         <?php foreach ($labs as $lab): ?>
-                            <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?> (<?= htmlspecialchars($lab['role']) ?>)</option>
+                            <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?> (<?= htmlspecialchars($lab['role']) ?><?= !empty($lab['branch_name']) ? ' — ' . htmlspecialchars($lab['branch_name']) : '' ?>)</option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -1048,17 +1214,18 @@ panel_layout_start('مشاهده کیس');
                         <option value="teeth" <?= ($case['location_type'] ?? '') === 'teeth' ? 'selected' : '' ?>>دندان</option>
                     </select>
                 </div>
-                <div class="form-group">
+                <div class="form-group" style="grid-column:1 / -1;">
                     <label>دندان</label>
-                    <input type="text" name="teeth" value="<?= htmlspecialchars($case['teeth'] ?? '') ?>">
+                    <div id="case-teeth-picker" class="case-teeth-picker" aria-label="انتخاب دندان‌ها"></div>
+                    <input type="hidden" id="case-teeth" name="teeth" value="<?= htmlspecialchars($case['teeth'] ?? '') ?>">
                 </div>
                 <div class="form-group">
                     <label>سایه</label>
                     <input type="text" name="shade" value="<?= htmlspecialchars($case['shade'] ?? '') ?>">
                 </div>
                 <div class="form-group">
-                    <label>تعداد</label>
-                    <input type="number" name="quantity" min="1" value="<?= (int) ($case['quantity'] ?? 1) ?>">
+                    <label>تعداد <small style="color:#64748b; font-weight:400;">(خودکار)</small></label>
+                    <input type="number" name="quantity" min="1" value="<?= (int) ($case['quantity'] ?? 1) ?>" readonly style="background:#f3f4f6; cursor:not-allowed;">
                 </div>
                 <div class="form-group">
                     <label>فی واحد (تومان)</label>
@@ -1080,31 +1247,41 @@ panel_layout_start('مشاهده کیس');
                         <?php endforeach; ?>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label>برون‌سپاری جانبی: لابراتوار</label>
-                    <select name="outsourced_lab_id">
-                        <option value="">ندارد</option>
-                        <?php foreach ($labs as $lab): ?>
-                            <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['outsourced_lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>برون‌سپاری جانبی: خدمت</label>
-                    <select name="outsourced_service_id">
-                        <option value="">— انتخاب —</option>
-                        <?php foreach ($prices as $price): ?>
-                            <option value="<?= (int) $price['id'] ?>" <?= (int) ($case['outsourced_service_id'] ?? 0) === (int) $price['id'] ? 'selected' : '' ?>><?= htmlspecialchars($price['title']) ?></option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>تعداد برون‌سپاری</label>
-                    <input type="number" name="outsourced_qty" min="0" value="<?= (int) ($case['outsourced_qty'] ?? 0) ?>">
-                </div>
-                <div class="form-group">
-                    <label>نرخ برون‌سپاری (تومان)</label>
-                    <input type="number" id="ec-outsourced-rate" name="outsourced_rate" min="0" step="1" value="<?= isset($case['outsourced_rate']) && $case['outsourced_rate'] !== null ? (float) $case['outsourced_rate'] : '' ?>" placeholder="خودکار از نرخ‌ها">
+                <div class="form-group" style="grid-column:1 / -1; border:1px solid #bbf7d0; border-radius:8px; overflow:hidden; padding:0; margin-bottom:0;">
+                    <button type="button" id="ec-side-outsource-toggle" class="btn" style="width:100%; background:#f0fdf4; color:#15803d; border:none; border-radius:0; text-align:right; display:flex; justify-content:space-between; align-items:center; padding:11px 14px; font-weight:700; cursor:pointer;">
+                        <span>🔄 برون‌سپاری جانبی (بدهی به لابراتوار)</span>
+                        <span class="ec-side-caret" style="font-size:0.8rem;">▾</span>
+                    </button>
+                    <div id="ec-side-outsource-body" style="display:none; background:#f0fdf4; padding:12px;">
+                        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+                            <div style="flex:1; min-width:160px;">
+                                <label>برون‌سپاری جانبی: لابراتوار</label>
+                                <select name="outsourced_lab_id">
+                                    <option value="">ندارد</option>
+                                    <?php foreach ($labs as $lab): ?>
+                                        <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['outsourced_lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?><?= !empty($lab['branch_name']) ? ' (' . htmlspecialchars($lab['branch_name']) . ')' : '' ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div style="flex:1; min-width:160px;">
+                                <label>برون‌سپاری جانبی: خدمت</label>
+                                <select name="outsourced_service_id">
+                                    <option value="">— انتخاب —</option>
+                                    <?php foreach ($prices as $price): ?>
+                                        <option value="<?= (int) $price['id'] ?>" <?= (int) ($case['outsourced_service_id'] ?? 0) === (int) $price['id'] ? 'selected' : '' ?>><?= htmlspecialchars($price['title']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div style="width:110px;">
+                                <label>تعداد برون‌سپاری</label>
+                                <input type="number" name="outsourced_qty" min="0" value="<?= (int) ($case['outsourced_qty'] ?? 0) ?>">
+                            </div>
+                            <div style="width:140px;">
+                                <label>نرخ برون‌سپاری (تومان)</label>
+                                <input type="number" id="ec-outsourced-rate" name="outsourced_rate" min="0" step="1" value="<?= isset($case['outsourced_rate']) && $case['outsourced_rate'] !== null ? (float) $case['outsourced_rate'] : '' ?>" placeholder="خودکار از نرخ‌ها">
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="form-group" style="grid-column:1 / -1;">
                     <label>توضیحات</label>
@@ -1130,12 +1307,66 @@ panel_layout_start('مشاهده کیس');
     var msgEl = document.getElementById('edit-case-msg');
     var csrf = window.CSRF_TOKEN || '<?= htmlspecialchars($csrf_token) ?>';
     var dp = null;
+    var originalTeeth = <?= json_encode($case['teeth'] ?? '') ?>;
+
+    // ── Teeth ↔ location ↔ quantity auto logic (edit modal) ──
+    function ecCountTeeth(v){
+        if (!v) return 0;
+        var n = 0;
+        String(v).split(',').forEach(function(g){ g.split('_').forEach(function(t){ if (String(t).trim()) n++; }); });
+        return n;
+    }
+    function ecUpdateTeethForLocation(){
+        var loc = document.querySelector('#edit-case-form [name="location_type"]');
+        var picker = document.getElementById('case-teeth-picker');
+        if (!picker) return;
+        var lv = loc ? loc.value : '';
+        if (lv === 'upper' || lv === 'lower' || lv === 'both') {
+            // A whole jaw → no individual teeth selectable
+            picker.classList.add('is-disabled');
+            if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
+        } else {
+            picker.classList.remove('is-disabled');
+        }
+    }
+    function ecUpdateQuantity(){
+        var loc = document.querySelector('#edit-case-form [name="location_type"]');
+        var qty = document.querySelector('#edit-case-form [name="quantity"]');
+        if (!qty) return;
+        var lv = loc ? loc.value : '';
+        if (lv === 'both') { qty.value = 2; }
+        else if (lv === 'upper' || lv === 'lower') { qty.value = 1; }
+        else {
+            var v = (window.CaseTeethPicker ? CaseTeethPicker.getValue() : '') || '';
+            var n = ecCountTeeth(v);
+            qty.value = n > 0 ? n : 1;
+        }
+    }
+    document.addEventListener('change', function(e){
+        if (e.target && e.target.name === 'location_type') {
+            ecUpdateTeethForLocation();
+            ecUpdateQuantity();
+        }
+    });
+    document.addEventListener('click', function(e){
+        if (e.target.closest && e.target.closest('#case-teeth-picker .case-tooth-button, #case-teeth-picker .case-bridge-key, #case-teeth-picker .case-teeth-picker__clear')) {
+            setTimeout(ecUpdateQuantity, 10);
+        }
+    });
 
     function toggleLabGroup(){
         var typeSel = document.getElementById('ec-case-type');
+        var labLabel = document.getElementById('ec-lab-label');
         var labGroup = document.getElementById('ec-lab-group');
-        var isLabIn = typeSel && typeSel.value === 'lab_in';
-        if (labGroup) labGroup.style.display = isLabIn ? '' : 'none';
+        if (!labGroup) return;
+        // For doctor-type cases the lab field is not needed.
+        if (typeSel && typeSel.value === 'doctor') labGroup.style.display = 'none';
+        else labGroup.style.display = '';
+        if (labLabel && typeSel){
+            if (typeSel.value === 'lab_in') labLabel.textContent = 'لابراتوار همکار (پرداخت‌کننده)';
+            else if (typeSel.value === 'lab_out') labLabel.textContent = 'لابراتوار برون‌سپاری (گیرنده کار)';
+            else labLabel.textContent = 'لابراتوار';
+        }
     }
     document.addEventListener('change', function(e){
         if (e.target && e.target.id === 'ec-case-type') toggleLabGroup();
@@ -1176,24 +1407,47 @@ panel_layout_start('مشاهده کیس');
         if (!modal) return;
         modal.style.display = 'flex';
         if (msgEl) msgEl.textContent = '';
+        if (window.CaseTeethPicker) { CaseTeethPicker.setValue(originalTeeth); }
         toggleLabGroup();
+        ecUpdateTeethForLocation();
+        ecUpdateQuantity();
         if (typeof $.fn !== 'undefined' && $.fn.persianDatepicker && !dp) {
             try {
+                // persianDigit must be TRUE: the input value is in Persian digits
+                // (toJalaliDateFormatted), otherwise the picker parses it as invalid
+                // and falls back to today's date instead of the case's received date.
                 dp = $('#ec-received-date').persianDatepicker({
                     format: 'YYYY/MM/DD',
-                    persianDigit: false,
-                    autoClose: true,
-                    initialValue: $('#ec-received-date').val() || false
+                    calendarType: 'persian',
+                    initialValue: $('#ec-received-date').val() || false,
+                    initialValueType: 'jalali',
+                    persianDigit: true,
+                    autoClose: true
                 });
             } catch(e) {}
         }
     }
-    function closeModal(){ if (modal) modal.style.display = 'none'; }
+    function closeModal(){ if (modal) modal.style.display = 'none'; if (window.CaseTeethPicker) { CaseTeethPicker.setValue(originalTeeth); } }
 
     if (openBtn) openBtn.addEventListener('click', function(e){ e.preventDefault(); openModal(); });
     if (closeBtn) closeBtn.addEventListener('click', closeModal);
     if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
     if (modal) modal.addEventListener('click', function(e){ if (e.target === modal) closeModal(); });
+
+    // Toggle the collapsible side-outsourcing section (robust open/close)
+    (function(){
+        var ecSoOpen = false;
+        var ecSoBtn = document.getElementById('ec-side-outsource-toggle');
+        var ecSoBody = document.getElementById('ec-side-outsource-body');
+        var ecSoCaret = document.querySelector('.ec-side-caret');
+        if (ecSoBtn && ecSoBody) ecSoBtn.addEventListener('click', function(e){
+            e.preventDefault();
+            e.stopPropagation();
+            ecSoOpen = !ecSoOpen;
+            ecSoBody.style.display = ecSoOpen ? 'block' : 'none';
+            if (ecSoCaret) ecSoCaret.textContent = ecSoOpen ? '▴' : '▾';
+        });
+    })();
 
     if (form) form.addEventListener('submit', function(e){
         e.preventDefault();

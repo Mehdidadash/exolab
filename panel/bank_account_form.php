@@ -2,7 +2,7 @@
 // panel\bank_account_form.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 $editing = !empty($_GET['id']);
 $account = $editing ? getBankAccount((int) $_GET['id']) : null;

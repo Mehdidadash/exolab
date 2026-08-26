@@ -2,7 +2,7 @@
 // panel/outsource_invoices.php
 // List of outsourcing invoices (what we pay labs).
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 $invoices = getAllOutsourceInvoices();
 

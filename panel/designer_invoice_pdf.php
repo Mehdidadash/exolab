@@ -2,7 +2,7 @@
 // panel/designer_invoice_pdf.php
 // PDF for a freelance designer's design-fee invoice.
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 use Mpdf\Mpdf;
 

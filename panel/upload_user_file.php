@@ -83,6 +83,11 @@ $tmp = $_FILES['file']['tmp_name'];
 $size = (int) $_FILES['file']['size'];
 $mime = $_FILES['file']['type'] ?? '';
 $orig = $_FILES['file']['name'];
+$description = trim($_POST['description'] ?? '');
+$description = $description !== '' ? $description : null;
+
+// Dedup display name within this case (or within this user's unattached uploads)
+$displayName = uniqueUserUploadName((int) $user['id'], $caseId, $orig);
 
 if (!move_uploaded_file($tmp, $dest)) {
     http_response_code(500);
@@ -92,8 +97,8 @@ if (!move_uploaded_file($tmp, $dest)) {
 }
 @chmod($dest, 0644);
 
-$stmt = db()->prepare('INSERT INTO user_uploads (user_id, case_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())');
-$stmt->execute([$user['id'], $caseId, $safe, $orig, $mime, $size]);
+$stmt = db()->prepare('INSERT INTO user_uploads (user_id, case_id, filename, original_name, description, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())');
+$stmt->execute([$user['id'], $caseId, $safe, $displayName, $description, $mime, $size]);
 
 header('Content-Type: application/json; charset=utf-8');
 echo json_encode(['success' => true, 'id' => (int) db()->lastInsertId()]);

@@ -1,7 +1,7 @@
 <?php
 // panel/delete_user.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_root_admin();
 require_csrf();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST' || empty($_POST['id'])) {

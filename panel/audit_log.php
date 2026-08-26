@@ -1,7 +1,7 @@
 <?php
 // panel/audit_log.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_root_admin();
 
 // Fetch ALL logs – DataTables handles pagination/search client-side
 $filterAction = $_GET['action'] ?? '';

@@ -4,7 +4,10 @@
 // Everything we OWE to others: freelance designer (design-fee) invoices and
 // outsourcing invoices (costs paid to labs). One page instead of two separate ones.
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_login();
+if (!is_admin()) {
+    die('دسترسی غیرمجاز');
+}
 
 $designerInvoices = getAllDesignerInvoices();
 $outsourceInvoices = getAllOutsourceInvoices();
@@ -12,6 +15,7 @@ $outsourceInvoices = getAllOutsourceInvoices();
 // Merge into one list with a common shape for the table
 $rows = [];
 foreach ($designerInvoices as $inv) {
+    $paid = getExpenseInvoicePaid('designer', (int) $inv['id']);
     $rows[] = [
         'type' => 'designer',
         'type_label' => 'هزینه طراحی',
@@ -20,11 +24,15 @@ foreach ($designerInvoices as $inv) {
         'period_label' => $inv['period_label'] ?? '—',
         'invoice_date' => $inv['invoice_date'],
         'total_amount' => (float) $inv['total_amount'],
+        'paid_amount' => $paid,
+        'payment_status' => $inv['payment_status'] ?? 'unpaid',
+        'invoice_id' => (int) $inv['id'],
         'pdf' => 'designer_invoice_pdf.php?id=' . (int) $inv['id'],
         'generation' => 'generate_designer_invoice.php',
     ];
 }
 foreach ($outsourceInvoices as $inv) {
+    $paid = getExpenseInvoicePaid('outsource', (int) $inv['id']);
     $rows[] = [
         'type' => 'outsource',
         'type_label' => 'برون‌سپاری',
@@ -33,6 +41,9 @@ foreach ($outsourceInvoices as $inv) {
         'period_label' => $inv['period_label'] ?? '—',
         'invoice_date' => $inv['invoice_date'],
         'total_amount' => (float) $inv['total_amount'],
+        'paid_amount' => $paid,
+        'payment_status' => $inv['payment_status'] ?? 'unpaid',
+        'invoice_id' => (int) $inv['id'],
         'pdf' => 'outsource_invoice_pdf.php?id=' . (int) $inv['id'],
         'generation' => 'generate_outsource_invoice.php',
     ];
@@ -73,6 +84,7 @@ panel_layout_start('فاکتورهای مخارج (بدهی‌ها)');
         <th>بازه</th>
         <th>تاریخ</th>
         <th>مبلغ</th>
+        <th>پرداخت</th>
         <th>عملیات</th>
     </tr>
     </thead>
@@ -91,7 +103,19 @@ panel_layout_start('فاکتورهای مخارج (بدهی‌ها)');
             <td><?= htmlspecialchars($r['period_label']) ?></td>
             <td><?= toJalaliDateFormatted($r['invoice_date']) ?></td>
             <td style="font-weight:bold; color:#b91c1c;"><?= formatAmountToman($r['total_amount']) ?></td>
+            <td>
+                <?php
+                $st = $r['payment_status'];
+                if ($st === 'paid'): ?>
+                    <span class="badge" style="background:#dcfce7; color:#166534;">پرداخت شده (<?= formatAmountToman($r['paid_amount']) ?>)</span>
+                <?php elseif ($st === 'partial'): ?>
+                    <span class="badge" style="background:#fef3c7; color:#92400e;">جزئی (<?= formatAmountToman($r['paid_amount']) ?>)</span>
+                <?php else: ?>
+                    <span class="badge" style="background:#fee2e2; color:#991b1b;">پرداخت نشده</span>
+                <?php endif; ?>
+            </td>
             <td class="actions">
+                <a class="btn" href="expense_payment_form.php?type=<?= $r['type'] ?>&invoice_id=<?= $r['invoice_id'] ?>" style="background:#06B6D4; color:#fff; padding:4px 10px; text-decoration:none;">💳 ثبت پرداخت</a>
                 <a class="btn" href="<?= htmlspecialchars($r['pdf']) ?>" target="_blank" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">PDF</a>
             </td>
         </tr>

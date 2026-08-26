@@ -2,7 +2,7 @@
 // panel\update_order.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 require_once __DIR__ . '/db.php';
 
 // Accept JSON body

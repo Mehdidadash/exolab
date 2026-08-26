@@ -1,7 +1,7 @@
 <?php
 // panel/delete_lab_price_override.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 require_csrf();
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {

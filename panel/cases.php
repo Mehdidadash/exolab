@@ -22,7 +22,9 @@ $allowedStatusIds = getAllowedStatusIdsForUser();
 $user = current_user();
 $isDoctor = ($user['role'] === 'doctor');
 $isDesigner = ($user['role'] === 'designer');
-$designers = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name")->fetchAll();
+$designers = getAllDesigners();
+$defaultDesigner = getDefaultDesigner();
+$defaultDesignerId = $defaultDesigner ? (int) $defaultDesigner['id'] : 0;
 $prices = getAllPrices();
 // At the very top, after require_once
 date_default_timezone_set('Asia/Tehran');
@@ -55,6 +57,18 @@ if (empty($_GET['date_to'])) {
 } else {
     $filterDateTo = parseJalaliToGregorian($_GET['date_to']);
     if ($filterDateTo === '') $filterDateTo = date('Y-m-d');
+}
+
+// When creating a SUB-CASE (?add_sub=PARENT_ID) we prefill the new case's form
+// from the parent case to save the user's time.
+$addSubParent = null;
+if (!empty($_GET['add_sub'])) {
+    $ps = db()->prepare('SELECT c.*, p.title AS service_title FROM cases c LEFT JOIN site_prices p ON c.service_id = p.id WHERE c.id = ?');
+    $ps->execute([(int) $_GET['add_sub']]);
+    $addSubParent = $ps->fetch();
+    if ($addSubParent) {
+        $addSubParent['received_date_jalali'] = toJalaliDateFormatted($addSubParent['received_date'] ?? date('Y-m-d'));
+    }
 }
 
 panel_layout_start('مدیریت کیس‌ها');
@@ -171,8 +185,8 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label for="case-lab-id" id="lab-label">لابراتوار</label>
                     <select id="case-lab-id" name="lab_id">
                         <option value="">انتخاب لابراتوار...</option>
-                        <?php $labs = db()->query("SELECT id, full_name, role FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name"); foreach ($labs as $lab): ?>
-                        <option value="<?= $lab['id'] ?>" data-role="<?= $lab['role'] ?>"><?= htmlspecialchars($lab['full_name']) ?></option>
+                        <?php $allLabs = getAllLabs(); foreach ($allLabs as $lab): ?>
+                        <option value="<?= $lab['id'] ?>" data-role="<?= $lab['role'] ?>"><?= htmlspecialchars($lab['full_name']) ?><?= !empty($lab['branch_name']) ? ' (' . htmlspecialchars($lab['branch_name']) . ')' : '' ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
@@ -180,44 +194,49 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label for="case-designer-id">طراح</label>
                     <select id="case-designer-id" name="designer_id">
                         <option value="">بدون طراح</option>
-                        <?php $caseModalDesigners = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 ORDER BY full_name"); foreach ($caseModalDesigners as $des): ?>
-                        <option value="<?= $des['id'] ?>"><?= htmlspecialchars($des['full_name']) ?></option>
+                        <?php $caseModalDesigners = getAllDesigners(); foreach ($caseModalDesigners as $des): ?>
+                        <option value="<?= $des['id'] ?>" <?= (int) $des['id'] === $defaultDesignerId ? 'selected' : '' ?>><?= htmlspecialchars($des['full_name']) ?><?= !empty($des['is_default_designer']) ? ' (پیش‌فرض)' : '' ?></option>
                         <?php endforeach; ?>
                     </select>
                 </div>
                 <?php if (!$isDoctor): ?>
-                <div class="form-group" id="side-outsource-group" style="grid-column:1/3; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:12px;">
-                    <strong style="color:#15803d; font-size:0.95rem;">برون‌سپاری جانبی (بدهی به لابراتوار)</strong>
-                    <small style="display:block; color:#525252; margin:4px 0 8px;">اگر بخشی از این کیس توسط لابراتوار همکار/برون‌سپاری/مشتری انجام شود (مثلاً ۵ واحد روکش کار خودتان است ولی پرینت کست یک فک را لابراتوار دیگر انجام می‌دهد)، این‌جا مشخص کنید تا در فاکتور مخارج همان لابراتوار لحاظ شود.</small>
-                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
-                        <div style="flex:1; min-width:150px;">
-                            <label for="case-outsourced-lab">لابراتوار (گیرنده بخشی از کار)</label>
-                            <select id="case-outsourced-lab" name="outsourced_lab_id">
-                                <option value="">ندارد</option>
-                                <?php $sideOutsourceLabs = db()->query("SELECT id, full_name, role FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name"); foreach ($sideOutsourceLabs as $lab): ?>
-                                <option value="<?= $lab['id'] ?>"><?= htmlspecialchars($lab['full_name']) ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                <div class="form-group" id="side-outsource-group" style="grid-column:1/-1; border:1px solid #bbf7d0; border-radius:8px; overflow:hidden; padding:0;">
+                    <button type="button" id="side-outsource-toggle" class="btn" style="width:100%; background:#f0fdf4; color:#15803d; border:none; border-radius:0; text-align:right; display:flex; justify-content:space-between; align-items:center; padding:11px 14px; font-weight:700; cursor:pointer;">
+                        <span>🔄 برون‌سپاری جانبی (بدهی به لابراتوار)</span>
+                        <span class="side-outsource-caret" style="font-size:0.8rem;">▾</span>
+                    </button>
+                    <div id="side-outsource-body" style="display:none; background:#f0fdf4; padding:12px;">
+                        <small style="display:block; color:#525252; margin:0 0 8px;">اگر بخشی از این کیس توسط لابراتوار همکار/برون‌سپاری/مشتری انجام شود (مثلاً ۵ واحد روکش کار خودتان است ولی پرینت کست یک فک را لابراتوار دیگر انجام می‌دهد)، این‌جا مشخص کنید تا در فاکتور مخارج همان لابراتوار لحاظ شود.</small>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+                            <div style="flex:1; min-width:150px;">
+                                <label for="case-outsourced-lab">لابراتوار (گیرنده بخشی از کار)</label>
+                                <select id="case-outsourced-lab" name="outsourced_lab_id">
+                                    <option value="">ندارد</option>
+                                    <?php foreach ($allLabs as $lab): ?>
+                                    <option value="<?= $lab['id'] ?>"><?= htmlspecialchars($lab['full_name']) ?><?= !empty($lab['branch_name']) ? ' (' . htmlspecialchars($lab['branch_name']) . ')' : '' ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div style="flex:1; min-width:150px;">
+                                <label for="case-outsourced-service">خدمت برون‌سپاری‌شده</label>
+                                <select id="case-outsourced-service" name="outsourced_service_id">
+                                    <option value="">انتخاب...</option>
+                                    <?php foreach ($prices as $price): ?>
+                                    <option value="<?= $price['id'] ?>"><?= htmlspecialchars($price['title']) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div style="width:110px;">
+                                <label for="case-outsourced-qty">تعداد برون‌سپاری</label>
+                                <input type="number" id="case-outsourced-qty" name="outsourced_qty" min="0" step="1" value="0">
+                            </div>
+                            <div style="width:130px;">
+                                <label for="case-outsourced-rate">نرخ (تومان)</label>
+                                <input type="number" id="case-outsourced-rate" name="outsourced_rate" min="0" step="1" placeholder="خودکار از نرخ‌ها">
+                            </div>
                         </div>
-                        <div style="flex:1; min-width:150px;">
-                            <label for="case-outsourced-service">خدمت برون‌سپاری‌شده</label>
-                            <select id="case-outsourced-service" name="outsourced_service_id">
-                                <option value="">انتخاب...</option>
-                                <?php foreach ($prices as $price): ?>
-                                <option value="<?= $price['id'] ?>"><?= htmlspecialchars($price['title']) ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div style="width:110px;">
-                            <label for="case-outsourced-qty">تعداد برون‌سپاری</label>
-                            <input type="number" id="case-outsourced-qty" name="outsourced_qty" min="0" step="1" value="0">
-                        </div>
-                        <div style="width:130px;">
-                            <label for="case-outsourced-rate">نرخ (تومان)</label>
-                            <input type="number" id="case-outsourced-rate" name="outsourced_rate" min="0" step="1" placeholder="خودکار از نرخ‌ها">
-                        </div>
+                        <small style="display:block; color:#525252; margin-top:6px;">با انتخاب لابراتوار و خدمت، نرخ اختصاصی آن‌ها به‌صورت خودکار وارد می‌شود. اگر نرخی ثبت نشده باشد، می‌توانید به‌صورت دستی وارد کنید.</small>
                     </div>
-                    <small style="display:block; color:#525252; margin-top:6px;">با انتخاب لابراتوار و خدمت، نرخ اختصاصی آن‌ها به‌صورت خودکار وارد می‌شود. اگر نرخی ثبت نشده باشد، می‌توانید به‌صورت دستی وارد کنید.</small>
                 </div>
                 <?php endif; ?>
                 <div class="form-group">
@@ -249,17 +268,18 @@ panel_layout_start('مدیریت کیس‌ها');
                         <option value="both">هر دو</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label for="case-teeth">دندان (مثال: 11,12)</label>
-                    <input id="case-teeth" name="teeth">
+                <div class="form-group" style="grid-column:1/-1;">
+                    <label for="case-teeth-picker">دندان</label>
+                    <div id="case-teeth-picker" class="case-teeth-picker" aria-label="انتخاب دندان‌ها"></div>
+                    <input type="hidden" id="case-teeth" name="teeth" value="">
                 </div>
                 <div class="form-group">
                     <label for="case-shade">سایه</label>
                     <input id="case-shade" name="shade">
                 </div>
                 <div class="form-group">
-                    <label for="case-quantity">تعداد</label>
-                    <input type="number" id="case-quantity" name="quantity" value="1">
+                    <label for="case-quantity">تعداد <small style="color:#64748b; font-weight:400;">(خودکار)</small></label>
+                    <input type="number" id="case-quantity" name="quantity" value="1" readonly style="background:#f3f4f6; cursor:not-allowed;">
                 </div>
                 <?php if ($isDoctor): ?>
                 <input type="hidden" id="case-unit-price" name="unit_price" step="1">
@@ -295,12 +315,12 @@ panel_layout_start('مدیریت کیس‌ها');
                     </select>
                 </div>
                 <?php endif; ?>
-                <div class="form-group" style="grid-column:1/3;">
+                <div class="form-group" style="grid-column:1/-1;">
                     <label for="case-description">توضیحات</label>
                     <textarea id="case-description" name="description" rows="3"></textarea>
                 </div>
                 <?php if (!$isDoctor): ?>
-                <div class="form-group" style="grid-column:1/3;">
+                <div class="form-group" style="grid-column:1/-1;">
                     <label for="case-files">فایل طراحی (STL / PLY)</label>
                     <input type="file" id="case-files" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.rar,.zip" multiple>
                     <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-weight:600; font-size:0.9rem; cursor:pointer;">
@@ -381,6 +401,8 @@ panel_layout_start('مدیریت کیس‌ها');
 </div>
 
 <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
+<link rel="stylesheet" href="../assets/css/case-teeth-picker.css">
+<script src="../assets/js/case-teeth-picker.js"></script>
 <style>
     .modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.45); z-index:9999; }
     .modal .modal-content{ max-height:90vh; overflow:auto; box-shadow:0 8px 24px rgba(0,0,0,0.2); background:white; border-radius:4px; }
@@ -681,7 +703,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
                     { data: 0, render: function(data, type, row){ if (type === 'display' && row[14]) { return '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>'; } return data; } },
                     { data: 1 },
-                    { data: 12 }, /* designer */
+                    { data: 12, visible: <?= canSeeDesignerInfo() ? 'true' : 'false' ?> }, /* designer – internal only */
                     { data: 2 },
                     { data: 3 },
                     { data: 4 },
@@ -763,11 +785,53 @@ panel_layout_start('مدیریت کیس‌ها');
                 table.ajax.reload();
             });
 
+            // ── Teeth ↔ location ↔ quantity auto logic ──
+            // Quantity is never manually edited: it follows the selection.
+            function countTeethFromValue(v){
+                if (!v) return 0;
+                var n = 0;
+                String(v).split(',').forEach(function(g){ g.split('_').forEach(function(t){ if (String(t).trim()) n++; }); });
+                return n;
+            }
+            function updateTeethForLocation(){
+                var loc = jQuery('#case-location-type').val();
+                var picker = document.getElementById('case-teeth-picker');
+                if (!picker) return;
+                if (loc === 'upper' || loc === 'lower' || loc === 'both') {
+                    // A whole jaw → no individual teeth selectable
+                    picker.classList.add('is-disabled');
+                    if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
+                    else { jQuery('#case-teeth').val(''); }
+                } else {
+                    picker.classList.remove('is-disabled');
+                }
+            }
+            function updateCaseQuantity(){
+                var loc = jQuery('#case-location-type').val();
+                var qty = jQuery('#case-quantity');
+                if (!qty.length) return;
+                if (loc === 'both') { qty.val(2); }
+                else if (loc === 'upper' || loc === 'lower') { qty.val(1); }
+                else {
+                    var v = (window.CaseTeethPicker ? CaseTeethPicker.getValue() : '') || jQuery('#case-teeth').val() || '';
+                    var n = countTeethFromValue(v);
+                    qty.val(n > 0 ? n : 1);
+                }
+            }
+            jQuery(document).on('change', '#case-location-type', function(){
+                updateTeethForLocation();
+                updateCaseQuantity();
+            });
+            jQuery(document).on('click', '#case-teeth-picker .case-tooth-button, #case-teeth-picker .case-bridge-key, #case-teeth-picker .case-teeth-picker__clear', function(){
+                setTimeout(updateCaseQuantity, 10);
+            });
+
             jQuery('#add-case-btn').on('click', function(e){
                 e.preventDefault();
                 jQuery('#case-form')[0].reset();
                 jQuery('#case-id').val('');
                 jQuery('#case-parent-id').val('');
+                if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
                 openCaseModal();
             });
 
@@ -778,6 +842,25 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-form')[0].reset();
                 jQuery('#case-id').val('');
                 jQuery('#case-parent-id').val(addSub);
+                if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
+                // Prefill from the parent case to save time
+                var parentCase = <?= json_encode($addSubParent ?? null, JSON_UNESCAPED_UNICODE) ?>;
+                if (parentCase) {
+                    jQuery('#case-type').val(parentCase.case_type || 'doctor');
+                    toggleCaseType(jQuery('#case-type').val());
+                    jQuery('#case-doctor-id').val(parentCase.doctor_id || '');
+                    jQuery('#case-patient-name').val(parentCase.patient_name || '');
+                    jQuery('#case-service-id').val(parentCase.service_id || '');
+                    jQuery('#case-location-type').val(parentCase.location_type || '');
+                    if (window.CaseTeethPicker) { CaseTeethPicker.setValue(parentCase.teeth || ''); }
+                    else { jQuery('#case-teeth').val(parentCase.teeth || ''); }
+                    jQuery('#case-received-date').val(parentCase.received_date_jalali || todayJalali);
+                    updateTeethForLocation();
+                    updateCaseQuantity();
+                    <?php if (!$isDoctor): ?>
+                    setTimeout(function(){ initCaseReceivedDate(); }, 100);
+                    <?php endif; ?>
+                }
                 openCaseModal('افزودن کیس زیرمجموعه برای کیس #' + addSub);
             }
 
@@ -829,6 +912,8 @@ panel_layout_start('مدیریت کیس‌ها');
                 if (!jQuery('#case-received-date').val()) {
                     jQuery('#case-received-date').val(todayJalali);
                 }
+                updateTeethForLocation();
+                updateCaseQuantity();
                 <?php if (!$isDoctor): ?>
                 setTimeout(function(){ initCaseReceivedDate(); }, 100);
                 <?php endif; ?>
@@ -836,6 +921,7 @@ panel_layout_start('مدیریت کیس‌ها');
             function closeCaseModal(){
                 jQuery('#case-modal').css({display: 'none'});
                 jQuery('#case-form')[0].reset();
+                if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
                 jQuery('#case-save').prop('disabled', false).text('ذخیره');
                 var selSpan = document.getElementById('case-files-selection');
                 if (selSpan) selSpan.style.display = 'none';
@@ -870,6 +956,21 @@ panel_layout_start('مدیریت کیس‌ها');
                 });
             }
             jQuery(document).on('change', '#case-outsourced-lab, #case-outsourced-service', fetchOutsourceRate);
+
+            // Toggle the collapsible side-outsourcing section (robust open/close)
+            (function(){
+                var soOpen = false;
+                var soBtn = document.getElementById('side-outsource-toggle');
+                var soBody = document.getElementById('side-outsource-body');
+                var soCaret = document.querySelector('.side-outsource-caret');
+                if (soBtn && soBody) soBtn.addEventListener('click', function(e){
+                    e.preventDefault();
+                    e.stopPropagation();
+                    soOpen = !soOpen;
+                    soBody.style.display = soOpen ? 'block' : 'none';
+                    if (soCaret) soCaret.textContent = soOpen ? '▴' : '▾';
+                });
+            })();
 
 
             // Show selected file count + total size for the case modal file input
@@ -918,7 +1019,10 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-receipt-number').val(data.receipt_number || '');
                 jQuery('#case-service-id').val(data.service_id || '');
                 jQuery('#case-location-type').val(data.location_type || '');
-                jQuery('#case-teeth').val(data.teeth || '');
+                if (window.CaseTeethPicker) { CaseTeethPicker.setValue(data.teeth || ''); }
+                else { jQuery('#case-teeth').val(data.teeth || ''); }
+                updateTeethForLocation();
+                updateCaseQuantity();
                 jQuery('#case-shade').val(data.shade || '');
                 jQuery('#case-quantity').val(data.quantity || 1);
                 jQuery('#case-unit-price').val(data.unit_price || '');

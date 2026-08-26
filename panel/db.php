@@ -17,6 +17,8 @@ function db() {
             ensureCasesDesignFeeColumn($pdo);
             ensureDoctorPriceOverrideTypeColumn($pdo);
             ensureCasesOutsourcedRateColumn($pdo);
+            ensureCaseFilesDescriptionColumn($pdo);
+            ensureUserUploadsDescriptionColumn($pdo);
         } catch (Throwable $e) {}
     }
     return $pdo;
@@ -62,10 +64,259 @@ function ensureCasesOutsourcedRateColumn($pdo) {
     }
 }
 
-// ----- Price functions (unchanged) -----
+function ensureCaseFilesDescriptionColumn($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'case_files' AND COLUMN_NAME = 'description'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int)$row['cnt'] === 0) {
+        $pdo->exec("ALTER TABLE case_files ADD COLUMN description TEXT NULL AFTER original_name");
+    }
+}
+
+function ensureUserUploadsDescriptionColumn($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'user_uploads' AND COLUMN_NAME = 'description'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int)$row['cnt'] === 0) {
+        $pdo->exec("ALTER TABLE user_uploads ADD COLUMN description TEXT NULL AFTER original_name");
+    }
+}
+
+/**
+ * Given an original file name, return a unique display name for a case.
+ * If another file with the same name is already attached to the case,
+ * append "_YYYYMMDD" before the extension (and a counter if still taken).
+ */
+function uniqueCaseFileName(int $caseId, string $originalName): string {
+    $used = db()->prepare('SELECT original_name FROM case_files WHERE case_id = ?');
+    $used->execute([$caseId]);
+    $existing = array_map('strval', $used->fetchAll(PDO::FETCH_COLUMN));
+    if (!in_array($originalName, $existing, true)) {
+        return $originalName;
+    }
+    $ext = pathinfo($originalName, PATHINFO_EXTENSION);
+    $base = pathinfo($originalName, PATHINFO_FILENAME);
+    $suffix = '_' . date('Ymd');
+    $candidate = $base . $suffix . ($ext !== '' ? '.' . $ext : '');
+    $i = 1;
+    while (in_array($candidate, $existing, true)) {
+        $i++;
+        $candidate = $base . $suffix . '_' . $i . ($ext !== '' ? '.' . $ext : '');
+    }
+    return $candidate;
+}
+
+/**
+ * Same as uniqueCaseFileName but for standalone user uploads (uploader-scoped).
+ */
+function uniqueUserUploadName(int $userId, ?int $caseId, string $originalName): string {
+    if ($caseId) {
+        $used = db()->prepare('SELECT original_name FROM user_uploads WHERE case_id = ?');
+        $used->execute([$caseId]);
+    } else {
+        $used = db()->prepare('SELECT original_name FROM user_uploads WHERE user_id = ? AND case_id IS NULL');
+        $used->execute([$userId]);
+    }
+    $existing = array_map('strval', $used->fetchAll(PDO::FETCH_COLUMN));
+    if (!in_array($originalName, $existing, true)) {
+        return $originalName;
+    }
+    $ext = pathinfo($originalName, PATHINFO_EXTENSION);
+    $base = pathinfo($originalName, PATHINFO_FILENAME);
+    $suffix = '_' . date('Ymd');
+    $candidate = $base . $suffix . ($ext !== '' ? '.' . $ext : '');
+    $i = 1;
+    while (in_array($candidate, $existing, true)) {
+        $i++;
+        $candidate = $base . $suffix . '_' . $i . ($ext !== '' ? '.' . $ext : '');
+    }
+    return $candidate;
+}
+
+// ----- Branch helpers (multi-branch / hierarchical lab system) -----
+
+/** Get a single branch row. */
+function getBranch(int $id): ?array {
+    $stmt = db()->prepare('SELECT b.*, u.full_name AS owner_name FROM branches b LEFT JOIN users u ON b.owner_user_id = u.id WHERE b.id = ?');
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+/** All branches (ordered). */
+function getAllBranches(): array {
+    $stmt = db()->query('SELECT b.*, u.full_name AS owner_name FROM branches b LEFT JOIN users u ON b.owner_user_id = u.id ORDER BY b.id ASC');
+    return $stmt->fetchAll();
+}
+
+/**
+ * Labs across ALL branches (for inter-branch outsourcing). A branch may outsource
+ * work to any lab, including the central branch's lab, so the case-form lab
+ * dropdown must not be limited to the current branch. Each row includes the
+ * owning branch name so the UI can label where the lab belongs.
+ */
+function getAllLabs(): array {
+    return db()->query("SELECT u.id, u.full_name, u.role, u.branch_id, b.name AS branch_name
+        FROM users u
+        LEFT JOIN branches b ON u.branch_id = b.id
+        WHERE u.role IN ('outsource_lab','partner_lab','customer_lab','lab') AND u.active = 1
+        ORDER BY u.branch_id IS NULL, b.name, u.full_name")->fetchAll();
+}
+
+/**
+ * The branch the current user is scoped to.
+ * - Root admin (role = 'admin') is ALWAYS global → returns null, regardless of branch_id.
+ * - A branch-scoped user (branch_id set, e.g. branch_admin/staff/doctor) sees only that branch.
+ * - A user with branch_id NULL sees everything (returns null).
+ */
+function currentBranchId(): ?int {
+    if (!function_exists('current_user')) return null;
+    $user = current_user();
+    if (!$user) return null;
+    if ($user['role'] === 'admin') return null;   // root admin is always global
+    $bid = $user['branch_id'] ?? null;
+    return $bid !== null && $bid !== '' ? (int) $bid : null;
+}
+
+/** Whether the current user may access a given branch. */
+function canAccessBranch(int $branchId): bool {
+    $user = current_user();
+    if (!$user) return false;
+    if (has_permission('view_all_cases') && (($user['branch_id'] ?? null) === null || $user['branch_id'] === '')) {
+        return true; // root/global admin sees all branches
+    }
+    return ((int) ($user['branch_id'] ?? 0)) === $branchId;
+}
+
+/**
+ * Build a WHERE-clause snippet + params to scope a query to the current user's branch.
+ * Returns ['sql' => '...', 'params' => [...], 'scoped' => bool].
+ * $alias = the table alias used in the query for the branch-bearing table.
+ * $column = the column name holding branch_id (default 'branch_id').
+ */
+function branchScope(string $alias, string $column = 'branch_id'): array {
+    $bid = currentBranchId();
+    if ($bid === null) {
+        return ['sql' => '1=1', 'params' => [], 'scoped' => false];
+    }
+    return ['sql' => "{$alias}.{$column} = ?", 'params' => [(int) $bid], 'scoped' => true];
+}
+
+/**
+ * Case visibility for a branch-scoped user (a branch manager or any user of a branch).
+ * A user sees:
+ *   - cases OWNED by their branch (branch_id = theirs)
+ *   - cases where their branch is the SOURCE/partner (source_branch_id = theirs) —
+ *     i.e. work outsourced to them or from them (two-financial-views shared case).
+ *   - cases of doctors GRANTED to them via branch_doctor_access.
+ * Root/global admins see everything.
+ * Returns ['sql' => '...', 'params' => [...], 'scoped' => bool].
+ */
+function branchCaseScope(string $alias = 'c'): array {
+    $bid = currentBranchId();
+    if ($bid === null) {
+        return ['sql' => '1=1', 'params' => [], 'scoped' => false];
+    }
+    $granted = accessibleDoctorIds();
+    // Whole expression is wrapped in parentheses so that combining it with other
+    // AND conditions elsewhere in the query keeps correct operator precedence.
+    $sql = "({$alias}.branch_id = ? OR {$alias}.source_branch_id = ?";
+    $params = [(int) $bid, (int) $bid];
+    if (!empty($granted)) {
+        $ph = implode(',', array_fill(0, count($granted), '?'));
+        $sql .= " OR {$alias}.doctor_id IN ({$ph})";
+        $params = array_merge($params, $granted);
+    }
+    $sql .= ")";
+    return ['sql' => $sql, 'params' => $params, 'scoped' => true];
+}
+
+/**
+ * Doctor OWNERSHIP: a doctor belongs to the branch stored in users.branch_id.
+ * A branch may access doctors that:
+ *   - belong to their branch (users.branch_id = theirs), OR
+ *   - are granted to them via branch_doctor_access (by the owning branch).
+ * Cross-branch OUTSOURCING gives case visibility only, never financial access
+ * to another branch's doctor.
+ *
+ * Returns the list of doctor IDs the current branch may access
+ * (empty = global/root admin → unrestricted).
+ */
+function accessibleDoctorIds(): array {
+    $bid = currentBranchId();
+    if ($bid === null) {
+        return []; // root admin: unrestricted
+    }
+    $ids = [];
+    // Owned doctors
+    $stmt = db()->prepare('SELECT id FROM users WHERE role = "doctor" AND branch_id = ?');
+    $stmt->execute([$bid]);
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $v) $ids[(int) $v] = true;
+    // Granted doctors (another branch gave us access)
+    $stmt = db()->prepare('SELECT doctor_id FROM branch_doctor_access WHERE branch_id = ?');
+    $stmt->execute([$bid]);
+    foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $v) $ids[(int) $v] = true;
+    return array_keys($ids);
+}
+
+/**
+ * Doctor ownership scope for SQL: a branch sees its own doctors + granted doctors.
+ * Returns ['sql' => ..., 'params' => [...]]. Unrestricted for root admin.
+ * $column = the doctor id column (e.g. 'c.doctor_id', 'i.doctor_id').
+ */
+function doctorBranchScope(string $column): array {
+    $ids = accessibleDoctorIds();
+    if (empty($ids)) {
+        return ['sql' => '1=1', 'params' => []];
+    }
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    return ['sql' => "{$column} IN ({$ph})", 'params' => $ids];
+}
+
+/**
+ * Whether the current branch may access a given doctor's financial data
+ * (cases, invoices, payments). Root admin → always true.
+ */
+function canAccessDoctorFinancially(int $doctorId): bool {
+    if (currentBranchId() === null) return true;
+    return in_array($doctorId, accessibleDoctorIds(), true);
+}
+
+/**
+ * Designers visible to the current user for case assignment.
+ * - Root admin: all designers.
+ * - Branch user: designers of their own branch PLUS the default designer
+ *   (is_default_designer=1, wherever they belong) so branches/partner labs can
+ *   auto-select the default designer. Includes the is_default_designer flag.
+ */
+function getAllDesigners(): array {
+    $bid = currentBranchId();
+    if ($bid === null) {
+        $stmt = db()->query("SELECT id, full_name, is_default_designer FROM users WHERE is_designer=1 AND active=1 ORDER BY is_default_designer DESC, full_name");
+        return $stmt->fetchAll();
+    }
+    $stmt = db()->prepare("SELECT id, full_name, is_default_designer FROM users WHERE is_designer=1 AND active=1 AND (branch_id = ? OR is_default_designer = 1) ORDER BY is_default_designer DESC, full_name");
+    $stmt->execute([$bid]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * The default designer (is_default_designer=1) for auto-assignment when a
+ * partner lab / branch creates a case. Returns array|false.
+ */
+function getDefaultDesigner() {
+    $stmt = db()->query("SELECT id, full_name FROM users WHERE is_designer=1 AND active=1 AND is_default_designer=1 ORDER BY id LIMIT 1");
+    return $stmt->fetch();
+}
+
+// ----- Price functions -----
+/**
+ * site_prices is the SHARED standard service catalog: all branches use the same
+ * service titles/units/IDs. Each branch may override a price per service via
+ * branch_service_prices. This function returns the shared catalog.
+ */
 function getPrices() {
-    $stmt = db()->prepare("SELECT * FROM site_prices WHERE active = 1 ORDER BY (display_order = 0) ASC, CASE WHEN display_order = 0 THEN id ELSE display_order END ASC");
-    $stmt->execute();
+    $stmt = db()->query("SELECT * FROM site_prices WHERE active = 1 ORDER BY (display_order = 0) ASC, CASE WHEN display_order = 0 THEN id ELSE display_order END ASC");
     return $stmt->fetchAll();
 }
 
@@ -78,6 +329,39 @@ function getPrice($id) {
 function getAllPrices() {
     $stmt = db()->query("SELECT * FROM site_prices ORDER BY (display_order = 0) ASC, CASE WHEN display_order = 0 THEN id ELSE display_order END ASC");
     return $stmt->fetchAll();
+}
+
+/** Get the current branch's custom price for a service (or null if none set). */
+function getBranchServiceCustomPrice(int $serviceId): ?float {
+    $bid = currentBranchId();
+    if ($bid === null) return null;
+    $stmt = db()->prepare('SELECT custom_price FROM branch_service_prices WHERE branch_id = ? AND service_id = ?');
+    $stmt->execute([$bid, $serviceId]);
+    $val = $stmt->fetchColumn();
+    return ($val !== false && $val !== null) ? (float) $val : null;
+}
+
+/** Set (insert/update) the current branch's custom price for a service. */
+function setBranchServiceCustomPrice(int $serviceId, ?float $price): void {
+    $bid = currentBranchId();
+    if ($bid === null) return; // root admin manages the shared catalog
+    $existing = db()->prepare('SELECT id FROM branch_service_prices WHERE branch_id = ? AND service_id = ?');
+    $existing->execute([$bid, $serviceId]);
+    $id = $existing->fetchColumn();
+    if ($price === null || $price <= 0) {
+        if ($id) {
+            $del = db()->prepare('DELETE FROM branch_service_prices WHERE id = ?');
+            $del->execute([$id]);
+        }
+        return;
+    }
+    if ($id) {
+        $upd = db()->prepare('UPDATE branch_service_prices SET custom_price = ?, updated_at = NOW() WHERE id = ?');
+        $upd->execute([$price, $id]);
+    } else {
+        $ins = db()->prepare('INSERT INTO branch_service_prices (branch_id, service_id, custom_price, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())');
+        $ins->execute([$bid, $serviceId, $price]);
+    }
 }
 
 // ----- Portfolio functions (unchanged) -----
@@ -99,8 +383,29 @@ function getAllPortfolioWorks() {
 }
 
 // ----- User/Doctor functions (using users table) -----
+/**
+ * Doctors visible to the current user.
+ * - Root admin: all doctors.
+ * - Branch user: doctors OWNED by their branch (users.branch_id = theirs)
+ *   OR granted to them via branch_doctor_access. Doctors with NULL branch
+ *   are treated as global/shared (visible to all branches).
+ */
 function getAllDoctors() {
-    $stmt = db()->query('SELECT id, full_name AS name, email, phone, notes, active FROM users WHERE role = "doctor" ORDER BY full_name ASC');
+    $bid = currentBranchId();
+    if ($bid === null) {
+        $stmt = db()->query('SELECT id, full_name AS name, email, phone, notes, active FROM users WHERE role = "doctor" ORDER BY full_name ASC');
+        return $stmt->fetchAll();
+    }
+    $granted = accessibleDoctorIds();
+    $where = '(branch_id = ? OR branch_id IS NULL)';
+    $params = [$bid];
+    if (!empty($granted)) {
+        $ph = implode(',', array_fill(0, count($granted), '?'));
+        $where .= ' OR id IN (' . $ph . ')';
+        $params = array_merge($params, $granted);
+    }
+    $stmt = db()->prepare('SELECT id, full_name AS name, email, phone, notes, active FROM users WHERE role = "doctor" AND ' . $where . ' ORDER BY full_name ASC');
+    $stmt->execute($params);
     return $stmt->fetchAll();
 }
 
@@ -115,7 +420,7 @@ function getAllDoctorAndClinicUsers() {
 }
 
 function getDoctor($id) {
-    $stmt = db()->prepare('SELECT id, full_name AS name, email, phone, notes, active, clinic_id, last_login FROM users WHERE id = ? AND role = "doctor" LIMIT 1');
+    $stmt = db()->prepare('SELECT id, full_name AS name, email, phone, notes, active, clinic_id, lab_id, last_login FROM users WHERE id = ? AND role = "doctor" LIMIT 1');
     $stmt->execute([(int) $id]);
     $result = $stmt->fetch();
     return $result;
@@ -132,11 +437,12 @@ function saveDoctor($data) {
     $now = date('Y-m-d H:i:s');
     $newPasswordHash = !empty($data['password']) ? password_hash($data['password'], PASSWORD_DEFAULT) : null;
     $clinicId = !empty($data['clinic_id']) ? (int) $data['clinic_id'] : null;
+    $labId = !empty($data['lab_id']) ? (int) $data['lab_id'] : null;
 
     if (isset($data['id']) && !empty($data['id'])) {
         // Update existing user
         if ($newPasswordHash !== null) {
-            $stmt = db()->prepare('UPDATE users SET full_name = ?, email = ?, phone = ?, active = ?, notes = ?, clinic_id = ?, password_hash = ?, updated_at = ? WHERE id = ? AND role = "doctor"');
+            $stmt = db()->prepare('UPDATE users SET full_name = ?, email = ?, phone = ?, active = ?, notes = ?, clinic_id = ?, lab_id = ?, password_hash = ?, updated_at = ? WHERE id = ? AND role = "doctor"');
             $stmt->execute([
                 $data['name'],
                 $data['email'] ?? null,
@@ -144,12 +450,13 @@ function saveDoctor($data) {
                 $data['active'] ?? 1,
                 $data['notes'] ?? null,
                 $clinicId,
+                $labId,
                 $newPasswordHash,
                 $now,
                 (int) $data['id']
             ]);
         } else {
-            $stmt = db()->prepare('UPDATE users SET full_name = ?, email = ?, phone = ?, active = ?, notes = ?, clinic_id = ?, updated_at = ? WHERE id = ? AND role = "doctor"');
+            $stmt = db()->prepare('UPDATE users SET full_name = ?, email = ?, phone = ?, active = ?, notes = ?, clinic_id = ?, lab_id = ?, updated_at = ? WHERE id = ? AND role = "doctor"');
             $stmt->execute([
                 $data['name'],
                 $data['email'] ?? null,
@@ -157,6 +464,7 @@ function saveDoctor($data) {
                 $data['active'] ?? 1,
                 $data['notes'] ?? null,
                 $clinicId,
+                $labId,
                 $now,
                 (int) $data['id']
             ]);
@@ -165,7 +473,7 @@ function saveDoctor($data) {
     } else {
         // Insert new user with role 'doctor'
         $username = $data['email'] ?? $data['phone'] ?? 'doc_' . uniqid();
-        $stmt = db()->prepare('INSERT INTO users (username, password_hash, full_name, email, phone, role, active, notes, clinic_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, "doctor", ?, ?, ?, ?, ?)');
+        $stmt = db()->prepare('INSERT INTO users (username, password_hash, full_name, email, phone, role, active, notes, clinic_id, lab_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, "doctor", ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $username,
             $newPasswordHash,
@@ -175,6 +483,7 @@ function saveDoctor($data) {
             $data['active'] ?? 1,
             $data['notes'] ?? null,
             $clinicId,
+            $labId,
             $now,
             $now
         ]);
@@ -484,7 +793,8 @@ function saveInvoice($data) {
         ]);
         $invoiceId = (int) $data['id'];
     } else {
-        $stmt = db()->prepare('INSERT INTO doctor_invoices (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, due_date, notes, bank_account_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $branchId = currentBranchId() ?? 1;
+        $stmt = db()->prepare('INSERT INTO doctor_invoices (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, due_date, notes, bank_account_id, branch_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $data['invoice_number'],
             $data['doctor_id'] ?: null,
@@ -497,6 +807,7 @@ function saveInvoice($data) {
             $data['due_date'] ?? null,
             $data['notes'] ?? null,
             $bankAccountId,
+            $branchId,
             $now
         ]);
         $invoiceId = db()->lastInsertId();
@@ -535,6 +846,17 @@ function deleteInvoice($id) {
 
 // ----- Payment functions -----
 function getAllPayments() {
+    $bid = currentBranchId();
+    $filter = '';
+    if ($bid !== null) {
+        $granted = accessibleDoctorIds();
+        $filter = ' WHERE (p.branch_id = ' . (int) $bid;
+        if (!empty($granted)) {
+            $ph = implode(',', array_fill(0, count($granted), '?'));
+            $filter .= " OR p.doctor_id IN ({$ph})";
+        }
+        $filter .= ')';
+    }
     $stmt = db()->query('SELECT p.*, b.bank_name, b.account_owner_name,
             COALESCE(u.full_name, p.doctor_name) AS doctor_name,
             GROUP_CONCAT(DISTINCT i.invoice_number SEPARATOR ", ") AS linked_invoices
@@ -542,9 +864,9 @@ function getAllPayments() {
         LEFT JOIN bank_accounts b ON p.bank_account_id = b.id
         LEFT JOIN users u ON p.doctor_id = u.id
         LEFT JOIN doctor_payment_invoices pi ON pi.payment_id = p.id
-        LEFT JOIN doctor_invoices i ON i.id = pi.invoice_id
+        LEFT JOIN doctor_invoices i ON i.id = pi.invoice_id' . $filter . "
         GROUP BY p.id
-        ORDER BY p.payment_date DESC, p.id DESC');
+        ORDER BY p.payment_date DESC, p.id DESC");
     return $stmt->fetchAll();
 }
 
@@ -620,7 +942,8 @@ function savePayment($data) {
         ]);
         $paymentId = (int) $data['id'];
     } else {
-        $stmt = db()->prepare('INSERT INTO doctor_payments (doctor_id, doctor_name, amount, payment_method, payment_date, transaction_number, bank_account_id, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $branchId = currentBranchId() ?? 1;
+        $stmt = db()->prepare('INSERT INTO doctor_payments (doctor_id, doctor_name, amount, payment_method, payment_date, transaction_number, bank_account_id, notes, branch_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $data['doctor_id'] ?: null,
             $data['doctor_name'] ?? '',
@@ -630,6 +953,7 @@ function savePayment($data) {
             $data['transaction_number'] ?? null,
             $data['bank_account_id'] ?? null,
             $data['notes'] ?? null,
+            $branchId,
             $now
         ]);
         $paymentId = db()->lastInsertId();
@@ -664,7 +988,13 @@ function getAllInvoiceLinks($invoice_id) {
 
 // ----- Bank Account functions (unchanged) -----
 function getAllBankAccounts() {
-    $stmt = db()->query('SELECT * FROM bank_accounts ORDER BY is_active DESC, id DESC');
+    $bid = currentBranchId();
+    if ($bid === null) {
+        $stmt = db()->query('SELECT * FROM bank_accounts ORDER BY is_active DESC, id DESC');
+        return $stmt->fetchAll();
+    }
+    $stmt = db()->prepare('SELECT * FROM bank_accounts WHERE branch_id = ? OR branch_id IS NULL ORDER BY is_active DESC, id DESC');
+    $stmt->execute([$bid]);
     return $stmt->fetchAll();
 }
 
@@ -691,8 +1021,9 @@ function saveBankAccount($data) {
         ]);
         return (int) $data['id'];
     } else {
-        $stmt = db()->prepare('INSERT INTO bank_accounts (account_owner_name, bank_name, account_number, card_number, iban_sheba, is_active, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = db()->prepare('INSERT INTO bank_accounts (branch_id, account_owner_name, bank_name, account_number, card_number, iban_sheba, is_active, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
+            currentBranchId() ?? 1,
             $data['account_owner_name'],
             $data['bank_name'],
             $data['account_number'] ?: null,
@@ -735,8 +1066,15 @@ function getParentClinicUserId($doctor_id) {
 }
 
 function getDoctorPriceOverride($doctor_id, $service_id) {
-    $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?');
-    $stmt->execute([(int)$doctor_id, 'service', (int)$service_id]);
+    $bid = currentBranchId();
+    $branchClause = $bid === null ? '' : ' AND (branch_id = ? OR branch_id IS NULL)';
+    if ($bid === null) {
+        $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?');
+        $stmt->execute([(int)$doctor_id, 'service', (int)$service_id]);
+    } else {
+        $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?' . $branchClause);
+        $stmt->execute([(int)$doctor_id, 'service', (int)$service_id, $bid]);
+    }
     $override = $stmt->fetch();
     if ($override) {
         return $override;
@@ -744,8 +1082,13 @@ function getDoctorPriceOverride($doctor_id, $service_id) {
 
     $parentClinicId = getParentClinicUserId((int) $doctor_id);
     if ($parentClinicId) {
-        $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?');
-        $stmt->execute([$parentClinicId, 'service', (int)$service_id]);
+        if ($bid === null) {
+            $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?');
+            $stmt->execute([$parentClinicId, 'service', (int)$service_id]);
+        } else {
+            $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?' . $branchClause);
+            $stmt->execute([$parentClinicId, 'service', (int)$service_id, $bid]);
+        }
         return $stmt->fetch();
     }
 
@@ -754,19 +1097,23 @@ function getDoctorPriceOverride($doctor_id, $service_id) {
 
 function getDesignerDesignFeeOverride($designer_id, $service_id = null) {
     $designer_id = (int) $designer_id;
+    $bid = currentBranchId();
+    $branchClause = $bid === null ? '' : ' AND (branch_id = ? OR branch_id IS NULL)';
+    $run = function (string $sql, array $params) use ($branchClause, $bid) {
+        $stmt = db()->prepare($sql . $branchClause);
+        if ($bid !== null) $params[] = $bid;
+        $stmt->execute($params);
+        return $stmt->fetch();
+    };
     if ($service_id !== null && (int) $service_id > 0) {
         // 1) designer + specific service (per-type design fee)
-        $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?');
-        $stmt->execute([$designer_id, 'design_fee', (int) $service_id]);
-        $override = $stmt->fetch();
+        $override = $run('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?', [$designer_id, 'design_fee', (int) $service_id]);
         if ($override) {
             return $override;
         }
     }
     // 2) fallback to general per-designer design fee
-    $stmt = db()->prepare('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id IS NULL');
-    $stmt->execute([$designer_id, 'design_fee']);
-    return $stmt->fetch();
+    return $run('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id IS NULL', [$designer_id, 'design_fee']);
 }
 
 /** Per-unit design fee (تومان) for a designer and optionally a specific service. */
@@ -828,8 +1175,9 @@ function createDesignerInvoice(int $designerId, array $cases, string $invoiceDat
     }
 
     $notes = 'فاکتور طراحی' . ($periodLabel ? ' — بازه: ' . $periodLabel : '');
-    $ins = db()->prepare('INSERT INTO designer_invoices (invoice_number, designer_id, total_amount, period_label, invoice_date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    $ins->execute([$invoiceNumber, $designerId, $total, $periodLabel, $invoiceDate, $notes, $now]);
+    $branchId = currentBranchId() ?? 1;
+    $ins = db()->prepare('INSERT INTO designer_invoices (invoice_number, designer_id, total_amount, period_label, invoice_date, notes, branch_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $ins->execute([$invoiceNumber, $designerId, $total, $periodLabel, $invoiceDate, $notes, $branchId, $now]);
     $invoiceId = (int) db()->lastInsertId();
 
     $item = db()->prepare('INSERT INTO designer_invoice_items (invoice_id, case_id, doctor_id, doctor_name, service_id, service_title, patient_name, quantity, unit_design_fee, total_amount, received_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -879,7 +1227,9 @@ function getDesignerInvoiceItems(int $invoiceId): array {
 
 /** All designer invoices (admin listing). */
 function getAllDesignerInvoices(): array {
-    $stmt = db()->query('SELECT i.*, u.full_name AS designer_name FROM designer_invoices i LEFT JOIN users u ON i.designer_id = u.id ORDER BY i.invoice_date DESC, i.id DESC');
+    $bid = currentBranchId();
+    $filter = $bid === null ? '' : ' WHERE i.branch_id = ' . (int) $bid;
+    $stmt = db()->query('SELECT i.*, u.full_name AS designer_name FROM designer_invoices i LEFT JOIN users u ON i.designer_id = u.id' . $filter . ' ORDER BY i.invoice_date DESC, i.id DESC');
     return $stmt->fetchAll();
 }
 
@@ -897,7 +1247,7 @@ function getUninvoicedCasesForClinic(int $clinicId, string $startDate, string $e
         FROM cases c
         LEFT JOIN site_prices p ON c.service_id = p.id
         LEFT JOIN users u ON c.doctor_id = u.id
-        WHERE c.case_type = "doctor"
+        WHERE c.case_type IN ("doctor", "lab_out")
           AND c.invoice_id IS NULL
           AND c.received_date BETWEEN ? AND ?
           AND c.doctor_id IN (SELECT id FROM users WHERE clinic_id = ?)
@@ -980,35 +1330,47 @@ function createClinicInvoice(int $clinicId, array $cases, string $invoiceDate, ?
 
 /** Get the outsourcing rate for a lab+service (what we pay the lab). */
 function getOutsourceRate(int $labId, int $serviceId): ?float {
-    $stmt = db()->prepare('SELECT rate FROM outsource_rates WHERE lab_id = ? AND service_id = ?');
-    $stmt->execute([$labId, $serviceId]);
+    $bid = currentBranchId();
+    if ($bid === null) {
+        $stmt = db()->prepare('SELECT rate FROM outsource_rates WHERE lab_id = ? AND service_id = ?');
+        $stmt->execute([$labId, $serviceId]);
+    } else {
+        $stmt = db()->prepare('SELECT rate FROM outsource_rates WHERE lab_id = ? AND service_id = ? AND (branch_id = ? OR branch_id IS NULL)');
+        $stmt->execute([$labId, $serviceId, $bid]);
+    }
     $val = $stmt->fetchColumn();
     return ($val !== false && $val !== null) ? (float) $val : null;
 }
 
 /** Save (insert or update) an outsourcing rate. */
 function saveOutsourceRate(int $labId, int $serviceId, float $rate): void {
-    $existing = db()->prepare('SELECT id FROM outsource_rates WHERE lab_id = ? AND service_id = ?');
-    $existing->execute([$labId, $serviceId]);
+    $bid = currentBranchId() ?? 1;
+    $existing = db()->prepare('SELECT id FROM outsource_rates WHERE lab_id = ? AND service_id = ? AND branch_id = ?');
+    $existing->execute([$labId, $serviceId, $bid]);
     $id = $existing->fetchColumn();
     if ($id) {
         $stmt = db()->prepare('UPDATE outsource_rates SET rate = ?, updated_at = NOW() WHERE id = ?');
         $stmt->execute([$rate, $id]);
     } else {
-        $stmt = db()->prepare('INSERT INTO outsource_rates (lab_id, service_id, rate, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())');
-        $stmt->execute([$labId, $serviceId, $rate]);
+        $stmt = db()->prepare('INSERT INTO outsource_rates (lab_id, service_id, rate, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())');
+        $stmt->execute([$labId, $serviceId, $rate, $bid]);
     }
 }
 
 /** All outsourcing rates (admin listing). */
 function getAllOutsourceRates(): array {
-    $stmt = db()->query('
+    $bid = currentBranchId();
+    $branchClause = $bid === null ? '' : ' WHERE (r.branch_id = ? OR r.branch_id IS NULL)';
+    $stmt = db()->prepare('
         SELECT r.*, u.full_name AS lab_name, p.title AS service_title
         FROM outsource_rates r
         LEFT JOIN users u ON r.lab_id = u.id
-        LEFT JOIN site_prices p ON r.service_id = p.id
+        LEFT JOIN site_prices p ON r.service_id = p.id' . $branchClause . '
         ORDER BY u.full_name, p.title
     ');
+    $params = [];
+    if ($bid !== null) $params[] = $bid;
+    $stmt->execute($params);
     return $stmt->fetchAll();
 }
 
@@ -1088,8 +1450,9 @@ function createOutsourceInvoice(int $labId, array $cases, string $invoiceDate, ?
     }
 
     $notes = 'فاکتور برون‌سپاری' . ($periodLabel ? ' — بازه: ' . $periodLabel : '');
-    $ins = db()->prepare('INSERT INTO outsource_invoices (invoice_number, lab_id, total_amount, period_label, invoice_date, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
-    $ins->execute([$invoiceNumber, $labId, $total, $periodLabel, $invoiceDate, $notes, $now]);
+    $branchId = currentBranchId() ?? 1;
+    $ins = db()->prepare('INSERT INTO outsource_invoices (invoice_number, lab_id, total_amount, period_label, invoice_date, notes, branch_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    $ins->execute([$invoiceNumber, $labId, $total, $periodLabel, $invoiceDate, $notes, $branchId, $now]);
     $invoiceId = (int) db()->lastInsertId();
 
     $item = db()->prepare('INSERT INTO outsource_invoice_items (invoice_id, case_id, doctor_id, doctor_name, service_id, service_title, patient_name, quantity, unit_rate, total_amount, received_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -1134,13 +1497,377 @@ function getOutsourceInvoiceItems(int $invoiceId): array {
 }
 
 function getAllOutsourceInvoices(): array {
-    $stmt = db()->query('SELECT i.*, u.full_name AS lab_name FROM outsource_invoices i LEFT JOIN users u ON i.lab_id = u.id ORDER BY i.invoice_date DESC, i.id DESC');
+    $bid = currentBranchId();
+    $filter = $bid === null ? '' : ' WHERE i.branch_id = ' . (int) $bid;
+    $stmt = db()->query('SELECT i.*, u.full_name AS lab_name FROM outsource_invoices i LEFT JOIN users u ON i.lab_id = u.id' . $filter . ' ORDER BY i.invoice_date DESC, i.id DESC');
     return $stmt->fetchAll();
+}
+
+// =====================================================
+// Expense Payments (پرداخت‌های ما به دیگران: طراح / لابراتوار)
+// =====================================================
+
+/** List expense payments (optionally filtered by type + invoice). */
+function getAllExpensePayments(?string $type = null, ?int $invoiceId = null): array {
+    $bid = currentBranchId();
+    $where = [];
+    $params = [];
+    if ($bid !== null) {
+        $where[] = 'p.branch_id = ?';
+        $params[] = $bid;
+    }
+    if ($type && in_array($type, ['designer', 'outsource'], true)) {
+        $where[] = 'p.expense_type = ?';
+        $params[] = $type;
+    }
+    if ($invoiceId) {
+        $where[] = 'p.invoice_id = ?';
+        $params[] = $invoiceId;
+    }
+    $sql = 'SELECT p.*,
+               CASE p.expense_type
+                 WHEN "designer" THEN di.designer_name
+                 ELSE oi.lab_name
+               END AS party_name,
+               CASE p.expense_type
+                 WHEN "designer" THEN di.invoice_number
+                 ELSE oi.invoice_number
+               END AS invoice_number
+            FROM expense_payments p
+            LEFT JOIN (SELECT di.id, di.invoice_number, u.full_name AS designer_name
+                       FROM designer_invoices di LEFT JOIN users u ON di.designer_id = u.id) di
+              ON p.expense_type = "designer" AND di.id = p.invoice_id
+            LEFT JOIN (SELECT oi.id, oi.invoice_number, u.full_name AS lab_name
+                       FROM outsource_invoices oi LEFT JOIN users u ON oi.lab_id = u.id) oi
+              ON p.expense_type = "outsource" AND oi.id = p.invoice_id';
+    if (!empty($where)) {
+        $sql .= ' WHERE ' . implode(' AND ', $where);
+    }
+    $sql .= ' ORDER BY p.payment_date DESC, p.id DESC';
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+/** Get a single expense payment. */
+function getExpensePayment(int $id): ?array {
+    $stmt = db()->prepare('SELECT * FROM expense_payments WHERE id = ?');
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: null;
+}
+
+/** Paid amount so far for an expense invoice. */
+function getExpenseInvoicePaid(string $type, int $invoiceId): float {
+    $stmt = db()->prepare('SELECT COALESCE(SUM(amount),0) FROM expense_payments WHERE expense_type = ? AND invoice_id = ?');
+    $stmt->execute([$type, $invoiceId]);
+    return (float) $stmt->fetchColumn();
+}
+
+/** Recompute payment_status (unpaid/partial/paid) for an expense invoice. */
+function refreshExpenseInvoiceStatus(string $type, int $invoiceId): void {
+    $table = $type === 'outsource' ? 'outsource_invoices' : 'designer_invoices';
+    $stmt = db()->prepare("SELECT total_amount FROM {$table} WHERE id = ?");
+    $stmt->execute([$invoiceId]);
+    $total = (float) ($stmt->fetchColumn() ?: 0);
+    $paid = getExpenseInvoicePaid($type, $invoiceId);
+    if ($total > 0 && $paid >= $total) {
+        $status = 'paid';
+    } elseif ($paid > 0) {
+        $status = 'partial';
+    } else {
+        $status = 'unpaid';
+    }
+    $upd = db()->prepare("UPDATE {$table} SET payment_status = ? WHERE id = ?");
+    $upd->execute([$status, $invoiceId]);
+}
+
+/** Save an expense payment (insert/update). */
+function saveExpensePayment(array $data): int {
+    $now = date('Y-m-d H:i:s');
+    $id = !empty($data['id']) ? (int) $data['id'] : 0;
+    $branchId = currentBranchId() ?? 1;
+    if ($id) {
+        $stmt = db()->prepare('UPDATE expense_payments SET expense_type = ?, invoice_id = ?, amount = ?, payment_method = ?, payment_date = ?, transaction_number = ?, recipient_bank = ?, recipient_card = ?, notes = ?, updated_at = ? WHERE id = ?');
+        $stmt->execute([
+            $data['expense_type'],
+            (int) $data['invoice_id'],
+            (float) $data['amount'],
+            $data['payment_method'] ?? null,
+            $data['payment_date'] ?? null,
+            $data['transaction_number'] ?? null,
+            $data['recipient_bank'] ?? null,
+            $data['recipient_card'] ?? null,
+            $data['notes'] ?? null,
+            $now,
+            $id,
+        ]);
+        $savedId = $id;
+    } else {
+        $stmt = db()->prepare('INSERT INTO expense_payments (branch_id, expense_type, invoice_id, amount, payment_method, payment_date, transaction_number, recipient_bank, recipient_card, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([
+            $branchId,
+            $data['expense_type'],
+            (int) $data['invoice_id'],
+            (float) $data['amount'],
+            $data['payment_method'] ?? null,
+            $data['payment_date'] ?? null,
+            $data['transaction_number'] ?? null,
+            $data['recipient_bank'] ?? null,
+            $data['recipient_card'] ?? null,
+            $data['notes'] ?? null,
+            $now,
+            $now,
+        ]);
+        $savedId = (int) db()->lastInsertId();
+    }
+    refreshExpenseInvoiceStatus($data['expense_type'], (int) $data['invoice_id']);
+    return $savedId;
+}
+
+/** Delete an expense payment and refresh the invoice status. */
+function deleteExpensePayment(int $id): void {
+    $p = getExpensePayment($id);
+    if (!$p) return;
+    $stmt = db()->prepare('DELETE FROM expense_payments WHERE id = ?');
+    $stmt->execute([$id]);
+    refreshExpenseInvoiceStatus($p['expense_type'], (int) $p['invoice_id']);
+}
+
+/** Unpaid/partially-paid expense invoices for the payment form. */
+function getPayableExpenseInvoices(): array {
+    $bid = currentBranchId();
+    $filter = $bid === null ? '' : ' AND i.branch_id = ' . (int) $bid;
+    $rows = [];
+    $d = db()->query('SELECT i.id, i.invoice_number, i.total_amount, i.payment_status, u.full_name AS party_name, "designer" AS expense_type
+        FROM designer_invoices i LEFT JOIN users u ON i.designer_id = u.id
+        WHERE i.payment_status != "paid"' . $filter . ' ORDER BY i.invoice_date DESC');
+    foreach ($d->fetchAll() as $r) $rows[] = $r;
+    $o = db()->query('SELECT i.id, i.invoice_number, i.total_amount, i.payment_status, u.full_name AS party_name, "outsource" AS expense_type
+        FROM outsource_invoices i LEFT JOIN users u ON i.lab_id = u.id
+        WHERE i.payment_status != "paid"' . $filter . ' ORDER BY i.invoice_date DESC');
+    foreach ($o->fetchAll() as $r) $rows[] = $r;
+    return $rows;
+}
+
+// =====================================================
+// Branch Receivables (فاکتور طلب از شعبه همکار)
+// When another branch outsources work to US (inbound, source_branch_id = our
+// branch), the amount they owe us is the mirror of their outsource expense.
+// =====================================================
+
+/**
+ * The amount a partner branch owes US for an inbound cross-branch case
+ * (source_branch_id = our branch, branch_id = the partner's branch).
+ * Mirrors the creating branch's expense: qty × rate where rate =
+ * per-case outsourced_rate when set, else the outsource_rates lookup.
+ */
+function getInboundReceivableAmount(array $case): float {
+    $isLabOut = ($case['case_type'] ?? '') === 'lab_out';
+    $qty = $isLabOut ? (int) ($case['quantity'] ?? 1) : (int) ($case['outsourced_qty'] ?? 0);
+    $svcId = $isLabOut ? (int) ($case['service_id'] ?? 0) : (int) ($case['outsourced_service_id'] ?? 0);
+    $labId = $isLabOut ? (int) ($case['lab_id'] ?? 0) : (int) ($case['outsourced_lab_id'] ?? 0);
+    $rate = $case['outsourced_rate'] !== null ? (float) $case['outsourced_rate'] : getOutsourceRate($labId, $svcId);
+    if ($rate === null) $rate = 0.0;
+    return round($rate * $qty);
+}
+
+/**
+ * Inbound cross-branch cases (work a partner branch owes us for) that have not
+ * yet been included in a receivable invoice, within a date range.
+ * Only meaningful for a branch-scoped user (the receiving branch).
+ * Annotates each case with unit_rate, _bill_qty, _bill_service_id/title, _bill_amount.
+ */
+function getUninvoicedInboundPartnerCases(?int $partnerBranchId, string $startDate, string $endDate): array {
+    $bid = currentBranchId();
+    if ($bid === null) return []; // only meaningful for a branch
+    $sql = 'SELECT c.*, p.title AS service_title, os.title AS outsourced_service_title, u.full_name AS doctor_name
+        FROM cases c
+        LEFT JOIN site_prices p ON c.service_id = p.id
+        LEFT JOIN site_prices os ON c.outsourced_service_id = os.id
+        LEFT JOIN users u ON c.doctor_id = u.id
+        WHERE c.source_branch_id = ?
+          AND (c.branch_id IS NULL OR c.branch_id <> ?)
+          AND c.receivable_invoice_id IS NULL
+          AND c.received_date BETWEEN ? AND ?';
+    $params = [$bid, $bid, $startDate, $endDate];
+    if ($partnerBranchId) {
+        $sql .= ' AND c.branch_id = ?';
+        $params[] = $partnerBranchId;
+    }
+    $sql .= ' ORDER BY c.received_date ASC, c.id ASC';
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
+    $cases = $stmt->fetchAll();
+    foreach ($cases as &$c) {
+        $isLabOut = ($c['case_type'] ?? '') === 'lab_out';
+        $qty = $isLabOut ? (int) ($c['quantity'] ?? 1) : (int) ($c['outsourced_qty'] ?? 0);
+        $svcId = $isLabOut ? (int) ($c['service_id'] ?? 0) : (int) ($c['outsourced_service_id'] ?? 0);
+        $svcTitle = $isLabOut ? ($c['service_title'] ?? null) : ($c['outsourced_service_title'] ?? $c['service_title'] ?? null);
+        $labId = $isLabOut ? (int) ($c['lab_id'] ?? 0) : (int) ($c['outsourced_lab_id'] ?? 0);
+        $rate = $c['outsourced_rate'] !== null ? (float) $c['outsourced_rate'] : getOutsourceRate($labId, $svcId);
+        $c['unit_rate'] = $rate;
+        $c['_bill_qty'] = $qty;
+        $c['_bill_service_id'] = $svcId;
+        $c['_bill_service_title'] = $svcTitle;
+        $c['_bill_amount'] = round(($rate ?? 0.0) * $qty);
+    }
+    return $cases;
+}
+
+/** Create a receivable invoice to a partner branch. */
+function createBranchReceivable(int $partnerBranchId, array $cases, string $invoiceDate, ?string $periodLabel = null): int {
+    $now = date('Y-m-d H:i:s');
+    $yearMonth = date('Ym', strtotime($invoiceDate));
+    $stmt = db()->prepare("SELECT MAX(invoice_number) FROM branch_receivables WHERE invoice_number LIKE ?");
+    $stmt->execute(['REC-' . $yearMonth . '-%']);
+    $max = $stmt->fetchColumn();
+    $num = $max ? ((int) explode('-', $max)[2] + 1) : 1;
+    $invoiceNumber = 'REC-' . $yearMonth . '-' . str_pad($num, 3, '0', STR_PAD_LEFT);
+
+    $total = 0;
+    $rows = [];
+    foreach ($cases as $c) {
+        $qty = (int) ($c['_bill_qty'] ?? 1);
+        $svcId = (int) ($c['_bill_service_id'] ?? 0);
+        $svcTitle = $c['_bill_service_title'] ?? null;
+        $rate = ($c['unit_rate'] ?? null) !== null ? (float) $c['unit_rate'] : 0.0;
+        $amount = round($rate * $qty);
+        $total += $amount;
+        $rows[] = [$c, $rate, $qty, $amount, $svcId, $svcTitle];
+    }
+
+    $notes = 'فاکتور طلب از شعبه همکار' . ($periodLabel ? ' — بازه: ' . $periodLabel : '');
+    $branchId = currentBranchId() ?? 1;
+    $ins = db()->prepare('INSERT INTO branch_receivables (invoice_number, branch_id, partner_branch_id, total_amount, period_label, invoice_date, notes, payment_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, "unpaid", ?)');
+    $ins->execute([$invoiceNumber, $branchId, $partnerBranchId, $total, $periodLabel, $invoiceDate, $notes, $now]);
+    $invoiceId = (int) db()->lastInsertId();
+
+    $item = db()->prepare('INSERT INTO branch_receivable_items (receivable_id, case_id, doctor_id, doctor_name, service_id, service_title, patient_name, quantity, unit_rate, total_amount, received_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    foreach ($rows as [$c, $rate, $qty, $amount, $svcId, $svcTitle]) {
+        $item->execute([
+            $invoiceId,
+            $c['id'],
+            $c['doctor_id'] ?? null,
+            $c['doctor_name'] ?? null,
+            $svcId ?: null,
+            $svcTitle ?: null,
+            $c['patient_name'] ?? null,
+            $qty,
+            $rate,
+            $amount,
+            $c['received_date'] ?? null,
+            $now,
+        ]);
+    }
+
+    $caseIds = array_column($cases, 'id');
+    if (!empty($caseIds)) {
+        $placeholders = implode(',', array_fill(0, count($caseIds), '?'));
+        $upd = db()->prepare("UPDATE cases SET receivable_invoice_id = ? WHERE id IN ($placeholders)");
+        array_unshift($caseIds, $invoiceId);
+        $upd->execute($caseIds);
+    }
+    return $invoiceId;
+}
+
+function getBranchReceivable(int $id): ?array {
+    $stmt = db()->prepare('SELECT r.*, b.name AS partner_branch_name FROM branch_receivables r LEFT JOIN branches b ON r.partner_branch_id = b.id WHERE r.id = ?');
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: null;
+}
+
+function getBranchReceivableItems(int $receivableId): array {
+    $stmt = db()->prepare('SELECT * FROM branch_receivable_items WHERE receivable_id = ? ORDER BY id ASC');
+    $stmt->execute([$receivableId]);
+    return $stmt->fetchAll();
+}
+
+function getAllBranchReceivables(): array {
+    $bid = currentBranchId();
+    $filter = $bid === null ? '' : ' WHERE r.branch_id = ' . (int) $bid;
+    $stmt = db()->query('SELECT r.*, b.name AS partner_branch_name FROM branch_receivables r LEFT JOIN branches b ON r.partner_branch_id = b.id' . $filter . ' ORDER BY r.invoice_date DESC, r.id DESC');
+    return $stmt->fetchAll();
+}
+
+/** Paid amount so far for a receivable invoice. */
+function getBranchReceivablePaid(int $receivableId): float {
+    $stmt = db()->prepare('SELECT COALESCE(SUM(amount),0) FROM branch_receivable_payments WHERE receivable_id = ?');
+    $stmt->execute([$receivableId]);
+    return (float) $stmt->fetchColumn();
+}
+
+/** Recompute payment_status (unpaid/partial/paid) for a receivable invoice. */
+function refreshBranchReceivableStatus(int $receivableId): void {
+    $stmt = db()->prepare('SELECT total_amount FROM branch_receivables WHERE id = ?');
+    $stmt->execute([$receivableId]);
+    $total = (float) ($stmt->fetchColumn() ?: 0);
+    $paid = getBranchReceivablePaid($receivableId);
+    if ($total > 0 && $paid >= $total) $status = 'paid';
+    elseif ($paid > 0) $status = 'partial';
+    else $status = 'unpaid';
+    $upd = db()->prepare('UPDATE branch_receivables SET payment_status = ? WHERE id = ?');
+    $upd->execute([$status, $receivableId]);
+}
+
+/** Save a payment received against a receivable invoice. */
+function saveBranchReceivablePayment(array $data): int {
+    $now = date('Y-m-d H:i:s');
+    $id = !empty($data['id']) ? (int) $data['id'] : 0;
+    if ($id) {
+        $stmt = db()->prepare('UPDATE branch_receivable_payments SET amount = ?, payment_date = ?, method = ?, reference = ?, notes = ?, updated_at = ? WHERE id = ?');
+        $stmt->execute([
+            (float) $data['amount'],
+            $data['payment_date'] ?? null,
+            $data['method'] ?? null,
+            $data['reference'] ?? null,
+            $data['notes'] ?? null,
+            $now,
+            $id,
+        ]);
+        $savedId = $id;
+    } else {
+        $stmt = db()->prepare('INSERT INTO branch_receivable_payments (receivable_id, amount, payment_date, method, reference, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([
+            (int) $data['receivable_id'],
+            (float) $data['amount'],
+            $data['payment_date'] ?? null,
+            $data['method'] ?? null,
+            $data['reference'] ?? null,
+            $data['notes'] ?? null,
+            $now,
+            $now,
+        ]);
+        $savedId = (int) db()->lastInsertId();
+    }
+    refreshBranchReceivableStatus((int) $data['receivable_id']);
+    return $savedId;
+}
+
+/** Delete a payment and refresh the receivable status. */
+function deleteBranchReceivablePayment(int $id): void {
+    $p = db()->prepare('SELECT receivable_id FROM branch_receivable_payments WHERE id = ?');
+    $p->execute([$id]);
+    $rid = (int) ($p->fetchColumn() ?: 0);
+    db()->prepare('DELETE FROM branch_receivable_payments WHERE id = ?')->execute([$id]);
+    if ($rid) refreshBranchReceivableStatus($rid);
+}
+
+/** Delete a receivable invoice (and its items/payments, release the cases). */
+function deleteBranchReceivable(int $id): void {
+    $inv = getBranchReceivable($id);
+    if (!$inv) return;
+    db()->prepare('DELETE FROM branch_receivable_payments WHERE receivable_id = ?')->execute([$id]);
+    db()->prepare('DELETE FROM branch_receivable_items WHERE receivable_id = ?')->execute([$id]);
+    db()->prepare('UPDATE cases SET receivable_invoice_id = NULL WHERE receivable_invoice_id = ?')->execute([$id]);
+    db()->prepare('DELETE FROM branch_receivables WHERE id = ?')->execute([$id]);
 }
 
 /**
  * Get the applicable price for a doctor+service combination.
- * Returns the override price if set, otherwise the default price from site_prices.
+ * Resolution order:
+ *   1) doctor's per-service override (doctor_price_overrides)
+ *   2) the current branch's custom price for that service (branch_service_prices)
+ *   3) the shared catalog default (site_prices.price)
  * @return float|null
  */
 function getApplicablePrice($doctor_id, $service_id) {
@@ -1148,7 +1875,12 @@ function getApplicablePrice($doctor_id, $service_id) {
     if ($override) {
         return (float) $override['custom_price'];
     }
-    // fallback to default
+    // current branch's custom price (if set)
+    $branchPrice = getBranchServiceCustomPrice((int) $service_id);
+    if ($branchPrice !== null) {
+        return $branchPrice;
+    }
+    // shared catalog default
     $price = getPrice($service_id);
     return $price ? (float) $price['price'] : null;
 }
@@ -1157,14 +1889,33 @@ function getApplicablePrice($doctor_id, $service_id) {
  * Get all overrides (admin listing) with doctor name and service title.
  */
 function getAllDoctorPriceOverrides() {
-    $stmt = db()->query('
-        SELECT o.*, u.full_name AS doctor_name,
+    $bid = currentBranchId();
+    if ($bid === null) {
+        $stmt = db()->query('
+            SELECT o.*, u.full_name AS doctor_name, u.role AS target_role,
+                   CASE WHEN o.price_type = "design_fee" THEN COALESCE(p.title, "هزینه طراحی") ELSE p.title END AS service_title
+            FROM doctor_price_overrides o
+            LEFT JOIN users u ON o.doctor_id = u.id
+            LEFT JOIN site_prices p ON o.service_id = p.id
+            ORDER BY u.full_name, o.price_type, p.title
+        ');
+        return $stmt->fetchAll();
+    }
+    // Branch user: shows its own overrides PLUS the SHARED inter-branch / lab
+    // rates (target is a lab-role user, or the target belongs to another branch).
+    // Same-branch doctor/clinic/designer prices stay private to their branch.
+    $stmt = db()->prepare('
+        SELECT o.*, u.full_name AS doctor_name, u.role AS target_role,
                CASE WHEN o.price_type = "design_fee" THEN COALESCE(p.title, "هزینه طراحی") ELSE p.title END AS service_title
         FROM doctor_price_overrides o
         LEFT JOIN users u ON o.doctor_id = u.id
         LEFT JOIN site_prices p ON o.service_id = p.id
+        WHERE o.branch_id = ? OR o.branch_id IS NULL
+           OR u.role IN ("outsource_lab","partner_lab","customer_lab","lab")
+           OR (u.branch_id IS NOT NULL AND o.branch_id IS NOT NULL AND u.branch_id <> o.branch_id)
         ORDER BY u.full_name, o.price_type, p.title
     ');
+    $stmt->execute([(int) $bid]);
     return $stmt->fetchAll();
 }
 
@@ -1172,15 +1923,42 @@ function getAllDoctorPriceOverrides() {
  * Get overrides for a specific doctor.
  */
 function getDoctorPriceOverrides($doctor_id) {
+    $bid = currentBranchId();
+    $branchClause = $bid === null ? '' : ' AND (o.branch_id = ? OR o.branch_id IS NULL)';
     $stmt = db()->prepare('
         SELECT o.*, CASE WHEN o.price_type = "design_fee" THEN COALESCE(p.title, "هزینه طراحی") ELSE p.title END AS service_title
         FROM doctor_price_overrides o
         LEFT JOIN site_prices p ON o.service_id = p.id
-        WHERE o.doctor_id = ?
+        WHERE o.doctor_id = ?' . $branchClause . '
         ORDER BY o.price_type, p.title
     ');
-    $stmt->execute([(int)$doctor_id]);
+    $params = [(int)$doctor_id];
+    if ($bid !== null) $params[] = $bid;
+    $stmt->execute($params);
     return $stmt->fetchAll();
+}
+
+/**
+ * Whether a price override targets a SHARED inter-branch / lab party.
+ * These rates (the inter-lab «بین شعب» prices) may only be changed by the
+ * central (root) admin. A target is shared if:
+ *   - it is a lab-role user, OR
+ *   - the target belongs to a DIFFERENT branch than the override's branch
+ *     (e.g. an override recorded by the central branch for the Qazvin manager).
+ */
+function isSharedPriceOverrideTarget(int $targetUserId, ?int $overrideBranchId): bool {
+    $u = db()->prepare('SELECT role, branch_id FROM users WHERE id = ?');
+    $u->execute([$targetUserId]);
+    $target = $u->fetch();
+    if (!$target) return false;
+    if (in_array($target['role'], ['outsource_lab', 'partner_lab', 'customer_lab', 'lab'], true)) {
+        return true;
+    }
+    $targetBranch = $target['branch_id'] !== null ? (int) $target['branch_id'] : null;
+    if ($targetBranch !== null && $overrideBranchId !== null && $targetBranch !== $overrideBranchId) {
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -1208,8 +1986,8 @@ function saveDoctorPriceOverride($data) {
         $stmt->execute([$custom_price, $service_id, $price_type, (int) $existing['id']]);
         return (int) $existing['id'];
     } else {
-        $stmt = db()->prepare('INSERT INTO doctor_price_overrides (doctor_id, service_id, price_type, custom_price, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())');
-        $stmt->execute([$doctor_id, $service_id, $price_type, $custom_price]);
+        $stmt = db()->prepare('INSERT INTO doctor_price_overrides (doctor_id, service_id, price_type, custom_price, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())');
+        $stmt->execute([$doctor_id, $service_id, $price_type, $custom_price, currentBranchId() ?? 1]);
         return (int) db()->lastInsertId();
     }
 }
@@ -1239,7 +2017,7 @@ function getUninvoicedCasesForDoctor($doctor_id, $startDate, $endDate) {
         LEFT JOIN site_prices p ON c.service_id = p.id
         WHERE c.doctor_id = ?
           AND c.invoice_id IS NULL
-          AND c.case_type = "doctor"
+          AND c.case_type IN ("doctor", "lab_out")
           AND c.received_date BETWEEN ? AND ?
         ORDER BY c.received_date ASC
     ');
@@ -1541,7 +2319,12 @@ function getLabApplicablePrice(int $labId, int $serviceId): float {
     return $price ? (float) $price['price'] : 0.0;
 }
 
-/** Get all lab price overrides (admin listing) */
+/**
+ * All lab price overrides (shared inter-lab price list).
+ * These are the prices each lab charges per service. They are SHARED across all
+ * branches (like the site_prices catalog): when a branch outsources to a lab —
+ * including the central branch's lab — both sides see the same agreed rate.
+ */
 function getAllLabPriceOverrides(): array {
     $stmt = db()->query('
         SELECT o.*, u.full_name AS lab_name, p.title AS service_title
@@ -1568,8 +2351,8 @@ function saveLabPriceOverride(array $data): int {
         $stmt->execute([$custom_price, $existingId]);
         return (int) $existingId;
     }
-    $stmt = db()->prepare('INSERT INTO lab_price_overrides (lab_id, service_id, custom_price, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())');
-    $stmt->execute([$lab_id, $service_id, $custom_price]);
+    $stmt = db()->prepare('INSERT INTO lab_price_overrides (lab_id, service_id, custom_price, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())');
+    $stmt->execute([$lab_id, $service_id, $custom_price, currentBranchId() ?? 1]);
     return (int) db()->lastInsertId();
 }
 

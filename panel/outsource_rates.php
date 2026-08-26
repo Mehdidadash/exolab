@@ -2,7 +2,7 @@
 // panel/outsource_rates.php
 // Manage per-lab per-service outsourcing rates (what we pay each lab).
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 $rates = getAllOutsourceRates();
 $labs = db()->query("SELECT id, full_name FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name")->fetchAll();

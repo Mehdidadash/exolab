@@ -64,6 +64,10 @@ panel_layout_start('آپلود فایل');
                 <?php endforeach; ?>
             </select>
         </div>
+        <div class="form-group">
+            <label for="upload-description">توضیحات (اختیاری)</label>
+            <textarea id="upload-description" name="description" rows="3" placeholder="مثلاً: اسکن فک بالا - پرسلن، لطفاً بررسی شود"></textarea>
+        </div>
         <button type="submit" class="btn" style="background:#06B6D4; color:#fff;">آپلود</button>
     </form>
     <div id="upload-msg" style="margin-top:10px; font-weight:bold;"></div>
@@ -85,6 +89,7 @@ panel_layout_start('آپلود فایل');
             <tr>
                 <th>فایل</th>
                 <th>کیس</th>
+                <th>توضیحات</th>
                 <th>حجم</th>
                 <th>تاریخ</th>
                 <th>عملیات</th>
@@ -95,6 +100,7 @@ panel_layout_start('آپلود فایل');
                 <tr>
                     <td><?= htmlspecialchars($u['original_name']) ?></td>
                     <td><?= !empty($u['case_id']) ? ('#' . $u['case_id'] . ' - ' . htmlspecialchars($u['patient_name'] ?: '')) : '—' ?></td>
+                    <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
                     <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
                     <td><?= toJalaliDateFormatted($u['created_at']) ?></td>
                     <td class="actions">
@@ -121,6 +127,7 @@ panel_layout_start('آپلود فایل');
             <th>فایل</th>
             <th>آپلودکننده</th>
             <th>کیس</th>
+            <th>توضیحات</th>
             <th>حجم</th>
             <th>تاریخ</th>
             <th>عملیات</th>
@@ -132,6 +139,7 @@ panel_layout_start('آپلود فایل');
                 <td><?= htmlspecialchars($u['original_name']) ?></td>
                 <td><?= htmlspecialchars($u['uploader_name'] ?: '—') ?></td>
                 <td><?= !empty($u['case_id']) ? ('#' . $u['case_id'] . ' - ' . htmlspecialchars($u['patient_name'] ?: '')) : '—' ?></td>
+                <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
                 <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
                 <td><?= toJalaliDateFormatted($u['created_at']) ?></td>
                 <td class="actions">
@@ -161,6 +169,8 @@ panel_layout_start('آپلود فایل');
         fd.append('_csrf_token', csrf);
         fd.append('case_id', caseSel ? caseSel.value : '');
         fd.append('file', input.files[0]);
+        var descInput = document.getElementById('upload-description');
+        if (descInput && descInput.value.trim()) fd.append('description', descInput.value.trim());
         var xhr = new XMLHttpRequest();
         xhr.open('POST', 'upload_user_file.php', true);
         xhr.setRequestHeader('X-CSRF-Token', csrf);

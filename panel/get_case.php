@@ -49,8 +49,15 @@ if ($user['role'] === 'doctor') {
         echo json_encode(['success' => false, 'error' => 'forbidden']);
         exit;
     }
-    $stmt = db()->prepare('SELECT * FROM cases WHERE id = ?');
-    $stmt->execute([$id]);
+    $sql = 'SELECT * FROM cases c WHERE c.id = ?';
+    $params = [$id];
+    if (is_branch_scoped()) {
+        $bScope = branchCaseScope('c');
+        $sql .= ' AND ' . $bScope['sql'];
+        $params = array_merge($params, $bScope['params']);
+    }
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
 }
 
 $case = $stmt->fetch();

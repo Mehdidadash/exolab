@@ -8,12 +8,25 @@
 // Each row shows the party (designer/lab), service, quantity, unit rate and amount,
 // plus whether it has already been included in a payable invoice. Filterable/searchable.
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_login();
+if (!is_admin()) {
+    die('دسترسی غیرمجاز');
+}
 
 $rows = [];
 
+$ceScope = branchCaseScope('c');
+
+// Expenses are borne by the branch that OWNS the case (branch_id). An inbound
+// shared case (source_branch_id = ours) is NOT our expense — the owning branch
+// pays for design/outsourcing. So for a branch-scoped user only include cases
+// owned by the current branch (this also removes "we owe ourselves" rows when
+// the partner lab belongs to our own branch).
+$myBranch = currentBranchId();
+$ceOwnerFilter = $myBranch === null ? '' : ' AND c.branch_id = ' . (int) $myBranch;
+
 // 1) Design-fee rows
-$stmt = db()->query("
+$stmt = db()->prepare("
     SELECT c.id AS case_id, c.patient_name, c.received_date, u.full_name AS doctor_name,
            'طراحی' AS exp_type, des.full_name AS party_name, p.title AS service_title,
            c.quantity AS qty, ROUND(c.design_fee / NULLIF(c.quantity,0)) AS unit_rate, c.design_fee AS amount,
@@ -22,12 +35,13 @@ $stmt = db()->query("
     LEFT JOIN users u ON c.doctor_id = u.id
     LEFT JOIN users des ON c.designer_id = des.id
     LEFT JOIN site_prices p ON c.service_id = p.id
-    WHERE c.designer_id IS NOT NULL AND c.design_fee > 0
+    WHERE c.designer_id IS NOT NULL AND c.design_fee > 0 AND {$ceScope['sql']}{$ceOwnerFilter}
 ");
+$stmt->execute($ceScope['params']);
 foreach ($stmt->fetchAll() as $r) $rows[] = $r;
 
 // 2) Side-outsourcing rows (uses per-case outsourced_rate when set, else the outsource_rates lookup)
-$stmt = db()->query("
+$stmt = db()->prepare("
     SELECT c.id AS case_id, c.patient_name, c.received_date, u.full_name AS doctor_name,
            'برون‌سپاری جانبی' AS exp_type, olab.full_name AS party_name, os.title AS service_title,
            c.outsourced_qty AS qty,
@@ -39,12 +53,13 @@ $stmt = db()->query("
     LEFT JOIN users olab ON c.outsourced_lab_id = olab.id
     LEFT JOIN site_prices os ON c.outsourced_service_id = os.id
     LEFT JOIN outsource_rates r ON r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id
-    WHERE c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0
+    WHERE c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 AND {$ceScope['sql']}{$ceOwnerFilter}
 ");
+$stmt->execute($ceScope['params']);
 foreach ($stmt->fetchAll() as $r) $rows[] = $r;
 
 // 3) Fully-outsourced (lab_out) rows
-$stmt = db()->query("
+$stmt = db()->prepare("
     SELECT c.id AS case_id, c.patient_name, c.received_date, u.full_name AS doctor_name,
            'برون‌سپاری کامل' AS exp_type, lab.full_name AS party_name, p.title AS service_title,
            c.quantity AS qty, COALESCE(r.rate,0) AS unit_rate, c.quantity * COALESCE(r.rate,0) AS amount,
@@ -54,8 +69,9 @@ $stmt = db()->query("
     LEFT JOIN users lab ON c.lab_id = lab.id
     LEFT JOIN site_prices p ON c.service_id = p.id
     LEFT JOIN outsource_rates r ON r.lab_id = c.lab_id AND r.service_id = c.service_id
-    WHERE c.case_type = 'lab_out'
+    WHERE c.case_type = 'lab_out' AND {$ceScope['sql']}{$ceOwnerFilter}
 ");
+$stmt->execute($ceScope['params']);
 foreach ($stmt->fetchAll() as $r) $rows[] = $r;
 
 // Sort by received date (newest first), then case id

@@ -2,7 +2,7 @@
 // panel\bank_accounts.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 $accounts = getAllBankAccounts();
 panel_layout_start('مدیریت حسابهای بانکی');
 ?>

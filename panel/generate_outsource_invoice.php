@@ -3,7 +3,7 @@
 // Outsourcing invoice: bills the LAB for our outsourced (lab_out) cases
 // at the per-lab per-service outsourcing rate (what we pay the lab).
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 use Morilog\Jalali\Jalalian;
 

@@ -2,7 +2,7 @@
 // panel\price_form.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 $price = null;
 $editing = false;
 
@@ -31,7 +31,7 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
         </div>
         <div class="form-group">
             <label for="price">قیمت</label>
-            <input type="text" id="price" name="price" value="<?= htmlspecialchars($price['price'] ?? '') ?>" required>
+            <input type="text" id="price" name="price" value="<?= htmlspecialchars(formatTomanInput($price['price'] ?? '')) ?>" required>
         </div>
         <div class="form-group">
             <label for="category">دسته</label>

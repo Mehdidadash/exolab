@@ -2,9 +2,34 @@
 // panel/financial_overview.php
 // Income vs Expense (درآمد در برابر هزینه) status page with charts.
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_login();
+if (!is_admin()) {
+    die('دسترسی غیرمجاز');
+}
 
 use Morilog\Jalali\Jalalian;
+
+// Branch scoping: a branch admin sees only their branch's financials.
+$bid = currentBranchId();
+$finInvoiceFilter = $bid === null ? '' : ' AND branch_id = ' . (int) $bid;   // doctor_invoices / designer_invoices / outsource_invoices
+$finCaseFilter    = $bid === null ? '' : ' AND c.branch_id = ' . (int) $bid;  // cases (alias c)
+$finCaseFilterNoAlias = $bid === null ? '' : ' AND branch_id = ' . (int) $bid; // cases (no alias)
+
+// Inbound cross-branch amount = what a partner branch owes us for a case it
+// outsourced to us (source_branch_id = ours). Mirrors their outsource expense.
+$inboundAmountSql = "COALESCE(c.outsourced_rate,\n    (SELECT r.rate FROM outsource_rates r\n      WHERE r.lab_id = IF(c.case_type = 'lab_out', c.lab_id, c.outsourced_lab_id)\n        AND r.service_id = IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)), 0)\n    * IF(c.case_type = 'lab_out', c.quantity, c.outsourced_qty)";
+
+// Unrealized income: owned cases count their total_price; inbound shared cases
+// (branch_id = the partner's) count only the outsource amount owed to us.
+// Unrealized expense: only OWNED cases bear design/outsource costs.
+if ($bid === null) {
+    $unrealizedIncomeSql = 'SELECT COALESCE(SUM(total_price),0) FROM cases WHERE received_date BETWEEN ? AND ?';
+    $unrealizedExpenseSql = "SELECT COALESCE(SUM(c.design_fee),0) + COALESCE(SUM(\n            CASE WHEN c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 THEN\n                 c.outsourced_qty * COALESCE(c.outsourced_rate,\n                   (SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id), 0)\n            ELSE 0 END),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
+} else {
+    $b = (int) $bid;
+    $unrealizedIncomeSql = "SELECT COALESCE(SUM(\n            CASE WHEN c.source_branch_id = $b AND (c.branch_id IS NULL OR c.branch_id <> $b)\n                 THEN $inboundAmountSql\n                 ELSE c.total_price END),0)\n        FROM cases c\n        WHERE c.received_date BETWEEN ? AND ? AND (c.branch_id = $b OR c.source_branch_id = $b)";
+    $unrealizedExpenseSql = "SELECT COALESCE(SUM(c.design_fee),0) + COALESCE(SUM(\n            CASE WHEN c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 THEN\n                 c.outsourced_qty * COALESCE(c.outsourced_rate,\n                   (SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id), 0)\n            ELSE 0 END),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ? AND c.branch_id = $b";
+}
 
 $jalaliMonths = [
     1 => 'فروردین', 2 => 'اردیبهشت', 3 => 'خرداد', 4 => 'تیر',
@@ -62,7 +87,7 @@ $unrealizedExpense = 0;   // design fees + side-outsourcing cost on received cas
 
 if ($startDate !== '' && $endDate !== '') {
     // Realized income = paid invoices
-    $stmt = db()->prepare("SELECT invoice_number, total_amount FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'");
+    $stmt = db()->prepare("SELECT invoice_number, total_amount FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finInvoiceFilter);
     $stmt->execute([$startDate, $endDate]);
     foreach ($stmt->fetchAll() as $r) {
         $amt = (float) $r['total_amount'];
@@ -73,32 +98,33 @@ if ($startDate !== '' && $endDate !== '') {
     }
 
     // Realized expense = issued payable invoices (designer + outsource)
-    $stmt = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM designer_invoices WHERE invoice_date BETWEEN ? AND ?");
+    $stmt = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM designer_invoices WHERE invoice_date BETWEEN ? AND ?" . $finInvoiceFilter);
     $stmt->execute([$startDate, $endDate]);
     $expenseByType['designer'] = (float) $stmt->fetchColumn();
-    $stmt = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM outsource_invoices WHERE invoice_date BETWEEN ? AND ?");
+    $stmt = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM outsource_invoices WHERE invoice_date BETWEEN ? AND ?" . $finInvoiceFilter);
     $stmt->execute([$startDate, $endDate]);
     $expenseByType['outsource'] = (float) $stmt->fetchColumn();
     $realizedExpense = $expenseByType['designer'] + $expenseByType['outsource'];
 
     // Unrealized income = sum of total_price of cases received in the period
-    $stmt = db()->prepare("SELECT COALESCE(SUM(total_price),0) FROM cases WHERE received_date BETWEEN ? AND ?");
+    // Unrealized income: owned cases total_price + inbound partner receivable
+    $stmt = db()->prepare($unrealizedIncomeSql);
     $stmt->execute([$startDate, $endDate]);
     $unrealizedIncome = (float) $stmt->fetchColumn();
 
     // Unrealized expense = design fees + side-outsourcing cost on received cases
     // Uses the per-case outsourced_rate when set; otherwise falls back to the outsource_rates lookup.
-    $unrealizedSql = "SELECT COALESCE(SUM(c.design_fee),0) + COALESCE(SUM(
-            CASE WHEN c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 THEN
-                 c.outsourced_qty * COALESCE(c.outsourced_rate,
-                   (SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id),
-                   0)
-            ELSE 0 END),0)
-        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
-    $stmt = db()->prepare($unrealizedSql);
+    $stmt = db()->prepare($unrealizedExpenseSql);
     $stmt->execute([$startDate, $endDate]);
     $unrealizedExpense = (float) $stmt->fetchColumn();
 }
+
+// Realized income from paid inter-branch receivable invoices (طلب از شعبه همکار)
+$stmt = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM branch_receivables WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finInvoiceFilter);
+$stmt->execute([$startDate, $endDate]);
+$branchReceivableIncome = (float) $stmt->fetchColumn();
+$realizedIncome += $branchReceivableIncome;
+$incomeByType['branch'] = $branchReceivableIncome;
 
 $realizedNet = $realizedIncome - $realizedExpense;
 $unrealizedNet = $unrealizedIncome - $unrealizedExpense;
@@ -123,23 +149,27 @@ foreach ($months as $key => &$mm) {
     $ms = Jalalian::fromFormat('Y/m/d', sprintf('%04d/%02d/01', $mm['year'], $mm['month']))->toCarbon()->toDateString();
     $me = Jalalian::fromFormat('Y/m/d', sprintf('%04d/%02d/01', $mm['year'], $mm['month']))->addMonths(1)->subDay()->toCarbon()->toDateString();
 
-    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'");
+    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finInvoiceFilter);
     $s->execute([$ms, $me]);
     $mm['inc_real'] = (float) $s->fetchColumn();
 
-    $s = db()->prepare("SELECT COALESCE(SUM(total_price),0) FROM cases WHERE received_date BETWEEN ? AND ?");
+    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM branch_receivables WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finInvoiceFilter);
+    $s->execute([$ms, $me]);
+    $mm['inc_real'] += (float) $s->fetchColumn();
+
+    $s = db()->prepare($unrealizedIncomeSql);
     $s->execute([$ms, $me]);
     $mm['inc_unreal'] = (float) $s->fetchColumn();
 
-    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM designer_invoices WHERE invoice_date BETWEEN ? AND ?");
+    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM designer_invoices WHERE invoice_date BETWEEN ? AND ?" . $finInvoiceFilter);
     $s->execute([$ms, $me]);
     $d = (float) $s->fetchColumn();
-    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM outsource_invoices WHERE invoice_date BETWEEN ? AND ?");
+    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM outsource_invoices WHERE invoice_date BETWEEN ? AND ?" . $finInvoiceFilter);
     $s->execute([$ms, $me]);
     $o = (float) $s->fetchColumn();
     $mm['exp_real'] = $d + $o;
 
-    $s = db()->prepare($unrealizedSql);
+    $s = db()->prepare($unrealizedExpenseSql);
     $s->execute([$ms, $me]);
     $mm['exp_unreal'] = (float) $s->fetchColumn();
 }
@@ -212,7 +242,7 @@ if ($startDate !== '' && $endDate !== '') {
                        )) AS expense
                 FROM cases c
                 {$g['join']}
-                WHERE c.received_date BETWEEN ? AND ?
+                WHERE c.received_date BETWEEN ? AND ?" . $finCaseFilter . "
                 GROUP BY grp
                 ORDER BY income DESC";
         $stmt = db()->prepare($sql);
@@ -240,7 +270,7 @@ $renderDonut = function (array $donut): string {
         $grad .= ($grad !== '' ? ', ' : '') . $s['color'] . ' ' . $from . '% ' . $to . '%';
     }
     $html = '<div style="display:flex; gap:24px; flex-wrap:wrap; align-items:center;">';
-    $html .= '<div style="width:200px; height:200px; border-radius:50%; position:relative; background: conic-gradient(' . $grad . '); flex:0 0 auto;">';
+    $html .= '<div class="fin-donut" style="width:200px; height:200px; border-radius:50%; position:relative; background: conic-gradient(' . $grad . '); flex:0 0 auto;">';
     $html .= '<div style="position:absolute; inset:25%; background:#fff; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-direction:column; text-align:center; padding:8px; box-sizing:border-box;">';
     $html .= '<div style="font-size:0.7rem; color:#555;">جمع</div>';
     $html .= '<div style="font-weight:bold; font-size:0.85rem;">' . formatAmountToman($donut['total']) . '</div>';
@@ -362,6 +392,7 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
             <tr><td style="padding:7px 0; border-bottom:1px solid #eee;">فاکتور عادی پزشکان</td><td style="padding:7px 0; border-bottom:1px solid #eee; text-align:left; font-weight:bold;"><?= formatAmountToman($incomeByType['regular']) ?></td></tr>
             <tr><td style="padding:7px 0; border-bottom:1px solid #eee;">فاکتور کلینیک</td><td style="padding:7px 0; border-bottom:1px solid #eee; text-align:left; font-weight:bold;"><?= formatAmountToman($incomeByType['clinic']) ?></td></tr>
             <tr><td style="padding:7px 0; border-bottom:1px solid #eee;">فاکتور لابراتوار</td><td style="padding:7px 0; border-bottom:1px solid #eee; text-align:left; font-weight:bold;"><?= formatAmountToman($incomeByType['lab']) ?></td></tr>
+            <tr><td style="padding:7px 0; border-bottom:1px solid #eee;">فاکتور طلب از شعبه همکار</td><td style="padding:7px 0; border-bottom:1px solid #eee; text-align:left; font-weight:bold; color:#166534;"><?= formatAmountToman($incomeByType['branch'] ?? 0) ?></td></tr>
             <tr><td style="padding:7px 0;"><strong>جمع درآمد تحقق‌یافته</strong></td><td style="padding:7px 0; text-align:left; font-weight:bold; color:#15803d;"><?= formatAmountToman($realizedIncome) ?></td></tr>
         </table>
     </div>

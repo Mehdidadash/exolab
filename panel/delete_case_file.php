@@ -2,7 +2,7 @@
 // panel\delete_case_file.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
     echo json_encode(['success'=>false,'error'=>'method']);

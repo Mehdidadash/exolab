@@ -1,7 +1,7 @@
 <?php
 // panel/generate_invoice.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 use Morilog\Jalali\Jalalian;
 

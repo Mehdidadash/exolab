@@ -1,7 +1,7 @@
 <?php
 // panel/roles.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_root_admin();
 
 $roles = getAllRoles();
 $allPerms = getAllPermissionDefinitions();

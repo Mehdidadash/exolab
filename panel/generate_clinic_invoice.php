@@ -3,7 +3,7 @@
 // Invoice for a clinic: bills the clinic for the uninvoiced work of its
 // subordinate doctors, grouped by doctor (the clinic is the payer).
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 use Morilog\Jalali\Jalalian;
 

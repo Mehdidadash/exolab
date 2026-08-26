@@ -1,7 +1,7 @@
 <?php
 // panel/role_form.php
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_root_admin();
 
 $editing = !empty($_GET['id']);
 $role = $editing ? getRole((int) $_GET['id']) : null;

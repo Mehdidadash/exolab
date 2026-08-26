@@ -85,6 +85,47 @@ function has_role($role) {
     return $user && $user['role'] === $role;
 }
 
+/**
+ * True for a branch manager (role = branch_admin) or root admin.
+ * Branch admins have '*' permissions but their data is scoped to their branch_id.
+ */
+function is_admin(): bool {
+    $user = current_user();
+    if (!$user) return false;
+    return $user['role'] === 'admin' || $user['role'] === 'branch_admin';
+}
+
+/** Root/global admin = role 'admin' (sees all branches). */
+function is_root_admin(): bool {
+    $user = current_user();
+    return $user && $user['role'] === 'admin';
+}
+
+/** True when the current user is scoped to a specific branch (not global). */
+function is_branch_scoped(): bool {
+    $user = current_user();
+    if (!$user) return false;
+    // Root admin (role='admin') is ALWAYS global, regardless of any branch_id.
+    if ($user['role'] === 'admin') return false;
+    return !empty($user['branch_id']);
+}
+
+/**
+ * Whether the current user may see internal designer names on cases.
+ * Designer info is internal: only our staff / secretaries / branch users see it.
+ * Doctors, clinics, and external labs do NOT see designer names (unless the
+ * user is a branch member / admin).
+ */
+function canSeeDesignerInfo(): bool {
+    $user = current_user();
+    if (!$user) return false;
+    // Internal roles + anyone scoped to a branch
+    if (in_array($user['role'] ?? '', ['admin', 'branch_admin', 'staff', 'secretary', 'technician', 'designer'], true)) {
+        return true;
+    }
+    return is_branch_scoped();
+}
+
 function has_permission($permission) {
     $user = current_user();
     if (!$user) return false;
@@ -94,6 +135,11 @@ function has_permission($permission) {
 
 /**
  * Get the current request URI if it is an internal panel page (safe to return to after login).
+ *
+ * Data/AJAX endpoints (JSON pollers, DataTables feeds, upload/download handlers)
+ * are deliberately excluded: they get hit by fetch()/XHR while the user is
+ * logged out, and redirecting back to them after login would land the user on
+ * raw JSON instead of a real page.
  */
 function getLoginRedirectUrl(): string {
     $uri = $_SERVER['REQUEST_URI'] ?? '';
@@ -105,6 +151,14 @@ function getLoginRedirectUrl(): string {
         return '';
     }
     if (preg_match('#/panel/(login|logout)\.php$#', $path)) {
+        return '';
+    }
+    // Skip JSON / data endpoints (never return to these after login).
+    if (preg_match('#/panel/(check_notifications|cases_data|get_case|get_price|get_outsource_rate|get_all_prices|upload_user_file|upload_case_files|upload_design_file|download_case_file|download_user_upload)\.php$#', $path)) {
+        return '';
+    }
+    // Skip XHR / fetch requests (jQuery DataTables, $.ajax, pollers).
+    if (strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest') {
         return '';
     }
     return $uri;
@@ -125,6 +179,29 @@ function require_login() {
 function require_role($role) {
     require_login();
     if (!has_role($role)) {
+        http_response_code(403);
+        die('دسترسی غیرمجاز');
+    }
+}
+
+/**
+ * Require admin-level access: root admin OR a branch manager (branch_admin).
+ * Branch admins' data is scoped to their branch via branch_id.
+ */
+function require_admin() {
+    require_login();
+    if (!is_admin()) {
+        http_response_code(403);
+        die('دسترسی غیرمجاز');
+    }
+}
+
+/**
+ * Require ROOT admin only (global, all branches): user/role/branch/audit management.
+ */
+function require_root_admin() {
+    require_login();
+    if (!is_root_admin()) {
         http_response_code(403);
         die('دسترسی غیرمجاز');
     }
@@ -262,35 +339,92 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 <img src="../assets/icons/hamburger-menu.svg" alt="☰">
             </button>
             <nav class="site-nav" id="siteNav">
-                <?php if (has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_assigned_cases') || has_permission('view_clinic_cases') || has_role('designer')): ?>
-                    <a href="cases.php">کیس‌ها</a>
+                <?php
+                $navCanCases  = has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_assigned_cases') || has_permission('view_clinic_cases') || has_role('designer');
+                $navCanUpload = $user && in_array($user['role'] ?? '', ['doctor', 'designer', 'admin', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
+                $navCanInv    = has_permission('view_invoices') || has_permission('view_clinic_invoices') || is_admin();
+                $navCanPay    = has_permission('view_own_payments') || has_permission('view_clinic_payments') || is_admin();
+                $navIsAdmin   = is_admin();
+                $navIsRoot    = is_root_admin();
+                $navIsBranch  = is_branch_scoped();
+                ?>
+                <?php if ($navCanCases): ?>
+                    <div class="nav-group">
+                        <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">کیس‌ها <span class="caret">▼</span></button>
+                        <div class="nav-group-menu">
+                            <a href="cases.php">کیس‌ها</a>
+                            <?php if ($navCanInv): ?><a href="case_expenses.php">کیس‌های مخارج</a><?php endif; ?>
+                        </div>
+                    </div>
                 <?php endif; ?>
-                <?php if ($user && in_array($user['role'] ?? '', ['doctor', 'designer', 'admin', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true)): ?>
-                    <a href="uploads.php">آپلود فایل</a>
+
+                <?php if ($navCanUpload): ?>
+                    <a class="nav-link" href="uploads.php">آپلود فایل</a>
                 <?php endif; ?>
-                <?php if (has_role('admin')): ?>
-                    <a href="users.php">کاربران</a>
-                    <a href="doctors.php">پزشکان</a>
-                    <a href="prices.php">قیمت</a>
-                    <a href="doctor_price_overrides.php">قیمت‌های اختصاصی</a>
-                    <a href="works.php">نمونه کار</a>
-                    <a href="bank_accounts.php">حساب‌های بانکی</a>
-                    <a href="financial_overview.php">بررسی درآمد و هزینه</a>
-                    <a href="audit_log.php">لاگ فعالیت‌ها</a>
-                    <a href="roles.php">نقش‌ها</a>
+
+                <?php if ($navCanInv || $navCanPay || $navIsAdmin): ?>
+                    <div class="nav-group">
+                        <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">مالی <span class="caret">▼</span></button>
+                        <div class="nav-group-menu">
+                            <?php if ($navCanPay): ?>
+                                <span class="menu-label">پرداخت‌ها</span>
+                                <a href="payments.php">دریافتی</a>
+                                <a href="expense_payments.php">هزینه</a>
+                            <?php endif; ?>
+                            <?php if ($navCanInv): ?>
+                                <span class="menu-label">فاکتورها</span>
+                                <a href="invoices.php">فاکتورها</a>
+                                <a href="expenses.php">فاکتورهای مخارج (بدهی‌ها)</a>
+                                <?php if ($navIsBranch): ?><a href="branch_receivables.php">فاکتور طلب از شعبه‌ها</a><?php endif; ?>
+                            <?php endif; ?>
+                            <?php if ($navIsAdmin): ?>
+                                <span class="menu-label">قیمت‌ها</span>
+                                <a href="doctor_price_overrides.php">قیمت‌های اختصاصی</a>
+                                <a href="lab_price_overrides.php">قیمت‌های لابراتوار</a>
+                                <?php if ($navIsBranch): ?><a href="branch_prices.php">قیمت‌های شعبه</a><?php endif; ?>
+                                <span class="menu-label">حساب‌ها</span>
+                                <a href="bank_accounts.php">حساب‌های بانکی</a>
+                                <a href="financial_overview.php">بررسی درآمد و هزینه</a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
                 <?php endif; ?>
-                <?php if (has_permission('view_invoices') || has_permission('view_clinic_invoices')): ?>
-                    <a href="invoices.php">فاکتورها</a>
-                    <a href="expenses.php">فاکتورهای مخارج (بدهی‌ها)</a>
-                    <a href="case_expenses.php">کیس‌های مخارج</a>
+
+                <?php if ($navIsAdmin): ?>
+                    <div class="nav-group">
+                        <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">مدیریت <span class="caret">▼</span></button>
+                        <div class="nav-group-menu">
+                            <?php if ($navIsRoot): ?>
+                                <a href="users.php">کاربران</a>
+                                <a href="branches.php">شعبه‌ها</a>
+                            <?php endif; ?>
+                            <a href="network.php">شبکه همکاران</a>
+                        </div>
+                    </div>
+
+                    <div class="nav-group">
+                        <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">وبسایت <span class="caret">▼</span></button>
+                        <div class="nav-group-menu">
+                            <a href="prices.php">قیمت‌ها</a>
+                            <a href="works.php">نمونه کار</a>
+                        </div>
+                    </div>
                 <?php endif; ?>
-                <?php if (has_permission('view_own_payments') || has_role('admin') || has_permission('view_clinic_payments')): ?>
-                    <a href="payments.php">پرداخت‌ها</a>
+
+                <?php if ($navIsRoot || $user): ?>
+                    <div class="nav-group">
+                        <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">تنظیمات <span class="caret">▼</span></button>
+                        <div class="nav-group-menu">
+                            <a href="change_password.php">تغییر رمز عبور</a>
+                            <?php if ($navIsRoot): ?>
+                                <a href="roles.php">نقش‌ها</a>
+                                <a href="audit_log.php">لاگ فعالیت‌ها</a>
+                            <?php endif; ?>
+                        </div>
+                    </div>
                 <?php endif; ?>
-                <?php if ($user): ?>
-                    <a href="change_password.php">تغییر رمز عبور</a>
-                <?php endif; ?>
-                <a href="logout.php">خروج</a>
+
+                <a class="nav-link" href="logout.php">خروج</a>
             </nav>
             <?php if ($user): $notifCount = getUnreadNotificationCount($user['id']); ?>
                 <a href="notifications.php" class="notif-bell" style="position:relative; color:#fff; text-decoration:none; font-size:1.3rem; margin-right:10px;">
@@ -351,6 +485,24 @@ function panel_layout_end() {
         var nav = document.getElementById('siteNav');
         if (nav) nav.classList.toggle('mobile-open');
     }
+    // Grouped nav dropdowns: open one group at a time.
+    function toggleNavGroup(btn) {
+        var group = btn.closest('.nav-group');
+        if (!group) return;
+        var wasOpen = group.classList.contains('open');
+        document.querySelectorAll('#siteNav .nav-group.open').forEach(function(g){
+            if (g !== group) g.classList.remove('open');
+        });
+        group.classList.toggle('open', !wasOpen);
+    }
+    // Close groups when clicking outside the nav
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#siteNav')) {
+            document.querySelectorAll('#siteNav .nav-group.open').forEach(function(g){
+                g.classList.remove('open');
+            });
+        }
+    });
     // Close menu when clicking outside
     document.addEventListener('click', function(e) {
         var nav = document.getElementById('siteNav');

@@ -110,6 +110,22 @@ panel_layout_start('نمایه پزشک: ' . $doctor['name']);
                 <p style="margin:4px 0;"><strong>ایمیل:</strong> —</p>
             <?php endif; ?>
             <p style="margin:4px 0;"><strong>وضعیت:</strong> <?= $doctor['active'] ? 'فعال' : 'غیرفعال' ?></p>
+            <?php if (!empty($doctor['clinic_id'])): ?>
+                <?php $clinicOfDoc = db()->prepare('SELECT id, full_name FROM users WHERE id = ? AND role = "clinic"'); $clinicOfDoc->execute([(int) $doctor['clinic_id']]); $clinicRow = $clinicOfDoc->fetch(); ?>
+                <p style="margin:4px 0;"><strong>عضویت در کلینیک:</strong>
+                    <?= $clinicRow ? htmlspecialchars($clinicRow['full_name']) : htmlspecialchars((string) $doctor['clinic_id']) ?>
+                </p>
+            <?php else: ?>
+                <p style="margin:4px 0;"><strong>عضویت در کلینیک:</strong> —</p>
+            <?php endif; ?>
+            <?php if (!empty($doctor['lab_id'])): ?>
+                <?php $labOfDoc = db()->prepare("SELECT id, full_name FROM users WHERE id = ? AND role IN ('outsource_lab','customer_lab','partner_lab','lab')"); $labOfDoc->execute([(int) $doctor['lab_id']]); $labRow = $labOfDoc->fetch(); ?>
+                <p style="margin:4px 0;"><strong>زیرمجموعه لابراتوار:</strong>
+                    <?= $labRow ? htmlspecialchars($labRow['full_name']) : htmlspecialchars((string) $doctor['lab_id']) ?>
+                </p>
+            <?php else: ?>
+                <p style="margin:4px 0;"><strong>زیرمجموعه لابراتوار:</strong> —</p>
+            <?php endif; ?>
             <?php if ($doctor['notes']): ?>
                 <p style="margin:4px 0;"><strong>یادداشت:</strong></p>
                 <div style="white-space:pre-wrap; direction:rtl; text-align:right; unicode-bidi:plaintext; line-height:1.9;"><?= nl2br(htmlspecialchars($doctor['notes'])) ?></div>

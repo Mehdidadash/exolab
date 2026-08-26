@@ -2,7 +2,7 @@
 // panel/designer_invoices.php
 // List of freelance designer (design-fee) invoices.
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 $invoices = getAllDesignerInvoices();
 

@@ -2,7 +2,7 @@
 // panel\save_price.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 
 require_csrf();
 

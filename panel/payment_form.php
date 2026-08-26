@@ -2,7 +2,7 @@
 // panel\payment_form.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 $editing = !empty($_GET['id']);
 $payment = $editing ? getPayment((int) $_GET['id']) : null;
 if ($editing && !$payment) {

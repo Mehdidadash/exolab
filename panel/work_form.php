@@ -2,7 +2,7 @@
 // panel\work_form.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 $work = null;
 $editing = false;
 

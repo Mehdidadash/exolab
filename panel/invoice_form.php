@@ -2,7 +2,7 @@
 // panel\invoice_form.php
 
 require_once __DIR__ . '/auth.php';
-require_role('admin');
+require_admin();
 $editing = !empty($_GET['id']);
 $invoice = $editing ? getInvoice((int) $_GET['id']) : null;
 $billingTargets = getAllBillingTargets();
