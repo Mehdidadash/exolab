@@ -11,9 +11,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !empty($_POST['id'])) {
     
     if ($work) {
         // حذف فایل تصویر
-        $image_path = __DIR__ . '/../assets/uploads/' . $work['image_filename'];
+        $image_path = resolve_upload_path($work['image_filename']);
         if (file_exists($image_path)) {
             unlink($image_path);
+        }
+        $legacy_path = legacy_uploads_path($work['image_filename']);
+        if ($legacy_path !== $image_path && file_exists($legacy_path)) {
+            unlink($legacy_path);
         }
         
         // حذف از دیتابیس

@@ -45,8 +45,11 @@ $params = [];
 
 // Branch scoping: a branch-scoped user sees only their branch's cases
 // (owned by their branch OR where their branch is the partner/source branch).
-if (is_branch_scoped()) {
-    $bScope = branchCaseScope('c');
+// مدیر کل (نقش admin) نیز به‌عنوان شعبهٔ مرکزی (۱) رفتار می‌کند.
+if (is_branch_scoped() || is_root_admin()) {
+    $scopeBranch = currentBranchId();
+    if ($scopeBranch === null) $scopeBranch = 1;
+    $bScope = branchCaseScope('c', $scopeBranch);
     $whereClauses[] = $bScope['sql'];
     $params = array_merge($params, $bScope['params']);
 }
@@ -59,8 +62,9 @@ if ($isDoctor && !$isClinicOwner) {
     $whereClauses[] = 'c.doctor_id = ?';
     $params[] = $doctorId;
 } elseif ($isLab) {
-    // Lab users only see cases assigned to their lab
-    $whereClauses[] = 'c.lab_id = ?';
+    // Lab users see cases assigned to their lab OR side-outsourced to them
+    $whereClauses[] = '(c.lab_id = ? OR c.outsourced_lab_id = ?)';
+    $params[] = $user['id'];
     $params[] = $user['id'];
 } elseif ($isDesigner) {
     // Designers only see cases where they are assigned as the designer
@@ -127,8 +131,8 @@ if ($isDoctor && !$isClinicOwner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE doctor_id = ?');
     $totalStmt->execute([$doctorId]);
 } elseif ($isLab) {
-    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE lab_id = ?');
-    $totalStmt->execute([$user['id']]);
+    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE lab_id = ? OR outsourced_lab_id = ?');
+    $totalStmt->execute([$user['id'], $user['id']]);
 } elseif ($isDesigner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE designer_id = ?');
     $totalStmt->execute([$user['id']]);
@@ -136,8 +140,10 @@ if ($isDoctor && !$isClinicOwner) {
     $clinicScope = getClinicScope('c');
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE ' . $clinicScope['sql']);
     $totalStmt->execute($clinicScope['params']);
-} elseif (is_branch_scoped()) {
-    $bScope = branchCaseScope('c');
+} elseif (is_branch_scoped() || is_root_admin()) {
+    $scopeBranch = currentBranchId();
+    if ($scopeBranch === null) $scopeBranch = 1;
+    $bScope = branchCaseScope('c', $scopeBranch);
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases c WHERE ' . $bScope['sql']);
     $totalStmt->execute($bScope['params']);
 } else {
@@ -168,7 +174,9 @@ if ($clientAll) {
 $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
         di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, des.full_name AS designer_name,
         b.name AS branch_name, sb.name AS source_branch_name,
-        (SELECT COUNT(*) FROM case_files cf WHERE cf.case_id = c.id) AS file_count
+        (SELECT COUNT(*) FROM case_files cf WHERE cf.case_id = c.id) AS file_count,
+        (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"design\"%') AS design_downloaded,
+        (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"raw\"%') AS raw_downloaded
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id
     LEFT JOIN site_prices p ON c.service_id = p.id
@@ -193,6 +201,30 @@ $data = [];
 foreach ($rows as $r) {
     $received = toJalaliDateFormatted($r['received_date']);
     $price = formatAmountToman($r['total_price'] ?? $r['unit_price'] ?? 0);
+
+    // اگر بیننده «انجام‌دهنده/گیرندهٔ کارِ برون‌سپاری» است، مبلغِ مربوط به خودش را نشان بده
+    // (نرخ برون‌سپاری × تعداد)، نه قیمتِ خرده‌فروشیِ شعبهٔ مالک.
+    // مثال: لابراتوار مرکزی روی کیسِ lab_outِ قزوین → ۵٬۰۰۰٬۰۰۰ (نه ۹٬۵۰۰٬۰۰۰).
+    $providerLabId = 0;
+    if (($r['case_type'] ?? '') === 'lab_out') {
+        $providerLabId = (int) ($r['lab_id'] ?? 0);
+    } elseif (!empty($r['outsourced_lab_id']) && (int) ($r['outsourced_qty'] ?? 0) > 0) {
+        $providerLabId = (int) $r['outsourced_lab_id'];
+    }
+    if ($providerLabId > 0) {
+        $isProvider = $isLab && $providerLabId === (int) $user['id'];
+        if (!$isProvider) {
+            $plabSt = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+            $plabSt->execute([$providerLabId]);
+            $plabBranch = (int) $plabSt->fetchColumn();
+            $myBr = currentBranchId();
+            if ($myBr === null && is_root_admin()) $myBr = 1;   // مدیر کل = شعبهٔ مرکزی
+            $isProvider = ($myBr !== null && $plabBranch > 0 && $plabBranch === $myBr);
+        }
+        if ($isProvider) {
+            $price = formatAmountToman(getInboundReceivableAmount($r));
+        }
+    }
     $invoiceHtml = !empty($r['invoice_number']) ? '<a href="invoice_form.php?id=' . htmlspecialchars($r['invoice_id']) . '">' . htmlspecialchars($r['invoice_number']) . '</a>' : '—';
     if ($isDesigner) {
         // Designers must not see prices, totals, or invoice info
@@ -270,7 +302,9 @@ foreach ($rows as $r) {
         $r['file_count'] ?: 0,
         $r['label_printed_at'] ?? null,
         $r['status_name'] ?: '—',
-        $r['receipt_number'] ?: ''
+        $r['receipt_number'] ?: '',
+        $r['raw_downloaded'] ? 1 : 0,
+        $r['design_downloaded'] ? 1 : 0
     ];
 }
 

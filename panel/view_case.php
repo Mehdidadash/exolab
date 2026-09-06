@@ -43,8 +43,11 @@ if ($id) {
     }
     // Branch scoping: any branch-scoped user (including branch_admin) may only
     // access cases of their own branch or where their branch is the partner.
-    if (is_branch_scoped()) {
-        $bScope = branchCaseScope('c');
+    // مدیر کل (نقش admin) نیز به‌عنوان شعبهٔ مرکزی (۱) رفتار می‌کند.
+    if (is_branch_scoped() || is_root_admin()) {
+        $scopeBranch = currentBranchId();
+        if ($scopeBranch === null) $scopeBranch = 1;
+        $bScope = branchCaseScope('c', $scopeBranch);
         $sql .= ' AND ' . $bScope['sql'];
         $params = array_merge($params, $bScope['params']);
     }
@@ -53,7 +56,7 @@ if ($id) {
     $case = $stmt->fetch();
 
     if ($case) {
-        $fstmt = db()->prepare('SELECT * FROM case_files WHERE case_id = ? ORDER BY id ASC');
+        $fstmt = db()->prepare('SELECT cf.*, u.full_name AS uploader_name FROM case_files cf LEFT JOIN users u ON u.id = cf.uploader_id WHERE cf.case_id = ? ORDER BY cf.id ASC');
         $fstmt->execute([$id]);
         $files = $fstmt->fetchAll();
 
@@ -81,6 +84,9 @@ if ($id) {
             $pStmt->execute([$case['parent_id']]);
             $parentCase = $pStmt->fetch();
         }
+
+        // لاگ مشاهده صفحه‌ی مشاهده کیس (چه کسی و چه زمانی)
+        log_case_activity((int) $case['id'], 'view', 'مشاهده صفحه کیس');
     }
 }
 
@@ -157,6 +163,35 @@ panel_layout_start('مشاهده کیس');
             $pb = db()->prepare('SELECT name FROM branches WHERE id = ?');
             $pb->execute([(int) $case['source_branch_id']]);
             $partnerBranchName = (string) $pb->fetchColumn();
+        }
+        ?>
+
+        <?php
+        // اگر بیننده «انجام‌دهنده/گیرندهٔ کارِ برون‌سپاری» باشد، به‌جای قیمتِ خرده‌فروشیِ
+        // شعبهٔ مالک، مبلغِ خودش (نرخ برون‌سپاری × تعداد) نمایش داده شود.
+        // مثال: لابراتوار مرکزی روی کیسِ lab_outِ قزوین → ۵٬۰۰۰٬۰۰۰ (نه ۹٬۵۰۰٬۰۰۰).
+        $viewerProviderFee = null;
+        $provLabId = 0;
+        $cTypeP = $case['case_type'] ?? '';
+        if ($cTypeP === 'lab_out') {
+            $provLabId = (int) ($case['lab_id'] ?? 0);
+        } elseif (!empty($case['outsourced_lab_id']) && (int) ($case['outsourced_qty'] ?? 0) > 0) {
+            $provLabId = (int) $case['outsourced_lab_id'];
+        }
+        if ($provLabId > 0) {
+            $isCaseProvider = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true)
+                && $provLabId === (int) $user['id'];
+            if (!$isCaseProvider) {
+                $plb = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+                $plb->execute([$provLabId]);
+                $plbId = (int) $plb->fetchColumn();
+                $mbx = currentBranchId();
+                if ($mbx === null && is_root_admin()) $mbx = 1;   // مدیر کل = شعبهٔ مرکزی
+                $isCaseProvider = ($mbx !== null && $plbId > 0 && $plbId === $mbx);
+            }
+            if ($isCaseProvider) {
+                $viewerProviderFee = getInboundReceivableAmount($case);
+            }
         }
         ?>
 
@@ -249,6 +284,15 @@ panel_layout_start('مشاهده کیس');
             </tr>
             <?php endif; ?>
             <?php if (!$hideFinancial): ?>
+            <?php if ($viewerProviderFee !== null): ?>
+            <tr style="background:#f0fdf4;">
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>سهم لابراتوار (برون‌سپاری):</strong></td>
+                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee; color:#166534; font-weight:bold;">
+                    <?= formatAmountToman($viewerProviderFee) ?> تومان
+                    <small style="font-weight:normal; color:#525252; display:block; margin-top:2px;">مبلغ قابل دریافت بابت انجام این کیس (نرخ برون‌سپاری × تعداد).</small>
+                </td>
+            </tr>
+            <?php else: ?>
             <tr>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>فی (تومان):</strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= $case['unit_price'] ? formatAmountToman($case['unit_price']) : '—' ?></td>
@@ -261,6 +305,7 @@ panel_layout_start('مشاهده کیس');
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
             </tr>
+            <?php endif; ?>
             <?php endif; ?>
             <?php if (!empty($case['doctor_notes'])): ?>
             <tr>
@@ -432,6 +477,36 @@ panel_layout_start('مشاهده کیس');
             <?php endif; ?>
         </div>
 
+        <div class="form-card" style="margin-top:20px;">
+            <h4>تاریخچه فعالیت‌های کیس</h4>
+            <?php $activityLog = getCaseActivityLog($case['id']); ?>
+            <?php if (!empty($activityLog)): ?>
+                <div style="max-height:340px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-left:4px;">
+                    <?php
+                    $actLabels = [
+                        'create'        => ['ایجاد کیس', '#dcfce7', '#166534'],
+                        'update'        => ['ویرایش کیس', '#fef9c3', '#854d0e'],
+                        'file_upload'   => ['آپلود فایل', '#cffafe', '#155e75'],
+                        'file_download' => ['دانلود فایل', '#ede9fe', '#5b21b6'],
+                        'view'          => ['مشاهده صفحه', '#f3f4f6', '#374151'],
+                        'comment'       => ['کامنت', '#ffe4e6', '#9f1239'],
+                        'status_change' => ['تغییر وضعیت', '#e0e7ff', '#3730a3'],
+                    ];
+                    foreach ($activityLog as $log):
+                        $act = $actLabels[$log['action']] ?? [$log['action'], '#f3f4f6', '#374151'];
+                    ?>
+                        <div style="display:flex; align-items:center; gap:8px; font-size:0.85rem; padding:6px 8px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; flex-wrap:wrap;">
+                            <span class="badge" style="background:<?= $act[1] ?>; color:<?= $act[2] ?>;"><?= htmlspecialchars($act[0]) ?></span>
+                            <span style="flex:1; min-width:120px;"><?= htmlspecialchars($log['user_name'] ?? 'سیستم') ?></span>
+                            <span style="color:#6b7280; font-size:0.78rem;"><?= toJalaliDateFormatted($log['created_at']) ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <p class="empty">هنوز فعالیتی برای این کیس ثبت نشده است.</p>
+            <?php endif; ?>
+        </div>
+
         <?php if (!empty($subCases)): ?>
             <h4>کیس‌های وابسته (زیرمجموعه)</h4>
             <ul>
@@ -509,6 +584,14 @@ panel_layout_start('مشاهده کیس');
                 <input type="file" id="case-upload-input" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.rar,.zip" multiple>
                 <button type="submit" class="btn" style="background:#06B6D4; color:#fff;">آپلود</button>
                 <span id="case-upload-selection" style="display:none; font-weight:bold; color:#0369a1; background:#e0f2fe; padding:4px 10px; border-radius:6px; font-size:0.85rem;"></span>
+                <label style="display:flex; align-items:center; gap:6px; width:100%; margin:4px 0 0; font-weight:600; font-size:0.9rem;">
+                    نوع فایل:
+                    <select id="case-upload-type" name="file_type" style="padding:6px 8px; border:1px solid #d1d5db; border-radius:6px; font-family:inherit;">
+                        <?php foreach (caseFileTypeConfig()['options'] as $ftKey => $ftLabel): ?>
+                            <option value="<?= $ftKey ?>" <?= $ftKey === caseFileTypeDefault($user) ? 'selected' : '' ?>><?= $ftLabel ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </label>
                 <label style="display:flex; align-items:center; gap:6px; width:100%; margin:4px 0 0; font-weight:600; font-size:0.9rem; cursor:pointer;">
                     <input type="checkbox" id="case-upload-compress" style="width:auto;"> همه فایل‌ها را یکجا به‌صورت ZIP ذخیره کن
                 </label>
@@ -571,6 +654,8 @@ panel_layout_start('مشاهده کیس');
                 if (compressCb && compressCb.checked) fd.append('compress', '1');
                 var descEl = document.getElementById('case-upload-description');
                 if (descEl && descEl.value.trim()) fd.append('description', descEl.value.trim());
+                var typeEl = document.getElementById('case-upload-type');
+                if (typeEl) fd.append('file_type', typeEl.value);
                 var xhr = new XMLHttpRequest();
                 xhr.open('POST', 'upload_case_files.php', true);
                 xhr.setRequestHeader('X-CSRF-Token', csrf);
@@ -614,8 +699,10 @@ panel_layout_start('مشاهده کیس');
                 foreach ($files as $f): 
                     $ext = strtolower(pathinfo($f['filename'], PATHINFO_EXTENSION));
                     $isImage = in_array($ext, $imageExts);
-                    $fileUrl = '../assets/uploads/cases/'.$case['id'].'/'.$f['filename'];
+                    $fileUrl = 'serve_case_file.php?id='.$f['id'].'&n='.rawurlencode($f['original_name']);
                     $fileDesc = trim((string) ($f['description'] ?? ''));
+                    // نوع فایل: اول نوع ذخیره‌شده، وگرنه تشخیص خودکار از پسوند
+                    $typeBadge = caseFileBadge($f['file_type'] ?? null, $ext);
                 ?>
                     <div class="file-chip" style="display:flex; flex-direction:column; gap:4px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:6px 8px;">
                         <div style="display:flex; gap:4px; align-items:center; flex-wrap:wrap;">
@@ -642,6 +729,11 @@ panel_layout_start('مشاهده کیس');
                         <?php if ($fileDesc !== ''): ?>
                             <div class="file-desc" style="font-size:0.8rem; color:#374151; background:#f3f4f6; border-radius:6px; padding:4px 6px; white-space:pre-wrap; line-height:1.6;"><?= htmlspecialchars($fileDesc) ?></div>
                         <?php endif; ?>
+                        <div style="font-size:0.72rem; color:#6b7280; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                            <?php if (!empty($f['uploader_name'])): ?><span>👤 <?= htmlspecialchars($f['uploader_name']) ?></span><?php endif; ?>
+                            <?php if (!empty($f['size'])): ?><span>💾 <?= formatFileSize($f['size']) ?></span><?php endif; ?>
+                            <span><?= $typeBadge ?></span>
+                        </div>
                         <?php if (!empty($f['created_at'])): ?>
                             <div style="font-size:0.72rem; color:#6b7280;">📅 <?= toJalaliDateTimeFormatted($f['created_at']) ?> — <?= htmlspecialchars(formatElapsedTime($f['created_at'])) ?></div>
                         <?php endif; ?>
@@ -1411,19 +1503,24 @@ panel_layout_start('مشاهده کیس');
         toggleLabGroup();
         ecUpdateTeethForLocation();
         ecUpdateQuantity();
-        if (typeof $.fn !== 'undefined' && $.fn.persianDatepicker && !dp) {
+        if (typeof $.fn !== 'undefined' && $.fn.persianDatepicker) {
             try {
-                // persianDigit must be TRUE: the input value is in Persian digits
-                // (toJalaliDateFormatted), otherwise the picker parses it as invalid
-                // and falls back to today's date instead of the case's received date.
-                dp = $('#ec-received-date').persianDatepicker({
-                    format: 'YYYY/MM/DD',
-                    calendarType: 'persian',
-                    initialValue: $('#ec-received-date').val() || false,
-                    initialValueType: 'jalali',
-                    persianDigit: true,
-                    autoClose: true
-                });
+                var $rec = $('#ec-received-date');
+                // مقدار معتبر «تاریخ دریافت» از سرور (دیتابیس). هنگام هر بار باز شدنِ مودال
+                // دوباره اعمال می‌شود تا پلاگین تقویم نتواند آن را به «امروز» تغییر دهد.
+                var recOrig = '<?= htmlspecialchars(toJalaliDateFormatted($case['received_date'] ?? ''), ENT_QUOTES) ?>';
+                if (!dp) {
+                    dp = $rec.persianDatepicker({
+                        format: 'YYYY/MM/DD',
+                        calendarType: 'persian',
+                        initialValue: false,
+                        persianDigit: true,
+                        autoClose: true
+                    });
+                }
+                if (recOrig) {
+                    $rec.val(recOrig);
+                }
             } catch(e) {}
         }
     }

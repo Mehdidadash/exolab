@@ -4,6 +4,9 @@
 // per-unit fee = designer's design-fee override for that service.
 require_once __DIR__ . '/auth.php';
 require_admin();
+// هر شعبه فقط طراحیِ کیس‌هایی را فاکتور می‌کند که خودش پرداخت‌کننده است؛ کیس‌هایِ لابراتوار
+// مرکزی (پرداخت‌کننده = مرکزی) در فهرستِ شعبه‌های دیگر نمی‌آیند. مدیر کل = شعبه مرکزی.
+$designPayerBranch = currentBranchId() ?? 1;
 
 use Morilog\Jalali\Jalalian;
 
@@ -68,7 +71,7 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
     }
 
     if (empty($message) && $startDate !== '' && $endDate !== '') {
-        $cases = getUninvoicedCasesForDesigner($designerId, $startDate, $endDate);
+        $cases = getUninvoicedCasesForDesigner($designerId, $startDate, $endDate, $designPayerBranch);
 
         if ($selectedCasesOnly && !empty($selectedCaseIds)) {
             $cases = array_values(array_filter($cases, function($c) use ($selectedCaseIds) {
@@ -201,7 +204,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm']) && $_POST[
             goto show_message;
         }
     }
-    $cases = getUninvoicedCasesForDesigner($designerId, $startDate, $endDate);
+    $cases = getUninvoicedCasesForDesigner($designerId, $startDate, $endDate, $designPayerBranch);
     if (!empty($selectedCaseIds)) {
         $cases = array_values(array_filter($cases, function($c) use ($selectedCaseIds) {
             return in_array((int)$c['id'], $selectedCaseIds);

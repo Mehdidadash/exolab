@@ -99,6 +99,12 @@ panel_layout_start('مدیریت کیس‌ها');
             <?php if (has_permission('edit_cases') || has_role('admin')): ?>
             <button type="button" id="change-designer-btn" class="btn" style="background: #d97706; color: #fff;" onclick="openChangeDesignerModal()">🔁 تغییر طراح</button>
             <?php endif; ?>
+            <?php if (has_permission('edit_cases') || has_role('admin')): ?>
+            <button type="button" id="download-designs-btn" class="btn" style="background: #0F172A; color: #fff;" onclick="downloadDesignFiles()" title="دانلود فایل‌های RAR طراحی که طراح کیس‌ها آپلود کرده است">⬇ دانلود طراحی‌ها</button>
+            <?php endif; ?>
+            <?php if (has_permission('edit_cases') || has_role('admin') || has_role('designer') || in_array($user['role'] ?? '', ['outsource_lab','partner_lab','customer_lab','lab'])): ?>
+            <button type="button" id="download-files-btn" class="btn" style="background: #0F172A; color: #fff;" onclick="downloadCaseFiles()" title="دانلود هم‌زمان فایل‌های خام (اسکن) کیس‌های انتخاب‌شده — فایل‌های طراحی از دکمه‌ی «دانلود طراحی‌ها» دانلود می‌شوند">⬇ دانلود فایل‌های خام</button>
+            <?php endif; ?>
         </div>
     </div>
     <div id="filters-area" style="display:none;">
@@ -119,7 +125,8 @@ panel_layout_start('مدیریت کیس‌ها');
 </div>
 
 <p style="margin-bottom: 16px; font-weight: 700;">تعداد کیس‌ها: <span id="cases-count">—</span></p>
-<p style="margin-bottom: 16px; font-size: 12px; color: #166534;">🟩 شماره کیس سبز = برچسب این کیس قبلاً چاپ شده است.</p>
+<p style="margin-bottom: 4px; font-size: 12px; color: #166534;">🟩 شماره کیس سبز = برچسب این کیس قبلاً چاپ شده است.</p>
+<p style="margin-bottom: 16px; font-size: 12px; color: #525252;">🟦 «خام» و 🟪 «طراحی» در ستون فایل‌ها = فایل(های) خام یا طراحی این کیس قبلاً دانلود شده‌اند.</p>
 
 <table id="cases-table" class="display" style="width:100%">
     <thead>
@@ -181,7 +188,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     </select>
                 </div>
                 <?php endif; ?>
-                <div class="form-group" id="lab-group">
+                <div class="form-group" id="lab-group" style="display:none;">
                     <label for="case-lab-id" id="lab-label">لابراتوار</label>
                     <select id="case-lab-id" name="lab_id">
                         <option value="">انتخاب لابراتوار...</option>
@@ -321,17 +328,26 @@ panel_layout_start('مدیریت کیس‌ها');
                 </div>
                 <?php if (!$isDoctor): ?>
                 <div class="form-group" style="grid-column:1/-1;">
-                    <label for="case-files">فایل طراحی (STL / PLY)</label>
-                    <input type="file" id="case-files" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.rar,.zip" multiple>
-                    <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-weight:600; font-size:0.9rem; cursor:pointer;">
-                        <input type="checkbox" id="case-files-compress" style="width:auto;"> همه فایل‌ها را یکجا به‌صورت ZIP ذخیره کن
-                    </label>
-                    <span id="case-files-selection" style="display:none; font-weight:bold; color:#0369a1; background:#e0f2fe; padding:4px 10px; border-radius:6px; font-size:0.85rem; margin-top:6px;"></span>
-                    <div id="case-files-progress" style="display:none; margin-top:8px;">
+                    <label>فایل‌های کیس <small style="color:#64748b; font-weight:400;">(اختیاری)</small></label>
+                    <small style="display:block; color:#525252; margin:0 0 8px; line-height:1.8;">
+                        می‌توانید چند «گروه فایل» بسازید؛ برای هر گروه <b>نوع فایل</b>، <b>توضیحات</b> و <b>بسته‌بندی ZIP</b> را جداگانه تعیین کنید
+                        (مثلاً یک گروه «طراحی نهایی» و یک گروه «عکس بیمار»).
+                    </small>
+                    <div id="cf-groups"></div>
+                    <button type="button" id="cf-add-group" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0;">＋ افزودن گروه فایل دیگر</button>
+                    <div id="cf-formats" style="margin-top:8px; font-size:.8rem; color:#64748b; line-height:1.8;">
+                        فرمت‌های مجاز: <b>STL، PLY، STP، STEP، OBJ، 3MF</b> (اسکن/مدل سه‌بعدی) ·
+                        <b>JPG، JPEG، PNG، GIF، WEBP، BMP</b> (تصویر) ·
+                        <b>RAR، ZIP</b> (بایگانی)
+                    </div>
+                    <div id="case-files-progress" style="display:none; margin-top:10px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:.82rem; color:#333; margin-bottom:4px;">
+                            <span id="cf-progress-label">در حال آپلود...</span>
+                            <span id="case-files-percent"></span>
+                        </div>
                         <div style="background:#e5e7eb; border-radius:6px; overflow:hidden; height:16px;">
                             <div id="case-files-bar" style="width:0%; height:100%; background:#06B6D4; transition:width .2s;"></div>
                         </div>
-                        <div id="case-files-percent" style="font-size:0.8rem; color:#555; margin-top:4px;"></div>
                     </div>
                 </div>
                 <?php endif; ?>
@@ -343,6 +359,186 @@ panel_layout_start('مدیریت کیس‌ها');
         </form>
     </div>
 </div>
+
+<style>
+    /* ── گروه‌های فایل کیس (drag & drop) ── */
+    #cf-groups{ margin-bottom:6px; }
+    .cf-group{ border:1px solid #dbe3ee; border-radius:10px; margin-bottom:10px; background:#fff; overflow:hidden; }
+    .cf-group-head{ display:flex; align-items:center; gap:8px; padding:8px 10px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; flex-wrap:wrap; }
+    .cf-group-title{ font-weight:700; font-size:.85rem; color:#0f172a; }
+    .cf-type{ flex:1 1 120px; min-width:0; }
+    .cf-group-remove{ border:1px solid #fecaca; background:#fef2f2; color:#b91c1c; border-radius:6px; padding:3px 10px; cursor:pointer; font-size:.8rem; }
+    .cf-dropzone{ border:2px dashed #cbd5e1; border-radius:8px; margin:10px; padding:18px 14px; text-align:center; cursor:pointer; background:#f8fafc; transition:border-color .15s, background .15s; }
+    .cf-dropzone:hover{ border-color:#94a3b8; }
+    .cf-dropzone.cf-drag{ border-color:#06B6D4; background:#ecfeff; }
+    .cf-dz-hint{ display:flex; align-items:center; justify-content:center; gap:8px; color:#64748b; font-size:.88rem; }
+    .cf-dz-files{ margin-top:8px; text-align:right; max-height:150px; overflow:auto; }
+    .cf-file{ display:flex; align-items:center; gap:8px; background:#fff; border:1px solid #e2e8f0; border-radius:6px; padding:4px 8px; margin:4px 0; font-size:.8rem; }
+    .cf-file-name{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:ltr; text-align:left; }
+    .cf-file-size{ color:#64748b; white-space:nowrap; }
+    .cf-file-remove{ border:none; background:none; color:#dc2626; cursor:pointer; font-size:.9rem; line-height:1; padding:0 2px; }
+    .cf-group-foot{ display:flex; gap:8px; align-items:center; padding:0 10px 12px; flex-wrap:wrap; }
+    .cf-desc{ flex:1 1 180px; min-width:0; }
+    .cf-zip-label{ display:flex; align-items:center; gap:5px; font-size:.82rem; font-weight:600; cursor:pointer; white-space:nowrap; color:#334155; }
+    .cf-zip-label input{ width:auto; }
+</style>
+
+<script>
+    /* ── گروه‌های فایل کیس: drag & drop + نوع/توضیح/زیپِ جداگانه برای هر گروه ── */
+    (function () {
+        'use strict';
+        if (window.CaseFiles) return;
+        var TYPE_OPTIONS = <?= json_encode(caseFileTypeConfig()['options'], JSON_UNESCAPED_UNICODE) ?>;
+        var TYPE_DEFAULT = <?= json_encode(caseFileTypeDefault($user)) ?>;
+        var ALLOWED = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'rar', 'zip'];
+        var ACCEPT = '.' + ALLOWED.join(',.');
+        var host = document.getElementById('cf-groups');
+        var groups = [];
+        function fa(n) { return String(n).replace(/\d/g, function (d) { return '۰۱۲۳۴۵۶۷۸۹'[+d]; }); }
+        function fmtSize(bytes) {
+            if (!(bytes > 0)) return '۰';
+            var u = ['B', 'KB', 'MB', 'GB'];
+            var i = Math.min(u.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+            var n = bytes / Math.pow(1024, i);
+            return (i === 0 || n >= 10 ? Math.round(n) : n.toFixed(1)) + ' ' + u[i];
+        }
+        function validExt(name) { return ALLOWED.indexOf((name.split('.').pop() || '').toLowerCase()) !== -1; }
+        function renumber() { groups.forEach(function (g, i) { var t = g.querySelector('.cf-group-title'); if (t) t.textContent = 'گروه ' + fa(i + 1); }); }
+
+        function addGroup() {
+            if (!host) return null;
+            var files = [];
+            var g = document.createElement('div'); g.className = 'cf-group';
+
+            var head = document.createElement('div'); head.className = 'cf-group-head';
+            var title = document.createElement('span'); title.className = 'cf-group-title'; title.textContent = 'گروه ' + fa(groups.length + 1);
+            var typeSel = document.createElement('select'); typeSel.className = 'cf-type';
+            Object.keys(TYPE_OPTIONS).forEach(function (k) {
+                var o = document.createElement('option'); o.value = k; o.textContent = TYPE_OPTIONS[k];
+                if (k === TYPE_DEFAULT) o.selected = true;
+                typeSel.appendChild(o);
+            });
+            var del = document.createElement('button'); del.type = 'button'; del.className = 'cf-group-remove'; del.textContent = 'حذف گروه';
+            del.addEventListener('click', function () { var i = groups.indexOf(g); if (i !== -1) groups.splice(i, 1); g.remove(); renumber(); });
+            head.appendChild(title); head.appendChild(typeSel); head.appendChild(del);
+
+            var dz = document.createElement('div'); dz.className = 'cf-dropzone';
+            var input = document.createElement('input'); input.type = 'file'; input.className = 'cf-input'; input.multiple = true; input.accept = ACCEPT; input.hidden = true;
+            var hint = document.createElement('div'); hint.className = 'cf-dz-hint'; hint.textContent = '📁 کلیک کنید یا فایل‌ها را اینجا رها کنید';
+            var listEl = document.createElement('div'); listEl.className = 'cf-dz-files';
+            dz.appendChild(input); dz.appendChild(hint); dz.appendChild(listEl);
+
+            function render() {
+                listEl.innerHTML = '';
+                files.forEach(function (f, fi) {
+                    var row = document.createElement('div'); row.className = 'cf-file';
+                    var nm = document.createElement('span'); nm.className = 'cf-file-name'; nm.textContent = f.name;
+                    var sz = document.createElement('span'); sz.className = 'cf-file-size'; sz.textContent = fmtSize(f.size);
+                    var rm = document.createElement('button'); rm.type = 'button'; rm.className = 'cf-file-remove'; rm.title = 'حذف'; rm.textContent = '✕';
+                    rm.addEventListener('click', function (e) { e.stopPropagation(); files.splice(fi, 1); render(); });
+                    row.appendChild(nm); row.appendChild(sz); row.appendChild(rm);
+                    listEl.appendChild(row);
+                });
+                hint.style.display = files.length ? 'none' : 'flex';
+            }
+            function acceptFiles(fileList) {
+                var bad = [], any = 0;
+                for (var i = 0; i < fileList.length; i++) {
+                    var f = fileList[i];
+                    if (!validExt(f.name)) { bad.push(f.name); continue; }
+                    var dup = files.some(function (x) { return x.name === f.name && x.size === f.size; });
+                    if (!dup) { files.push(f); any++; }
+                }
+                if (bad.length) alert('این فرمت‌ها مجاز نیستند:\n' + bad.join('\n') + '\n\nفرمت‌های مجاز: ' + ALLOWED.join(', '));
+                if (any) render();
+            }
+            dz.addEventListener('click', function (e) { if (e.target && e.target.classList && e.target.classList.contains('cf-file-remove')) return; input.click(); });
+            dz.addEventListener('dragover', function (e) { e.preventDefault(); dz.classList.add('cf-drag'); });
+            dz.addEventListener('dragleave', function () { dz.classList.remove('cf-drag'); });
+            dz.addEventListener('drop', function (e) {
+                e.preventDefault(); e.stopPropagation(); dz.classList.remove('cf-drag');
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) acceptFiles(e.dataTransfer.files);
+            });
+            input.addEventListener('change', function () { acceptFiles(input.files); input.value = ''; });
+
+            var foot = document.createElement('div'); foot.className = 'cf-group-foot';
+            var desc = document.createElement('input'); desc.type = 'text'; desc.className = 'cf-desc'; desc.placeholder = 'توضیحات (اختیاری) — مثلاً: اسکن فک بالا';
+            var zipLbl = document.createElement('label'); zipLbl.className = 'cf-zip-label';
+            var zip = document.createElement('input'); zip.type = 'checkbox'; zip.className = 'cf-zip';
+            zipLbl.appendChild(zip); zipLbl.appendChild(document.createTextNode(' ذخیره به‌صورت یک فایل ZIP'));
+            foot.appendChild(desc); foot.appendChild(zipLbl);
+
+            g.appendChild(head); g.appendChild(dz); g.appendChild(foot);
+            host.appendChild(g);
+            groups.push(g);
+            g._files = files;
+            g._zip = zip;
+            renumber();
+            return g;
+        }
+
+        function countFiles() { return groups.reduce(function (s, g) { return s + g._files.length; }, 0); }
+        function reset() { groups.forEach(function (g) { g.remove(); }); groups = []; if (host) addGroup(); }
+
+        function uploadAll(caseId, csrf, onAllDone) {
+            var prog = document.getElementById('case-files-progress');
+            var bar = document.getElementById('case-files-bar');
+            var label = document.getElementById('cf-progress-label');
+            var total = countFiles();
+            if (total === 0) { if (onAllDone) onAllDone(); return; }
+            if (prog) prog.style.display = 'block';
+            if (bar) bar.style.width = '0%';
+            if (label) label.textContent = 'در حال آپلود...';
+            var done = 0;
+            var todo = groups.slice();
+            function startGroup() {
+                var g = null;
+                for (var i = 0; i < todo.length; i++) { if (todo[i]._files.length) { g = todo[i]; todo.splice(i, 1); break; } }
+                if (!g) {
+                    if (bar) bar.style.width = '100%';
+                    if (label) label.textContent = 'آپلود کامل شد.';
+                    if (onAllDone) onAllDone();
+                    return;
+                }
+                var fd = new FormData();
+                fd.set('case_id', caseId);
+                fd.append('file_type', g.querySelector('.cf-type').value);
+                var d = (g.querySelector('.cf-desc').value || '').trim();
+                if (d) fd.set('description', d);
+                if (g._zip.checked) fd.set('compress', '1');
+                g._files.forEach(function (f) { fd.append('case_files[]', f); });
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', 'upload_case_files.php?case_id=' + encodeURIComponent(caseId), true);
+                xhr.setRequestHeader('X-CSRF-Token', csrf);
+                xhr.setRequestHeader('X-Case-Id', String(caseId));
+                xhr.upload.onprogress = function (ev) {
+                    if (ev.lengthComputable && label) {
+                        var p = Math.round(ev.loaded / ev.total * 100);
+                        label.textContent = 'در حال آپلود گروه... ' + p + '%';
+                        if (bar) bar.style.width = Math.round((done + (ev.loaded / ev.total) * g._files.length) / total * 100) + '%';
+                    }
+                };
+                xhr.onload = function () {
+                    var ok = true, msgs = [];
+                    try { var r = JSON.parse(xhr.responseText); if (!r.success) { ok = false; msgs = r.errors || ['خطای سرور']; } } catch (e) { ok = false; msgs = ['پاسخ نامعتبر سرور']; }
+                    if (!ok) alert('آپلود گروه ناموفق بود:\n' + msgs.join('\n'));
+                    done += g._files.length;
+                    if (bar) bar.style.width = Math.round(done / total * 100) + '%';
+                    if (label) label.textContent = 'در حال آپلود گروه بعدی...';
+                    startGroup();
+                };
+                xhr.onerror = function () { alert('خطا در آپلود فایل‌ها.'); done += g._files.length; startGroup(); };
+                xhr.send(fd);
+            }
+            startGroup();
+        }
+
+        window.CaseFiles = { addGroup: addGroup, reset: reset, countFiles: countFiles, uploadAll: uploadAll };
+        var addBtn = document.getElementById('cf-add-group');
+        if (addBtn) addBtn.addEventListener('click', function () { addGroup(); });
+        if (host) addGroup();
+    })();
+</script>
 
 <!-- Delete confirmation modal -->
 <div id="delete-modal" class="modal" style="display:none;">
@@ -402,6 +598,9 @@ panel_layout_start('مدیریت کیس‌ها');
 
 <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
 <link rel="stylesheet" href="../assets/css/case-teeth-picker.css">
+<style>
+.case-teeth-cell{white-space:normal; word-break:break-word; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;}
+</style>
 <script src="../assets/js/case-teeth-picker.js"></script>
 <style>
     .modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.45); z-index:9999; }
@@ -560,6 +759,7 @@ panel_layout_start('مدیریت کیس‌ها');
     }
     (function(){
         var todayJalali = '<?= toJalaliDateFormatted(date('Y-m-d')) ?>';
+        var editReceivedJalali = '';   // تاریخ دریافتِ معتبر هنگام ویرایش (از دیتابیس)
 
         function getDatepickerPlugin() {
             if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.persianDatepicker === 'function') {
@@ -571,30 +771,33 @@ panel_layout_start('مدیریت کیس‌ها');
             return null;
         }
 
+        // تبدیل ارقام فارسی به انگلیسی — پلاگین تاریخ، ارقام فارسی را در مقدار اولیه نمی‌پذیرد
+        // و در آن صورت تقویم را روی «امروز» باز می‌کند و مقدار ورودی را هم امروز می‌کند.
+        function faToEnDigits(s) {
+            return String(s).replace(/[۰-۹]/g, function (d) { return String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)); });
+        }
+
         function initJalaliPicker(selector) {
             var plugin = getDatepickerPlugin();
             if (!plugin) return false;
             jQuery(selector).each(function(){
                 var $el = jQuery(this);
-                try {
-                    $el.persianDatepicker({
-                        format: 'YYYY/MM/DD',
-                        calendarType: 'persian',
-                        initialValue: false,          // <-- crucial
-                        initialValueType: 'jalali',
-                        persianDigit: true,
-                        autoClose: true
-                    });
-                } catch (e) {
-                    try { $el.pDatepicker({
-                        format: 'YYYY/MM/DD',
-                        calendarType: 'persian',
-                        initialValue: false,
-                        initialValueType: 'jalali',
-                        persianDigit: true,
-                        autoClose: true
-                    }); } catch (e2) {}
-                }
+                var currentVal = $el.val();
+                // موقتاً مقدار را با ارقام انگلیسی بده تا پلاگین آن را پارس کند
+                // (تقویم روی همان تاریخِ ورودی باز شود، نه امروز).
+                if (currentVal) $el.val(faToEnDigits(currentVal));
+                var opts = {
+                    format: 'YYYY/MM/DD',
+                    calendarType: 'persian',
+                    initialValue: currentVal ? true : false,
+                    initialValueType: 'jalali',
+                    persianDigit: true,
+                    autoClose: true
+                };
+                try { $el.persianDatepicker(opts); }
+                catch (e) { try { $el.pDatepicker(opts); } catch (e2) {} }
+                // مقدار اصلی (با ارقام فارسی) را برای نمایش برگردان
+                if (currentVal) $el.val(currentVal);
             });
             return true;
         }
@@ -615,6 +818,9 @@ panel_layout_start('مدیریت کیس‌ها');
                 console.warn('Datepicker plugin not found');
                 return;
             }
+
+            // پلاگین ارقام فارسی را در مقدار اولیه نمی‌پذیرد؛ موقتاً انگلیسی کن
+            if (currentVal) $input.val(faToEnDigits(currentVal));
 
             try {
                 // Initialize with initialValue: true (which is default) to use the input's value
@@ -694,26 +900,38 @@ panel_layout_start('مدیریت کیس‌ها');
                     columns: [2, 3, 5, 7, 12, 16]  /* doctor, designer, service, shade, lab, status(text) */
                 },
                 columnDefs: [
-                    // location (col 6): fixed-ish width only – no pane
-                    { targets: [6], width: '110px', createdCell: function(td){ td.style.whiteSpace = 'nowrap'; } },
+                    // location/teeth (col 6): اجازه بده متن طولانی (شماره دندان‌ها) در ۲ ردیف بشکند؛
+                    // محدودیت ۲ ردیف روی یک <div> داخلی اعمال می‌شود (نه روی خودِ td — چیدمان جدول را خراب می‌کند)
+                    { targets: [6], width: '140px', createdCell: function(td, cellData){
+                        td.style.whiteSpace = 'normal';
+                        td.style.wordBreak = 'break-word';
+                        td.title = String(cellData || '');
+                    } },
                     // clean header for the plain-status pane (its <th> says "وضعیت (متن)")
                     { targets: [16], searchPanes: { header: 'وضعیت' } }
                 ],
                 columns: [
-                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
+                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= (has_role('admin') || has_role('designer') || in_array($user['role'] ?? '', ['outsource_lab','partner_lab','customer_lab','lab'])) ? 'true' : 'false' ?> },
                     { data: 0, render: function(data, type, row){ if (type === 'display' && row[14]) { return '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>'; } return data; } },
                     { data: 1 },
                     { data: 12, visible: <?= canSeeDesignerInfo() ? 'true' : 'false' ?> }, /* designer – internal only */
                     { data: 2 },
                     { data: 3 },
-                    { data: 4 },
+                    { data: 4, render: function(data, type){ if (type !== 'display') return data; return '<div class="case-teeth-cell" title="' + (data ? String(data).replace(/"/g, '&quot;') : '') + '">' + (data || '') + '</div>'; } },
                     { data: 5 },
                     { data: 6, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* price – hidden for designers */
                     { data: 7 },
                     { data: 8 },
                     { data: 9, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* invoice – hidden for designers */
                     { data: 10, orderable: false, searchable: true, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
-                    { data: 13, orderable: false, searchable: false, render: function(data){ return data || 0; } }, /* files count */
+                    { data: 13, orderable: false, searchable: false, render: function(data, type, row){
+                        var html = String(data || 0);
+                        var chips = [];
+                        if (row[17]) chips.push('<span style="background:#e0f2fe; color:#0369a1; border-radius:6px; padding:1px 6px; font-size:0.72rem;" title="فایل خام این کیس قبلاً دانلود شده است">خام ✓</span>');
+                        if (row[18]) chips.push('<span style="background:#f3e8ff; color:#6b21a8; border-radius:6px; padding:1px 6px; font-size:0.72rem;" title="فایل طراحی این کیس قبلاً دانلود شده است">طراحی ✓</span>');
+                        if (chips.length) html += '<div style="margin-top:3px; line-height:1.5;">' + chips.join(' ') + '</div>';
+                        return html;
+                    } }, /* files count + download status */
                     { data: 16 }, /* receipt number */
                     { data: 11, orderable: false, searchable: false }, /* actions */
                     { data: 15, visible: false, searchable: true } /* plain status text for SearchPanes */
@@ -817,6 +1035,11 @@ panel_layout_start('مدیریت کیس‌ها');
                     var n = countTeethFromValue(v);
                     qty.val(n > 0 ? n : 1);
                 }
+                // با تغییر تعداد (دندان/فک)، هزینه طراحی هم دوباره محاسبه شود.
+                // مقدار دادن برنامه‌ای به #case-quantity رویداد change را آتش نمی‌زند،
+                // پس بدون این فراخوانی، هزینه‌ی طراحیِ محاسبه‌شده برای تعدادِ قبلی باقی می‌ماند
+                // (باگِ وابسته به ترتیب انتخاب خدمت/طراح/دندان).
+                applyDesignFee();
             }
             jQuery(document).on('change', '#case-location-type', function(){
                 updateTeethForLocation();
@@ -832,7 +1055,10 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-id').val('');
                 jQuery('#case-parent-id').val('');
                 if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
-                openCaseModal();
+                // حالت پیش‌فرض «کیس دکتر» → لابراتوار مخفی است تا نوع کیس تغییر کند
+                jQuery('#case-type').val('doctor');
+                toggleCaseType('doctor');
+                openCaseModal('افزودن کیس جدید', true);
             });
 
             // Auto-open modal with parent_id from URL parameter ?add_sub=XXX
@@ -861,7 +1087,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     setTimeout(function(){ initCaseReceivedDate(); }, 100);
                     <?php endif; ?>
                 }
-                openCaseModal('افزودن کیس زیرمجموعه برای کیس #' + addSub);
+                openCaseModal('افزودن کیس زیرمجموعه برای کیس #' + addSub, true);
             }
 
             jQuery(document).on('click', '.edit-case', function(e){
@@ -906,11 +1132,23 @@ panel_layout_start('مدیریت کیس‌ها');
                 deleteId = null;
             });
 
-            function openCaseModal(title){
+            function openCaseModal(title, isAdd){
                 jQuery('#case-modal-title').text(title || 'افزودن کیس جدید');
                 jQuery('#case-modal').css({display: 'flex'});
+                if (isAdd) {
+                    // طراح همیشه «طراح پیش‌فرض» است + گروه‌های فایل خالی
+                    var did = Number('<?= (int) $defaultDesignerId ?>') || 0;
+                    if (did) jQuery('#case-designer-id').val(did);
+                    var pwEl = document.getElementById('case-files-progress');
+                    if (pwEl) pwEl.style.display = 'none';
+                    if (window.CaseFiles) window.CaseFiles.reset();
+                }
                 if (!jQuery('#case-received-date').val()) {
                     jQuery('#case-received-date').val(todayJalali);
+                }
+                // هنگام ویرایش، همیشه «تاریخ دریافتِ» دیتابیس اعمال شود (به امروز نرود)
+                if (!isAdd && editReceivedJalali) {
+                    jQuery('#case-received-date').val(editReceivedJalali);
                 }
                 updateTeethForLocation();
                 updateCaseQuantity();
@@ -923,10 +1161,9 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-form')[0].reset();
                 if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
                 jQuery('#case-save').prop('disabled', false).text('ذخیره');
-                var selSpan = document.getElementById('case-files-selection');
-                if (selSpan) selSpan.style.display = 'none';
                 var progWrap = document.getElementById('case-files-progress');
                 if (progWrap) progWrap.style.display = 'none';
+                if (window.CaseFiles) window.CaseFiles.reset();
                 setTimeout(function(){ jQuery('#case-received-date').val(''); }, 100);
             }
             jQuery('#case-cancel').on('click', function(){ closeCaseModal(); });
@@ -973,30 +1210,7 @@ panel_layout_start('مدیریت کیس‌ها');
             })();
 
 
-            // Show selected file count + total size for the case modal file input
-            var caseFilesInput = document.getElementById('case-files');
-            var caseFilesSel = document.getElementById('case-files-selection');
-            if (caseFilesInput && caseFilesSel) {
-                function caseFilesFormat(bytes){
-                    if (bytes <= 0) return '0';
-                    var u = ['B','KB','MB','GB'];
-                    var i = Math.floor(Math.log(bytes) / Math.log(1024));
-                    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + u[i];
-                }
-                caseFilesInput.addEventListener('change', function(){
-                    if (!caseFilesInput.files.length) { caseFilesSel.style.display = 'none'; return; }
-                    var total = 0;
-                    for (var i = 0; i < caseFilesInput.files.length; i++) total += caseFilesInput.files[i].size || 0;
-                    var cb = document.getElementById('case-files-compress');
-                    var note = (cb && cb.checked && caseFilesInput.files.length > 1) ? ' — یکجا ZIP می‌شود' : '';
-                    caseFilesSel.textContent = caseFilesInput.files.length + ' فایل انتخاب شد — مجموع ' + caseFilesFormat(total) + note;
-                    caseFilesSel.style.display = 'inline-block';
-                });
-                var cfCb = document.getElementById('case-files-compress');
-                if (cfCb) cfCb.addEventListener('change', function(){
-                    if (caseFilesInput.files.length) caseFilesInput.dispatchEvent(new Event('change'));
-                });
-            }
+            // (آپلود فایل کیس به «گروه‌های فایل» با drag&drop و نوع/توضیح/زیپِ جداگانه منتقل شد — window.CaseFiles)
 
             jQuery(document).on('keydown', function(e){
                 if (e.key === 'Escape' || e.key === 'Esc') {
@@ -1028,6 +1242,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-unit-price').val(data.unit_price || '');
                 jQuery('#case-design-fee').val(data.design_fee || 0);
                 jQuery('#case-received-date').val(data.received_date || ''); // sets correct date
+                editReceivedJalali = data.received_date || '';
                 jQuery('#case-status-id').val(data.status_id || '');
                 jQuery('#case-lab-id').val(data.lab_id || '');
                 jQuery('#case-designer-id').val(data.designer_id || '');
@@ -1064,61 +1279,15 @@ panel_layout_start('مدیریت کیس‌ها');
                     success: function(resp){
                         try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
                         if (j.success) {
-                            // If files selected, upload them separately after case is created
-                            var fileInput = document.getElementById('case-files');
-                            if (fileInput && fileInput.files.length > 0) {
-                                var fd = new FormData();
-                                fd.set('case_id', j.id);
-                                for (var i = 0; i < fileInput.files.length; i++) {
-                                    fd.append('case_files[]', fileInput.files[i]);
-                                }
-                                var compressCb = document.getElementById('case-files-compress');
-                                if (compressCb && compressCb.checked) fd.set('compress', '1');
-                                // Show a prominent in-progress indicator while uploading.
-                                // The modal stays OPEN until the upload finishes so the user sees the %.
-                                var progressWrap = document.getElementById('case-files-progress');
-                                var bar = document.getElementById('case-files-bar');
-                                var pct = document.getElementById('case-files-percent');
-                                var selSpan = document.getElementById('case-files-selection');
-                                if (progressWrap) progressWrap.style.display = 'block';
-                                if (bar) bar.style.width = '0%';
-                                if (pct) pct.textContent = 'در حال آپلود... 0%';
-                                if (selSpan) selSpan.style.display = 'none';
-                                var xhr = new XMLHttpRequest();
-                                xhr.open('POST', 'upload_case_files.php?case_id=' + encodeURIComponent(j.id), true);
-                                xhr.setRequestHeader('X-CSRF-Token', csrf);
-                                xhr.setRequestHeader('X-Case-Id', j.id);
-                                xhr.upload.onprogress = function(ev){
-                                    if (ev.lengthComputable) {
-                                        var p = Math.round((ev.loaded / ev.total) * 100);
-                                        if (bar) bar.style.width = p + '%';
-                                        if (pct) pct.textContent = 'در حال آپلود... ' + p + '%';
-                                    }
-                                };
-                                xhr.onload = function(){
-                                    try { var resp2 = JSON.parse(xhr.responseText); } catch(e){ var resp2 = { success: false }; }
-                                    if (pct) pct.textContent = 'آپلود کامل شد.';
-                                    if (bar) bar.style.width = '100%';
-                                    if (!resp2.success && resp2.errors && resp2.errors.length) {
-                                        alert('برخی فایل‌ها آپلود نشدند:\n' + resp2.errors.join('\n'));
-                                    }
-                                    // Close modal + refresh only AFTER upload is done
-                                    setTimeout(function(){
-                                        if (progressWrap) progressWrap.style.display = 'none';
-                                        closeCaseModal();
-                                        table.ajax.reload(null, false);
-                                    }, 600);
-                                };
-                                xhr.onerror = function(){
-                                    if (pct) pct.textContent = 'خطا در آپلود فایل‌ها.';
-                                    alert('خطا در آپلود فایل‌ها.');
-                                    closeCaseModal();
-                                    table.ajax.reload(null, false);
-                                };
-                                xhr.send(fd);
-                            } else {
+                            var finish = function () {
                                 closeCaseModal();
                                 table.ajax.reload(null, false);
+                            };
+                            if (window.CaseFiles && window.CaseFiles.countFiles() > 0) {
+                                // آپلود گروه‌های فایل (هر گروه با نوع/توضیح/زیپ خودش)؛ مودال باز می‌ماند تا پایان
+                                window.CaseFiles.uploadAll(j.id, csrf, finish);
+                            } else {
+                                finish();
                             }
                         } else {
                             alert('ذخیره انجام نشد: ' + (j.message || ''));
@@ -1215,6 +1384,55 @@ panel_layout_start('مدیریت کیس‌ها');
                 var form = document.createElement('form');
                 form.method = 'post';
                 form.action = 'print_labels.php';
+                form.target = '_blank';
+                ids.forEach(function(id) {
+                    var inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'case_ids[]';
+                    inp.value = id;
+                    form.appendChild(inp);
+                });
+                document.body.appendChild(form);
+                form.submit();
+                document.body.removeChild(form);
+            };
+
+            // ─── دانلود فایل‌های طراحی‌شده‌ی کیس‌های انتخاب‌شده (ZIP) ───
+            window.downloadDesignFiles = function() {
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                var ids = [];
+                checked.forEach(function(cb) { ids.push(cb.value); });
+                if (ids.length === 0) {
+                    alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                    return;
+                }
+                var form = document.createElement('form');
+                form.method = 'post';
+                form.action = 'download_design_files.php';
+                form.target = '_blank';
+                ids.forEach(function(id) {
+                    var inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'case_ids[]';
+                    inp.value = id;
+                    form.appendChild(inp);
+                });
+                document.body.appendChild(form);
+                form.submit();
+                document.body.removeChild(form);
+            };
+            // ─── دانلود همه‌ی فایل‌های کیس‌های انتخاب‌شده (ZIP) ───
+            window.downloadCaseFiles = function() {
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                var ids = [];
+                checked.forEach(function(cb) { ids.push(cb.value); });
+                if (ids.length === 0) {
+                    alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                    return;
+                }
+                var form = document.createElement('form');
+                form.method = 'post';
+                form.action = 'download_case_files.php';
                 form.target = '_blank';
                 ids.forEach(function(id) {
                     var inp = document.createElement('input');

@@ -17,7 +17,7 @@ if (!$up || ((int) $up['user_id'] !== (int) $user['id'] && !has_role('admin') &&
     die('دسترسی غیرمجاز');
 }
 
-$path = __DIR__ . '/../assets/uploads/user/' . $up['filename'];
+$path = resolve_upload_path('user/' . $up['filename']);
 if (!file_exists($path)) {
     http_response_code(404);
     die('فایل یافت نشد');

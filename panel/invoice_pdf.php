@@ -21,25 +21,101 @@ if (!$invoice) {
     die('فاکتور یافت نشد.');
 }
 
+// ─── دسترسی: فقط فاکتور خودِ هر طرف ───
+// مدیر/مالی (view_invoices) همه‌ی فاکتورهای دکتر را می‌بینند؛ پزشک فقط فاکتور خودش
+// (بالا اسکوپ شده)؛ کلینیک فقط فاکتور کلینیک خودش یا پزشک‌های زیرمجموعه؛
+// طراح و لابراتوار به فاکتور دکتر دسترسی ندارند (فاکتور خودشان فایل PDF جدا دارد).
+if (!is_admin() && !has_permission('view_invoices')) {
+    if ($user['role'] === 'clinic') {
+        if (!has_permission('view_clinic_invoices')) {
+            http_response_code(403);
+            die('دسترسی غیرمجاز');
+        }
+        $clinicOk = (int) $invoice['doctor_id'] === (int) $user['id']; // فاکتور خود کلینیک (INV-CLN)
+        if (!$clinicOk) {
+            $clinicScope = getClinicScope('i');
+            $st = db()->prepare('SELECT id FROM doctor_invoices i WHERE i.id = ? AND ' . $clinicScope['sql']);
+            $st->execute(array_merge([$invoiceId], $clinicScope['params']));
+            if (!$st->fetchColumn()) {
+                http_response_code(403);
+                die('دسترسی غیرمجاز');
+            }
+        }
+    } elseif (in_array($user['role'] ?? '', ['designer', 'outsource_lab', 'partner_lab', 'customer_lab', 'lab'], true)) {
+        http_response_code(403);
+        die('دسترسی غیرمجاز');
+    } elseif (!has_permission('view_own_invoices')) {
+        http_response_code(403);
+        die('دسترسی غیرمجاز');
+    }
+}
+
 $invoiceItems = getInvoiceItems($invoice['id']);
 
-// ---- استخراج ماه و سال شمسی ----
-$jalaliDate = Jalalian::fromDateTime($invoice['invoice_date']);
-$monthNumber = $jalaliDate->getMonth();
-$yearNumber = $jalaliDate->getYear();
+// ---- استخراج ماه/سال از تاریخ دریافت کیس‌های این فاکتور ----
 $monthNames = [
     'فروردین', 'اردیبهشت', 'خرداد', 'تیر', 'مرداد', 'شهریور',
     'مهر', 'آبان', 'آذر', 'دی', 'بهمن', 'اسفند'
 ];
-$monthName = $monthNames[$monthNumber - 1];
-$year = toPersianDigits($yearNumber);
+
+$caseMonths = [];
+foreach ($invoiceItems as $item) {
+    $d = $item['case_received_date'] ?? '';
+    if ($d === '' || $d === null) continue;
+    try {
+        $jd = Jalalian::fromDateTime($d);
+        $ym = [$jd->getYear(), $jd->getMonth()];
+        $caseMonths[$ym[0] * 100 + $ym[1]] = $ym;
+    } catch (\Throwable $e) {
+        // تاریخ نامعتبر را نادیده بگیر
+    }
+}
+ksort($caseMonths);
+$caseMonths = array_values($caseMonths);
+
+// اگر هیچ کیسی تاریخ دریافت نداشت، ماه صدور فاکتور را بنویس
+if (empty($caseMonths)) {
+    $jalaliDate = Jalalian::fromDateTime($invoice['invoice_date']);
+    $caseMonths = [[$jalaliDate->getYear(), $jalaliDate->getMonth()]];
+}
+
+$years = array_unique(array_column($caseMonths, 0));
+$sameYear = count($years) === 1;
+
+$monthPart = '';
+$totalMonths = count($caseMonths);
+foreach ($caseMonths as $i => $ym) {
+    if ($i > 0) {
+        $monthPart .= ($i === $totalMonths - 1) ? ' و ' : '، ';
+    }
+    $monthPart .= $monthNames[$ym[1] - 1];
+    if (!$sameYear) {
+        $monthPart .= ' ' . toPersianDigits($ym[0]);
+    }
+}
+if ($sameYear && $totalMonths === 1) {
+    $monthPart .= ' ' . toPersianDigits($years[0]);
+}
 
 $invNum = (string) ($invoice['invoice_number'] ?? '');
 $isLabInvoice = str_starts_with($invNum, 'INV-LAB');
 $isClinicInvoice = str_starts_with($invNum, 'INV-CLN');
 $isGroupedInvoice = $isLabInvoice || $isClinicInvoice;
 $partyType = $isLabInvoice ? 'لابراتوار' : ($isClinicInvoice ? 'کلینیک' : 'پزشک');
-$doctorName = $invoice['doctor_name'] ?? $partyType;
+$titlePartyLabel = $isLabInvoice ? 'لابراتوار' : ($isClinicInvoice ? 'کلینیک' : 'دکتر');
+
+// نام طرف مقابل (پزشک / کلینیک / لابراتوار) بدون پیشوند تکراری
+$partyName = trim((string) ($invoice['doctor_name'] ?? ''));
+if ($isClinicInvoice) {
+    $partyName = preg_replace('/^کلینیک\s+/u', '', $partyName);
+} elseif ($isLabInvoice) {
+    $partyName = preg_replace('/^لابراتوار\s+/u', '', $partyName);
+} else {
+    $partyName = preg_replace('/^دکتر\s+/u', '', $partyName);
+}
+if ($partyName === '') {
+    $partyName = $partyType;
+}
 
 if ($isGroupedInvoice) {
     // Clinic/lab invoices can be monthly, weekly, or daily – show the period if recorded
@@ -47,9 +123,9 @@ if ($isGroupedInvoice) {
     if (!empty($invoice['notes']) && preg_match('/بازه:\s*([^—]+)/u', $invoice['notes'], $m)) {
         $periodPart = ' — ' . trim($m[1]);
     }
-    $invoiceTitle = "صورت حساب {$partyType} {$doctorName}{$periodPart}";
+    $invoiceTitle = "صورت حساب {$monthPart} {$titlePartyLabel} {$partyName}{$periodPart}";
 } else {
-    $invoiceTitle = "صورت حساب {$monthName} {$year} دکتر {$doctorName}";
+    $invoiceTitle = "صورت حساب {$monthPart} {$titlePartyLabel} {$partyName}";
 }
 
 // ---- ساخت ردیف‌های جدول ----
@@ -71,10 +147,10 @@ foreach ($invoiceItems as $item) {
 
     // Doctor grouping header for lab/clinic invoices
     if ($isGroupedInvoice) {
-        $doctorName = $item['case_doctor_name'] ?: 'بدون پزشک';
-        if ($doctorName !== $currentDoctor) {
-            $currentDoctor = $doctorName;
-            $itemsRowsHtml .= '<tr><td colspan="6" style="background:#0F172A; color:#fff; font-weight:bold; padding:6px 10px;">پزشک: ' . htmlspecialchars($doctorName, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td></tr>';
+        $groupDoctor = $item['case_doctor_name'] ?: 'بدون پزشک';
+        if ($groupDoctor !== $currentDoctor) {
+            $currentDoctor = $groupDoctor;
+            $itemsRowsHtml .= '<tr><td colspan="6" style="background:#E5E7EB; color:#0F172A; font-weight:bold; padding:6px 10px;">پزشک: ' . htmlspecialchars($groupDoctor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td></tr>';
         }
         // For lab_out show a marker
         if (($item['case_type'] ?? '') === 'lab_out') {
@@ -96,12 +172,39 @@ if ($itemsRowsHtml === '') {
     $itemsRowsHtml = '<tr><td colspan="6">بدون آیتم</td></tr>';
 }
 
+// ---- تعداد هر خدمت به تفکیک (خلاصه زیر فاکتور) ----
+$serviceSummary = [];
+foreach ($invoiceItems as $item) {
+    $svc = $item['price_title'] ?: $item['item_title'] ?: '—';
+    $qty = (int) ($item['quantity'] ?? 0);
+    if (!isset($serviceSummary[$svc])) {
+        $serviceSummary[$svc] = ['title' => $svc, 'qty' => 0];
+    }
+    $serviceSummary[$svc]['qty'] += $qty;
+}
+usort($serviceSummary, function ($a, $b) { return $b['qty'] <=> $a['qty']; });
+
+$serviceSummaryHtml = '';
+if (!empty($serviceSummary)) {
+    $serviceSummaryHtml .= '<div class="section">'
+        . '<div class="section-title">تعداد خدمات به تفکیک</div>'
+        . '<table>'
+        . '<thead><tr><th>خدمت</th><th>تعداد</th></tr></thead>'
+        . '<tbody>';
+    foreach ($serviceSummary as $s) {
+        $serviceSummaryHtml .= '<tr>'
+            . '<td>' . htmlspecialchars($s['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>'
+            . '<td>' . toPersianDigits(number_format($s['qty'], 0)) . '</td>'
+            . '</tr>';
+    }
+    $serviceSummaryHtml .= '</tbody></table></div>';
+}
+
 // ---- متغیرهای دیگر ----
 $invoiceNumber = htmlspecialchars($invoice['invoice_number'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 $invoiceDate = toJalaliDateWithMonth($invoice['invoice_date']);
 $invoiceDueDate = $invoice['due_date'] ? toJalaliDateWithMonth($invoice['due_date']) : '—';
 $doctorPhone = htmlspecialchars($invoice['doctor_phone'] ?? '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-$doctorEmail = htmlspecialchars($invoice['doctor_email'] ?? '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 $invoiceTotal = toPersianDigits(number_format(round($invoice['total_amount']), 0));
 $paymentStatus = $invoice['payment_status'] === 'paid' ? 'پرداخت شده' : 'پرداخت نشده';
 $invoiceNotes = htmlspecialchars($invoice['notes'] ?? '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -133,42 +236,49 @@ if (!empty($invoice['bank_owner'])) {
 $mpdf = new Mpdf([
     'mode' => 'utf-8',
     'format' => 'A4',
-    'default_font' => 'dejavusans',
+    'default_font' => 'vazir',
+    'fontDir' => [__DIR__ . '/../assets/fonts'],
+    'fontdata' => [
+        'vazir' => [
+            'R' => 'Vazir.ttf',
+            'B' => 'Vazir-Bold.ttf',
+            'useOTL' => 0xFF,
+        ],
+    ],
     'margin_left' => 15,
     'margin_right' => 15,
     'margin_top' => 15,
     'margin_bottom' => 15,
-    'default_font_size' => 11,
+    'default_font_size' => 10,
+    'autoScriptToLang' => true,
+    'autoLangToFont' => true,
 ]);
 $mpdf->SetDirectionality('rtl');
 
 // ---- لوگو ----
-$logo = '<img src="../assets/icons/EXOLAB_LOGO_FULL_Background.svg" alt="EXOLAB" style="height: 100px; margin-bottom: 10px;">';
+$logo = '<div style="font-size:22px; font-weight:bold; color:#003D9A; letter-spacing:2px; margin-bottom:2px;">EXOLAB</div>';
 
 $html = <<<HTML
 <html dir="rtl">
 <head>
     <meta charset="UTF-8">
     <style>
-        body { font-family: dejavusans; direction: rtl; text-align: right; margin: 0; padding: 0; }
+        body { font-family: vazir; direction: rtl; text-align: right; margin: 0; padding: 0; }
         .header { 
             text-align: center; 
-            margin-bottom: 30px; 
-            padding: 20px; 
-            background-color: #0F172A; 
-            color: #FFFFFF; 
-            border-bottom: none; 
+            margin-bottom: 25px; 
+            padding: 5px 5px 12px; 
+            border-bottom: 1px solid #E5E7EB; 
         }
-        .logo { height: 100px; margin-bottom: 10px; }
         .invoice-title { 
-            font-size: 18px; 
+            font-size: 16px; 
             font-weight: bold; 
-            color: #06B6D4; 
-            margin-top: 5px; 
+            color: #0F172A; 
+            margin-top: 4px; 
         }
         .section { margin-bottom: 20px; }
         .section-title { 
-            font-size: 12px; 
+            font-size: 11px; 
             font-weight: bold; 
             color: #0F172A; 
             margin-bottom: 8px; 
@@ -176,12 +286,12 @@ $html = <<<HTML
             padding-bottom: 5px; 
         }
         table { width: 100%; border-collapse: collapse; margin: 10px 0; }
-        th { background-color: #0F172A; color: white; padding: 8px; text-align: right; font-size: 11px; }
+        th { background-color: #E5E7EB; color: #0F172A; padding: 8px; text-align: right; font-size: 10px; }
         td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; text-align: right; }
         tr:last-child td { border-bottom: 2px solid #0F172A; }
         .total-row { font-weight: bold; background-color: #E5E7EB; }
         .info-label { font-weight: bold; color: #0F172A; display: inline-block; width: 120px; }
-        .footer { margin-top: 40px; text-align: center; border-top: 1px solid #E5E7EB; padding-top: 15px; font-size: 10px; color: #666; }
+        .footer { margin-top: 40px; text-align: center; border-top: 1px solid #E5E7EB; padding-top: 15px; font-size: 9px; color: #666; }
     </style>
 </head>
 <body>
@@ -207,9 +317,8 @@ $html = <<<HTML
                 <div class="section" style="margin-bottom: 0;">
                     <div class="section-title">{$partySectionTitle}</div>
                     <p style="margin: 5px 0;">
-                        <span class="info-label">نام:</span> {$doctorName}<br>
-                        <span class="info-label">تلفن:</span> {$doctorPhone}<br>
-                        <span class="info-label">ایمیل:</span> {$doctorEmail}
+                        <span class="info-label">نام:</span> {$partyName}<br>
+                        <span class="info-label">تلفن:</span> {$doctorPhone}
                     </p>
                 </div>
             </td>
@@ -238,6 +347,8 @@ $html = <<<HTML
             </tbody>
         </table>
     </div>
+
+    {$serviceSummaryHtml}
 
     {$bankInfoSection}
 

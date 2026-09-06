@@ -85,11 +85,6 @@ if ($role === 'admin') {
             <h3>کیس‌ها</h3>
             <a class="btn" href="cases.php">رفتن</a>
         </div>
-        <div class="card">
-            <h3>قیمت‌های اختصاصی پزشکان</h3>
-            <p>تعیین قیمت‌های متفاوت برای هر پزشک به ازای هر خدمت.</p>
-            <a class="btn" href="doctor_price_overrides.php">مدیریت</a>
-        </div>
     </div>
     <?php
 } elseif ($role === 'doctor') {

@@ -1,0 +1,25 @@
+# غیرفعال کردن نمایش لیست فایل‌های پوشه
+Options -Indexes
+
+# تعیین فایل پیش‌فرض (ابتدا php، سپس html)
+DirectoryIndex index.php index.html
+
+# جلوگیری از دسترسی به فایل‌های حساس
+<FilesMatch "\.(htaccess|htpasswd|ini|log|sh|sql|bak|config|json|lock|md|txt|git|env|phps|info)$">
+    Require all denied
+</FilesMatch>
+
+# پنهان کردن فایل‌های مخفی (شروع با نقطه)
+RedirectMatch 404 /\..*$
+
+# (اختیاری) جلوگیری از دسترسی مستقیم به فایل info.php اگر هنوز وجود داشت
+<Files "info.php">
+    Require all denied
+</Files>
+
+# (اختیاری) جلوگیری از دسترسی به پوشه‌های خاص (مثلاً شامل فایل‌های موقت)
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # اگر پوشه adminlte یا storage دارید و نمی‌خواهید مستقیم ببینندشان
+    # RewriteRule ^(adminlte/root/docs/|storage/) - [F,L]
+</IfModule>

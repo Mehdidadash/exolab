@@ -20,11 +20,8 @@ if ($title === '') {
     exit;
 }
 
-// پوشه آپلود
-$upload_dir = __DIR__ . '/../assets/uploads';
-if (!is_dir($upload_dir)) {
-    mkdir($upload_dir, 0755, true);
-}
+// پوشه آپلود (بیرون از ریشه‌ی وب)
+$upload_dir = ensure_uploads_dir('');
 
 $image_filename = null;
 
@@ -56,10 +53,14 @@ if (!empty($_POST['id'])) {
     $work = getPortfolioWork((int) $_POST['id']);
     
     if ($image_filename) {
-        // حذف تصویر قدیم
-        $old_path = $upload_dir . '/' . $work['image_filename'];
+        // حذف تصویر قدیم (هرجا موجود باشد: مسیر جدید یا قدیمی)
+        $old_path = resolve_upload_path($work['image_filename']);
         if (file_exists($old_path)) {
             unlink($old_path);
+        }
+        $old_legacy = legacy_uploads_path($work['image_filename']);
+        if ($old_legacy !== $old_path && file_exists($old_legacy)) {
+            unlink($old_legacy);
         }
     } else {
         $image_filename = $work['image_filename'];

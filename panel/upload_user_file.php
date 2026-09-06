@@ -72,10 +72,7 @@ if ($caseId) {
     }
 }
 
-$uploadDir = __DIR__ . '/../assets/uploads/user/';
-if (!is_dir($uploadDir)) {
-    @mkdir($uploadDir, 0755, true);
-}
+$uploadDir = ensure_uploads_dir('user') . '/';
 
 $safe = bin2hex(random_bytes(8)) . '.' . $ext;
 $dest = $uploadDir . $safe;

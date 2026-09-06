@@ -50,12 +50,21 @@ if (!$isAdmin) {
 $caseId = $file['case_id'];
 $filename = $file['filename'];
 $originalName = $file['original_name'];
-$filePath = __DIR__ . '/../assets/uploads/cases/' . $caseId . '/' . $filename;
+$filePath = resolve_upload_path('cases/' . $caseId . '/' . $filename);
 
 if (!file_exists($filePath)) {
     http_response_code(404);
     die('فایل در سرور یافت نشد');
 }
+
+// ثبت لاگ دانلود فایل (چه کسی / چه زمانی / کدام فایل / چه نوعی)
+$dlType = 'raw';
+if (($file['file_type'] ?? '') === 'final_design') {
+    $dlType = 'design';
+} elseif (in_array($file['file_type'] ?? null, [null, ''], true) && strtolower(pathinfo($originalName, PATHINFO_EXTENSION)) === 'rar') {
+    $dlType = 'design';
+}
+log_case_activity($caseId, 'file_download', json_encode(['file_id' => $fileId, 'file' => $originalName, 'type' => $dlType], JSON_UNESCAPED_UNICODE));
 
 // Serve the file for download
 header('Content-Type: application/octet-stream');

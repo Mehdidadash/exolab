@@ -58,8 +58,8 @@ panel_layout_start('فاکتورهای مخارج (بدهی‌ها)');
 ?>
 <div style="margin-bottom: 18px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; align-items: center;">
     <div>
-        <a class="btn" href="generate_designer_invoice.php" style="background: #d97706; color: #fff;">صدور فاکتور طراحی</a>
         <a class="btn" href="generate_outsource_invoice.php" style="background: #059669; color: #fff;">صدور فاکتور برون‌سپاری</a>
+        <a class="btn" href="generate_designer_invoice.php" style="background: #d97706; color: #fff;">صدور فاکتور طراحی</a>
         <a class="btn" href="outsource_rates.php" style="background: #0F172A; color: #fff;">نرخ‌های برون‌سپاری</a>
         <a class="btn" href="invoices.php" style="background: #E5E7EB; color: #0F172A;">بازگشت به فاکتورها</a>
     </div>

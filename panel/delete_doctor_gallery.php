@@ -30,9 +30,10 @@ if (!$item) {
     exit;
 }
 
-$uploadDir = __DIR__ . '/../assets/uploads/doctors/';
-$file = $uploadDir . basename($item['image_path']);
+$file = resolve_upload_path('doctors/' . basename($item['image_path']));
 if (is_file($file)) @unlink($file);
+$legacyFile = legacy_uploads_path('doctors/' . basename($item['image_path']));
+if ($legacyFile !== $file && is_file($legacyFile)) @unlink($legacyFile);
 
 db()->prepare('DELETE FROM doctor_gallery WHERE id = ?')->execute([$galleryId]);
 audit_log_delete('doctor_gallery', $galleryId, 'گالری پروفایل پزشک');

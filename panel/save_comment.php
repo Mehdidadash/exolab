@@ -19,6 +19,9 @@ if ($action === 'delete') {
     deleteEntityComment($commentId, $user['id'], has_role('admin'));
 } elseif ($entityType !== '' && $entityId > 0 && $message !== '') {
     saveEntityComment($entityType, $entityId, $user['id'], $message);
+    if ($entityType === 'case') {
+        log_case_activity($entityId, 'comment', $commentId ? 'ویرایش کامنت' : 'ثبت کامنت');
+    }
 }
 
 $redirect = $_SERVER['HTTP_REFERER'] ?? 'dashboard.php';

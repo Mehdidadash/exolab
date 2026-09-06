@@ -3,7 +3,7 @@
 // List of freelance designer (design-fee) invoices.
 require_once __DIR__ . '/auth.php';
 require_admin();
-
+// فهرست هر شعبه فقط فاکتورهای طراحیِ همان شعبه است (هر شعبه فقط طراحیِ کیس‌هایِ پرداختنیِ خودش را صادر می‌کند)
 $invoices = getAllDesignerInvoices();
 
 panel_layout_start('فاکتورهای طراحی');
@@ -37,8 +37,14 @@ panel_layout_start('فاکتورهای طراحی');
             <td><?= htmlspecialchars($inv['period_label'] ?? '—') ?></td>
             <td><?= toJalaliDateFormatted($inv['invoice_date']) ?></td>
             <td><?= formatAmountToman($inv['total_amount']) ?></td>
-            <td class="actions">
+            <td class="actions" style="white-space:nowrap;">
+                <a class="btn" href="designer_invoice_form.php?id=<?= (int) $inv['id'] ?>" title="ویرایش" style="background:#eef2ff; color:#3730a3; padding:4px 10px; text-decoration:none;">✏️</a>
                 <a class="btn" href="designer_invoice_pdf.php?id=<?= (int) $inv['id'] ?>" target="_blank" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">PDF</a>
+                <form method="post" action="delete_designer_invoice.php" style="display:inline; margin:0;" onsubmit="return confirm('فاکتور طراحی و آیتم‌های آن حذف شود؟');">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="id" value="<?= (int) $inv['id'] ?>">
+                    <button class="btn" style="background:#fee2e2; color:#991b1b; padding:4px 10px;" title="حذف فاکتور">🗑</button>
+                </form>
             </td>
         </tr>
     <?php endforeach; ?>

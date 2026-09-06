@@ -27,10 +27,7 @@ if (!$doctor) {
     exit;
 }
 
-$uploadDir = __DIR__ . '/../assets/uploads/doctors/';
-if (!is_dir($uploadDir)) {
-    @mkdir($uploadDir, 0755, true);
-}
+$uploadDir = ensure_uploads_dir('doctors') . '/';
 
 // Editing: load existing row (must belong to this doctor)
 $existing = null;

@@ -10,25 +10,53 @@ if (!is_admin()) {
 use Morilog\Jalali\Jalalian;
 
 // Branch scoping: a branch admin sees only their branch's financials.
+// مدیر کل (نقش admin) نیز به‌عنوان شعبهٔ مرکزی (۱) رفتار می‌کند.
 $bid = currentBranchId();
+if ($bid === null) $bid = 1;
 $finInvoiceFilter = $bid === null ? '' : ' AND branch_id = ' . (int) $bid;   // doctor_invoices / designer_invoices / outsource_invoices
 $finCaseFilter    = $bid === null ? '' : ' AND c.branch_id = ' . (int) $bid;  // cases (alias c)
 $finCaseFilterNoAlias = $bid === null ? '' : ' AND branch_id = ' . (int) $bid; // cases (no alias)
 
 // Inbound cross-branch amount = what a partner branch owes us for a case it
 // outsourced to us (source_branch_id = ours). Mirrors their outsource expense.
-$inboundAmountSql = "COALESCE(c.outsourced_rate,\n    (SELECT r.rate FROM outsource_rates r\n      WHERE r.lab_id = IF(c.case_type = 'lab_out', c.lab_id, c.outsourced_lab_id)\n        AND r.service_id = IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)), 0)\n    * IF(c.case_type = 'lab_out', c.quantity, c.outsourced_qty)";
+// Phase 3: prefers the unified price_links rate, falls back to outsource_rates.
+$plInbound = priceLinkOutsourceSqlExpr("IF(c.case_type = 'lab_out', c.lab_id, c.outsourced_lab_id)", "IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)");
+$inboundLegacy = "(SELECT r.rate FROM outsource_rates r\n      WHERE r.lab_id = IF(c.case_type = 'lab_out', c.lab_id, c.outsourced_lab_id)\n        AND r.service_id = IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)\n      ORDER BY (r.branch_id = c.branch_id) DESC, (r.branch_id IS NULL) DESC LIMIT 1)";
+$inboundRate = $plInbound !== null
+    ? "COALESCE(c.outsourced_rate, COALESCE($plInbound, $inboundLegacy), 0)"
+    : "COALESCE(c.outsourced_rate, $inboundLegacy, 0)";
+$inboundAmountSql = $inboundRate . " * IF(c.case_type = 'lab_out', c.quantity, c.outsourced_qty)";
 
 // Unrealized income: owned cases count their total_price; inbound shared cases
 // (branch_id = the partner's) count only the outsource amount owed to us.
 // Unrealized expense: only OWNED cases bear design/outsource costs.
+// Phase 3: rate prefers price_links; also counts FULL lab_out cases (an outsource
+// obligation to the receiving lab), which the old query missed.
+$plSide = priceLinkOutsourceSqlExpr('c.outsourced_lab_id', 'c.outsourced_service_id');
+$sideLegacy = "(SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id)";
+$sideRate = $plSide !== null
+    ? "COALESCE(c.outsourced_rate, COALESCE($plSide, $sideLegacy), 0)"
+    : "COALESCE(c.outsourced_rate, $sideLegacy, 0)";
+$plFull = priceLinkOutsourceSqlExpr('c.lab_id', 'c.service_id');
+$fullLegacy = "(SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.lab_id AND r.service_id = c.service_id)";
+$fullRate = $plFull !== null
+    ? "COALESCE($plFull, $fullLegacy, 0)"
+    : "COALESCE($fullLegacy, 0)";
+$outAmountExpr = "CASE
+            WHEN c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 AND c.case_type <> 'lab_out' THEN c.outsourced_qty * {$sideRate}
+            WHEN c.case_type = 'lab_out' THEN c.quantity * {$fullRate}
+            ELSE 0 END";
+// پرداخت‌کننده‌ی هزینه‌ی طراحیِ هر کیس = شعبه‌ی لابراتوارِ انجام‌دهنده (وگرنه صاحب کیس).
+// کیس‌هایی که لابراتوار مرکزی انجامشان می‌دهد (حتی مالِ شعب دیگر) → پرداخت‌کننده = مرکزی.
+$designPayerSql = "COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id)";
 if ($bid === null) {
     $unrealizedIncomeSql = 'SELECT COALESCE(SUM(total_price),0) FROM cases WHERE received_date BETWEEN ? AND ?';
-    $unrealizedExpenseSql = "SELECT COALESCE(SUM(c.design_fee),0) + COALESCE(SUM(\n            CASE WHEN c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 THEN\n                 c.outsourced_qty * COALESCE(c.outsourced_rate,\n                   (SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id), 0)\n            ELSE 0 END),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
+    $unrealizedExpenseSql = "SELECT COALESCE(SUM(c.design_fee),0) + COALESCE(SUM({$outAmountExpr}),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
 } else {
     $b = (int) $bid;
     $unrealizedIncomeSql = "SELECT COALESCE(SUM(\n            CASE WHEN c.source_branch_id = $b AND (c.branch_id IS NULL OR c.branch_id <> $b)\n                 THEN $inboundAmountSql\n                 ELSE c.total_price END),0)\n        FROM cases c\n        WHERE c.received_date BETWEEN ? AND ? AND (c.branch_id = $b OR c.source_branch_id = $b)";
-    $unrealizedExpenseSql = "SELECT COALESCE(SUM(c.design_fee),0) + COALESCE(SUM(\n            CASE WHEN c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 THEN\n                 c.outsourced_qty * COALESCE(c.outsourced_rate,\n                   (SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id), 0)\n            ELSE 0 END),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ? AND c.branch_id = $b";
+    // هزینه‌ی تحقق‌نیافته = طراحی که «این شعبه» پرداخت‌کننده‌اش است + برون‌سپاریِ کیس‌هایِ مالِ این شعبه
+    $unrealizedExpenseSql = "SELECT\n            COALESCE(SUM(CASE WHEN ({$designPayerSql} = $b) THEN c.design_fee ELSE 0 END),0)\n          + COALESCE(SUM(CASE WHEN (c.branch_id = $b) THEN ({$outAmountExpr}) ELSE 0 END),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
 }
 
 $jalaliMonths = [
@@ -232,14 +260,94 @@ if ($startDate !== '' && $endDate !== '') {
         ],
     ];
 
+    // Branch-only dimensions: برون‌سپاری‌شده (what we owe others) and دریافتی
+    // از شعب همکار (what partner branches owe us) – shown separately from the
+    // owned-work donuts above.
+    if ($bid !== null) {
+        $groupings['inbound'] = ['label' => 'دریافتی از شعب همکار'];
+        $groupings['outsourced'] = ['label' => 'برون‌سپاری‌شده'];
+    }
+
+    // در نمودارهای گروهی هم هزینه‌ی طراحی فقط برای کیس‌هایی شمرده می‌شود که این شعبه
+    // پرداخت‌کننده‌ی طراحی‌شان باشد (برای مدیر کل/همه‌ی شعب = همه).
+    $designFeeForGroup = ($bid === null)
+        ? 'c.design_fee'
+        : "CASE WHEN ({$designPayerSql} = " . (int) $bid . ") THEN c.design_fee ELSE 0 END";
+
     foreach ($groupings as $key => $g) {
+        if ($key === 'inbound') {
+            // Income from cases a partner branch outsourced to us (source = ours).
+            $b = (int) $bid;
+            $sql = "SELECT pb.name AS grp, SUM($inboundAmountSql) AS income
+                    FROM cases c
+                    LEFT JOIN branches pb ON c.branch_id = pb.id
+                    WHERE c.received_date BETWEEN ? AND ?
+                      AND c.source_branch_id = $b AND (c.branch_id IS NULL OR c.branch_id <> $b)
+                    GROUP BY grp ORDER BY income DESC";
+            $stmt = db()->prepare($sql);
+            $stmt->execute([$startDate, $endDate]);
+            $rows = $stmt->fetchAll();
+            $incomeItems = array_map(function ($r) { return ['label' => $r['grp'] ?: 'نامشخص', 'value' => (float) $r['income']]; }, $rows);
+            // Detail: work type x source branch (تعداد واحد دریافتی به تفکیک)
+            $detailSql = "SELECT COALESCE(p.title, 'نامشخص') AS service,
+                                 COALESCE(pb.name, 'نامشخص') AS src_branch,
+                                 SUM(IF(c.case_type = 'lab_out', c.quantity, c.outsourced_qty)) AS qty,
+                                 SUM($inboundAmountSql) AS amount
+                          FROM cases c
+                          LEFT JOIN site_prices p ON p.id = IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)
+                          LEFT JOIN branches pb ON c.branch_id = pb.id
+                          WHERE c.received_date BETWEEN ? AND ?
+                            AND c.source_branch_id = $b AND (c.branch_id IS NULL OR c.branch_id <> $b)
+                          GROUP BY p.title, pb.name
+                          ORDER BY amount DESC";
+            $stmt = db()->prepare($detailSql);
+            $stmt->execute([$startDate, $endDate]);
+            $detail = $stmt->fetchAll();
+            $pieGroups[$key] = ['label' => $g['label'], 'income' => $buildDonut($incomeItems), 'expense' => [], 'detail' => $detail];
+            continue;
+        }
+        if ($key === 'outsourced') {
+            // Expense for cases we outsourced (side + full) to a lab / partner branch.
+            $b = (int) $bid;
+            // Per-case rate: the case's own rate, else price_links, else outsource_rates.
+            $rateSub = $inboundRate;
+            $qtyExpr = "IF(c.case_type = 'lab_out', c.quantity, c.outsourced_qty)";
+            $sql = "SELECT COALESCE(olab.full_name, lab.full_name) AS grp,
+                           SUM($qtyExpr * $rateSub) AS expense
+                    FROM cases c
+                    LEFT JOIN users olab ON c.outsourced_lab_id = olab.id
+                    LEFT JOIN users lab ON c.lab_id = lab.id
+                    WHERE c.received_date BETWEEN ? AND ?
+                      AND c.branch_id = $b
+                      AND (c.outsourced_lab_id IS NOT NULL OR c.case_type = 'lab_out')
+                    GROUP BY grp ORDER BY expense DESC";
+            $stmt = db()->prepare($sql);
+            $stmt->execute([$startDate, $endDate]);
+            $rows = $stmt->fetchAll();
+            $expenseItems = array_map(function ($r) { return ['label' => $r['grp'] ?: 'نامشخص', 'value' => (float) $r['expense']]; }, $rows);
+            // Detail: work type x destination lab (تعداد واحد برون‌سپاری‌شده به تفکیک)
+            $detailSql = "SELECT COALESCE(p.title, 'نامشخص') AS service,
+                                 COALESCE(olab.full_name, lab.full_name) AS dst_lab,
+                                 SUM($qtyExpr) AS qty,
+                                 SUM($qtyExpr * $rateSub) AS amount
+                          FROM cases c
+                          LEFT JOIN site_prices p ON p.id = IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)
+                          LEFT JOIN users olab ON c.outsourced_lab_id = olab.id
+                          LEFT JOIN users lab ON c.lab_id = lab.id
+                          WHERE c.received_date BETWEEN ? AND ?
+                            AND c.branch_id = $b
+                            AND (c.outsourced_lab_id IS NOT NULL OR c.case_type = 'lab_out')
+                          GROUP BY p.title, olab.full_name, lab.full_name
+                          ORDER BY amount DESC";
+            $stmt = db()->prepare($detailSql);
+            $stmt->execute([$startDate, $endDate]);
+            $detail = $stmt->fetchAll();
+            $pieGroups[$key] = ['label' => $g['label'], 'income' => [], 'expense' => $buildDonut($expenseItems), 'detail' => $detail];
+            continue;
+        }
         $sql = "SELECT {$g['select']} AS grp,
                        SUM(c.total_price) AS income,
-                       SUM(c.design_fee + COALESCE(
-                           c.outsourced_qty * COALESCE(c.outsourced_rate,
-                               (SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id)),
-                           0
-                       )) AS expense
+                       SUM({$designFeeForGroup} + COALESCE({$outAmountExpr}, 0)) AS expense
                 FROM cases c
                 {$g['join']}
                 WHERE c.received_date BETWEEN ? AND ?" . $finCaseFilter . "
@@ -288,6 +396,52 @@ $renderDonut = function (array $donut): string {
     $html .= '</div></div>';
     return $html;
 };
+
+// Helper to render a detail table (نوع کار × مبدأ/مقصد) for the inbound /
+// outsourced breakdowns under their donuts.
+$renderDetailTable = function (array $rows, string $srcLabel, string $amountLabel): string {
+    if (empty($rows)) return '';
+    $html = '<div class="table-scroll" style="margin-top:12px;">';
+    $html .= '<table style="width:100%; border-collapse:collapse; font-size:0.85rem;">';
+    $html .= '<thead><tr>';
+    $html .= '<th style="text-align:right; padding:6px 8px; border-bottom:1px solid #ddd;">نوع کار</th>';
+    $html .= '<th style="text-align:right; padding:6px 8px; border-bottom:1px solid #ddd;">' . htmlspecialchars($srcLabel) . '</th>';
+    $html .= '<th style="text-align:center; padding:6px 8px; border-bottom:1px solid #ddd;">تعداد واحد</th>';
+    $html .= '<th style="text-align:left; padding:6px 8px; border-bottom:1px solid #ddd;">' . htmlspecialchars($amountLabel) . '</th>';
+    $html .= '</tr></thead><tbody>';
+    $totQty = 0; $totAmt = 0;
+    foreach ($rows as $row) {
+        $qty = (float) ($row['qty'] ?? 0);
+        $amt = (float) ($row['amount'] ?? 0);
+        $totQty += $qty; $totAmt += $amt;
+        $src = $row['src_branch'] ?? $row['dst_lab'] ?? '';
+        $html .= '<tr>';
+        $html .= '<td style="padding:6px 8px; border-bottom:1px solid #f3f4f6;">' . htmlspecialchars($row['service'] ?: 'نامشخص') . '</td>';
+        $html .= '<td style="padding:6px 8px; border-bottom:1px solid #f3f4f6;">' . htmlspecialchars($src ?: 'نامشخص') . '</td>';
+        $html .= '<td style="padding:6px 8px; border-bottom:1px solid #f3f4f6; text-align:center;">' . toPersianDigits(number_format($qty)) . '</td>';
+        $html .= '<td style="padding:6px 8px; border-bottom:1px solid #f3f4f6; text-align:left; font-weight:bold;">' . formatAmountToman($amt) . '</td>';
+        $html .= '</tr>';
+    }
+    $html .= '<tr style="font-weight:bold;">';
+    $html .= '<td colspan="2" style="padding:6px 8px;">جمع</td>';
+    $html .= '<td style="padding:6px 8px; text-align:center;">' . toPersianDigits(number_format($totQty)) . '</td>';
+    $html .= '<td style="padding:6px 8px; text-align:left;">' . formatAmountToman($totAmt) . '</td>';
+    $html .= '</tr></tbody></table></div>';
+    return $html;
+};
+
+// ─── Service counts: چند کیس از هر خدمت در بازه انجام شده ───
+$serviceCounts = [];
+if ($startDate !== '' && $endDate !== '') {
+    $stmt = db()->prepare("SELECT p.title AS service, COUNT(*) AS case_count, COALESCE(SUM(c.quantity),0) AS qty_sum
+        FROM cases c
+        LEFT JOIN site_prices p ON c.service_id = p.id
+        WHERE c.received_date BETWEEN ? AND ?" . $finCaseFilter . "
+        GROUP BY c.service_id, p.title
+        ORDER BY qty_sum DESC, case_count DESC");
+    $stmt->execute([$startDate, $endDate]);
+    $serviceCounts = $stmt->fetchAll();
+}
 
 panel_layout_start('بررسی وضعیت درآمد و هزینه');
 ?>
@@ -406,6 +560,40 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
         </table>
     </div>
 </div>
+
+<!-- تعداد خدمات انجام‌شده در بازه -->
+<div class="form-card" style="margin-bottom:22px;">
+    <h4>تعداد خدمات انجام‌شده (<?= htmlspecialchars($periodLabel) ?>)</h4>
+    <div class="table-scroll">
+        <table style="width:100%; border-collapse:collapse; font-size:0.9rem;">
+            <thead>
+                <tr>
+                    <th style="text-align:right; padding:7px 8px; border-bottom:1px solid #ddd;">خدمت</th>
+                    <th style="text-align:center; padding:7px 8px; border-bottom:1px solid #ddd;">تعداد کیس</th>
+                    <th style="text-align:center; padding:7px 8px; border-bottom:1px solid #ddd;">مجموع تعداد واحد</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php if (empty($serviceCounts)): ?>
+                    <tr><td colspan="3" style="padding:10px; color:#6b7280;">موردی در این بازه انجام نشده است.</td></tr>
+                <?php else: ?>
+                    <?php $totalCases = 0; $totalQty = 0; foreach ($serviceCounts as $sc): $totalCases += (int)$sc['case_count']; $totalQty += (int)$sc['qty_sum']; ?>
+                    <tr>
+                        <td style="padding:7px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($sc['service'] ?: 'نامشخص') ?></td>
+                        <td style="padding:7px 8px; border-bottom:1px solid #eee; text-align:center;"><?= toPersianDigits((int)$sc['case_count']) ?></td>
+                        <td style="padding:7px 8px; border-bottom:1px solid #eee; text-align:center;"><?= toPersianDigits((int)$sc['qty_sum']) ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                    <tr style="font-weight:bold;">
+                        <td style="padding:7px 8px;">جمع</td>
+                        <td style="padding:7px 8px; text-align:center;"><?= toPersianDigits($totalCases) ?></td>
+                        <td style="padding:7px 8px; text-align:center;"><?= toPersianDigits($totalQty) ?></td>
+                    </tr>
+                <?php endif; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
 <?php else: ?>
     <p class="empty">بازه زمانی را انتخاب کنید تا آمار درآمد و هزینه نمایش داده شود.</p>
 <?php endif; ?>
@@ -452,18 +640,37 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
         <?php $first = true; foreach ($pieGroups as $key => $g): ?>
         <div class="pie-dim-pane" id="pie-dim-<?= $key ?>" style="display:<?= $first ? '' : 'none' ?>;">
             <div style="display:flex; gap:20px; flex-wrap:wrap;">
+                <?php if (!empty($g['income']['slices'])): ?>
                 <div class="form-card" style="flex:1; min-width:320px; margin:0;">
                     <h4>درآمد بر اساس <?= htmlspecialchars($g['label']) ?> (<?= htmlspecialchars($periodLabel) ?>)</h4>
+                    <?php if ($key === 'lab'): ?><small style="display:block; color:#6b7280; margin-bottom:8px;">فقط کیس‌های متعلق به شعبه شما — به تفکیک لابراتوار انجام‌دهندهٔ کار</small><?php endif; ?>
                     <?= $renderDonut($g['income']) ?>
                 </div>
+                <?php endif; ?>
+                <?php if (!empty($g['expense']['slices'])): ?>
                 <div class="form-card" style="flex:1; min-width:320px; margin:0;">
                     <h4>هزینه بر اساس <?= htmlspecialchars($g['label']) ?> (<?= htmlspecialchars($periodLabel) ?>)</h4>
                     <?= $renderDonut($g['expense']) ?>
                 </div>
+                <?php endif; ?>
+                <?php if ($key === 'inbound' && !empty($g['detail'])): ?>
+                <div class="form-card" style="flex:1 1 100%; min-width:320px; margin:0;">
+                    <h4>تفکیک دریافتی از شعب همکار — نوع کار و مبدأ (<?= htmlspecialchars($periodLabel) ?>)</h4>
+                    <small style="display:block; color:#6b7280; margin-bottom:8px;">تعداد واحد هر نوع کار، به تفکیک شعبه‌ای که کار را به شما ارسال کرده است.</small>
+                    <?= $renderDetailTable($g['detail'], 'مبدأ (شعبه فرستنده)', 'مبلغ دریافتی') ?>
+                </div>
+                <?php endif; ?>
+                <?php if ($key === 'outsourced' && !empty($g['detail'])): ?>
+                <div class="form-card" style="flex:1 1 100%; min-width:320px; margin:0;">
+                    <h4>تفکیک برون‌سپاری‌شده — نوع کار و مقصد (<?= htmlspecialchars($periodLabel) ?>)</h4>
+                    <small style="display:block; color:#6b7280; margin-bottom:8px;">تعداد واحد هر نوع کاری که به بیرون ارسال کرده‌اید، به تفکیک لابراتوار/شعبه مقصد.</small>
+                    <?= $renderDetailTable($g['detail'], 'مقصد (لابراتوار/شعبه)', 'مبلغ هزینه') ?>
+                </div>
+                <?php endif; ?>
             </div>
         </div>
         <?php $first = false; endforeach; ?>
-        <p style="margin-top:12px; font-size:0.85rem; color:#525252;">نمودارها بر اساس کیس‌های دریافت‌شده در همین بازه هستند (درآمد = مبلغ کیس، هزینه = هزینه طراحی + برون‌سپاری همان کیس).</p>
+        <p style="margin-top:12px; font-size:0.85rem; color:#525252;">نمودارها بر اساس کیس‌های دریافت‌شده در همین بازه هستند. «دریافتی از شعب همکار» = مبلغی که شعبه‌های دیگر بابت کارِ ما به ما بدهکارند، و «برون‌سپاری‌شده» = بدهی ما به لابراتوار/شعبه‌های دیگر (این دو فقط برای مدیران شعبه نمایش داده می‌شوند).</p>
     <?php else: ?>
         <p class="empty">ابتدا یک بازه زمانی (مثلاً یک ماه) انتخاب کنید تا نمودار دایره‌ای نمایش داده شود.</p>
     <?php endif; ?>

@@ -94,6 +94,10 @@ try {
 
     audit_log_save('case_status', $caseId, 'تغییر وضعیت کیس');
 
+    $statusName = db()->prepare('SELECT name FROM case_statuses WHERE id = ?');
+    $statusName->execute([$statusId]);
+    log_case_activity($caseId, 'status_change', 'تغییر وضعیت به: ' . ($statusName->fetchColumn() ?: '#' . $statusId));
+
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => true, 'case_id' => $caseId, 'status_id' => $statusId], JSON_UNESCAPED_UNICODE);
     exit;

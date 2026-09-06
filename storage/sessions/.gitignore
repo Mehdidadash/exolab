@@ -1,0 +1,4 @@
+# Ignore PHP session files in this folder
+*
+!.htaccess
+!.gitignore

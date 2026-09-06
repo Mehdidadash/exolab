@@ -114,4 +114,40 @@ panel_layout_start($editing ? 'ویرایش پرداخت' : 'ثبت پرداخت
     });
 })(jQuery);
 </script>
+<?php
+$invoiceMap = [];
+foreach ($invoices as $inv) {
+    $invoiceMap[(int) $inv['id']] = [
+        'amount' => (float) ($inv['total_amount'] ?? 0),
+        'doctor_id' => (int) ($inv['doctor_id'] ?? 0),
+    ];
+}
+?>
+<script>
+window.__INVOICE_MAP__ = <?= json_encode($invoiceMap) ?>;
+(function ($) {
+    $(function () {
+        var map = window.__INVOICE_MAP__ || {};
+        $('#invoice_ids').on('change', function () {
+            var ids = $(this).val() || [];
+            var sum = 0;
+            var doc = null;
+            ids.forEach(function (id) {
+                var info = map[id];
+                if (!info) return;
+                sum += Number(info.amount) || 0;
+                if (doc === null && info.doctor_id) {
+                    doc = String(info.doctor_id);
+                }
+            });
+            if (ids.length) {
+                $('#amount').val(Math.round(sum));
+                if (doc) {
+                    $('#doctor_id').val(doc);
+                }
+            }
+        });
+    });
+})(jQuery);
+</script>
 <?php panel_layout_end();

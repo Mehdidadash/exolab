@@ -8,10 +8,32 @@ require_once __DIR__ . '/../includes/helpers.php';
 if (session_status() === PHP_SESSION_NONE) {
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
             || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
-    // Set GC lifetime BEFORE session start
+
+    /*
+     * Dedicated session directory. On shared hosting the default save path is
+     * shared with other apps, whose PHP processes may garbage-collect our
+     * session files using the PHP default lifetime (~24 minutes) — that is why
+     * users were being logged out after ~30 minutes or whenever their IP
+     * changed. Keeping our sessions in their own folder stops other apps from
+     * deleting them. The directory is created automatically if missing and is
+     * protected from web access by storage/sessions/.htaccess.
+     */
+    $sessionDir = __DIR__ . '/../storage/sessions';
+    if (!is_dir($sessionDir)) {
+        @mkdir($sessionDir, 0775, true);
+    }
+    if (is_dir($sessionDir) && is_writable($sessionDir)) {
+        session_save_path($sessionDir);
+    }
+
+    // Keep sessions alive for a very long time (600 days) instead of the PHP
+    // default (~24 minutes). GC lifetime must be set BEFORE session_start().
     if (ini_get('session.gc_maxlifetime') < 86400 * 600) {
         ini_set('session.gc_maxlifetime', 86400 * 600);
     }
+    @ini_set('session.gc_probability', 1);
+    @ini_set('session.gc_divisor', 100);
+
     session_set_cookie_params([
         'lifetime' => 86400 * 600,
         'path'     => '/',
@@ -342,8 +364,8 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 <?php
                 $navCanCases  = has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_assigned_cases') || has_permission('view_clinic_cases') || has_role('designer');
                 $navCanUpload = $user && in_array($user['role'] ?? '', ['doctor', 'designer', 'admin', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
-                $navCanInv    = has_permission('view_invoices') || has_permission('view_clinic_invoices') || is_admin();
-                $navCanPay    = has_permission('view_own_payments') || has_permission('view_clinic_payments') || is_admin();
+                $navCanInv    = has_permission('view_invoices') || has_permission('view_clinic_invoices') || has_permission('view_own_invoices') || is_admin();
+                $navCanPay    = has_permission('view_own_payments') || has_permission('view_clinic_payments') || has_permission('view_payments') || is_admin();
                 $navIsAdmin   = is_admin();
                 $navIsRoot    = is_root_admin();
                 $navIsBranch  = is_branch_scoped();
@@ -353,7 +375,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
                         <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">کیس‌ها <span class="caret">▼</span></button>
                         <div class="nav-group-menu">
                             <a href="cases.php">کیس‌ها</a>
-                            <?php if ($navCanInv): ?><a href="case_expenses.php">کیس‌های مخارج</a><?php endif; ?>
+                            <?php if ($navIsAdmin): ?><a href="case_expenses.php">کیس‌های مخارج</a><?php endif; ?>
                         </div>
                     </div>
                 <?php endif; ?>
@@ -369,19 +391,19 @@ function panel_layout_start($title = 'پنل مدیریت') {
                             <?php if ($navCanPay): ?>
                                 <span class="menu-label">پرداخت‌ها</span>
                                 <a href="payments.php">دریافتی</a>
-                                <a href="expense_payments.php">هزینه</a>
+                                <?php if ($navIsAdmin): ?><a href="expense_payments.php">هزینه</a><?php endif; ?>
                             <?php endif; ?>
                             <?php if ($navCanInv): ?>
                                 <span class="menu-label">فاکتورها</span>
                                 <a href="invoices.php">فاکتورها</a>
-                                <a href="expenses.php">فاکتورهای مخارج (بدهی‌ها)</a>
-                                <?php if ($navIsBranch): ?><a href="branch_receivables.php">فاکتور طلب از شعبه‌ها</a><?php endif; ?>
+                                <?php if ($navIsAdmin): ?><a href="expenses.php">فاکتورهای مخارج (بدهی‌ها)</a><?php endif; ?>
+                                <?php if ($navIsAdmin): ?><a href="branch_receivables.php">فاکتور طلب از شعبه‌ها</a><?php endif; ?>
                             <?php endif; ?>
                             <?php if ($navIsAdmin): ?>
                                 <span class="menu-label">قیمت‌ها</span>
-                                <a href="doctor_price_overrides.php">قیمت‌های اختصاصی</a>
-                                <a href="lab_price_overrides.php">قیمت‌های لابراتوار</a>
-                                <?php if ($navIsBranch): ?><a href="branch_prices.php">قیمت‌های شعبه</a><?php endif; ?>
+                                <a href="prices.php?tab=general">قیمت‌های عمومی (پیش‌فرض)</a>
+                                <a href="prices.php?tab=map">نقشه و نرخ‌های اختصاصی</a>
+                                <?php if ($navIsBranch): ?><a href="branch_prices.php">قیمت‌های شعبه (قدیمی)</a><?php endif; ?>
                                 <span class="menu-label">حساب‌ها</span>
                                 <a href="bank_accounts.php">حساب‌های بانکی</a>
                                 <a href="financial_overview.php">بررسی درآمد و هزینه</a>

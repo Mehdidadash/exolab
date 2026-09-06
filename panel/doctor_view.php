@@ -152,8 +152,8 @@ if ($canViewGallery):
         <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:16px; margin-top:12px;">
             <?php foreach ($gallery as $g): ?>
                 <div style="border:1px solid #e5e7eb; border-radius:12px; overflow:hidden; background:#fff;">
-                    <a href="../assets/uploads/doctors/<?= htmlspecialchars($g['image_path']) ?>" target="_blank">
-                        <img src="../assets/uploads/doctors/<?= htmlspecialchars($g['image_path']) ?>" alt="gallery" style="width:100%; height:160px; object-fit:cover; display:block;">
+                    <a href="serve_doctor_image.php?did=<?= (int) $doctorId ?>&f=<?= rawurlencode($g['image_path']) ?>" target="_blank">
+                        <img src="serve_doctor_image.php?did=<?= (int) $doctorId ?>&f=<?= rawurlencode($g['image_path']) ?>" alt="gallery" style="width:100%; height:160px; object-fit:cover; display:block;">
                     </a>
                     <?php if (!empty($g['caption'])): ?>
                         <div style="padding:10px 12px; font-size:0.9rem; line-height:1.9; white-space:pre-wrap; direction:rtl; text-align:right; unicode-bidi:plaintext;"><?= nl2br(htmlspecialchars($g['caption'])) ?></div>

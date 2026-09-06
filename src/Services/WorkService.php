@@ -73,7 +73,13 @@ class WorkService
         // Delete the image file first
         $work = self::get($id);
         if ($work && !empty($work['image_filename'])) {
-            $path = __DIR__ . '/../../assets/uploads/' . $work['image_filename'];
+            if (function_exists('resolve_upload_path')) {
+                $path = \resolve_upload_path($work['image_filename']);
+            } else {
+                $ext = (dirname(__DIR__, 2) . '/../uploads') . '/' . $work['image_filename'];
+                $leg = (dirname(__DIR__, 2) . '/assets/uploads') . '/' . $work['image_filename'];
+                $path = is_file($ext) ? $ext : (is_file($leg) ? $leg : $ext);
+            }
             if (file_exists($path)) {
                 @unlink($path);
             }

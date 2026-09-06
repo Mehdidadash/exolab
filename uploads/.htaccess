@@ -1,0 +1,9 @@
+# بستن دسترسی مستقیمِ وب به فایل‌های آپلودی.
+# همه‌ی نمایش/دانلودها فقط از طریق اندپوینت‌های PHP انجام می‌شود (media.php و panel/serve_*).
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

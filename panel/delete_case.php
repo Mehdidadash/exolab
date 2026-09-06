@@ -45,14 +45,18 @@ try {
     $files = $pdo->prepare('SELECT * FROM case_files WHERE case_id = ?');
     $files->execute([$id]);
     foreach ($files->fetchAll() as $f) {
-        $path = __DIR__ . '/../assets/uploads/cases/' . $id . '/' . $f['filename'];
+        $path = resolve_upload_path('cases/' . $id . '/' . $f['filename']);
         if (is_file($path)) @unlink($path);
+        $legacy = legacy_uploads_path('cases/' . $id . '/' . $f['filename']);
+        if ($legacy !== $path && is_file($legacy)) @unlink($legacy);
     }
     $pdo->prepare('DELETE FROM case_files WHERE case_id = ?')->execute([$id]);
-    $caseUploadDir = __DIR__ . '/../assets/uploads/cases/' . $id;
-    if (is_dir($caseUploadDir)) {
-        $leftover = glob($caseUploadDir . '/*');
-        if (empty($leftover)) @rmdir($caseUploadDir);
+    // پاک‌سازی پوشه در هر دو مکان (جدید و قدیمی)
+    foreach ([uploads_path('cases/' . $id), legacy_uploads_path('cases/' . $id)] as $caseUploadDir) {
+        if (is_dir($caseUploadDir)) {
+            $leftover = glob($caseUploadDir . '/*');
+            if (empty($leftover)) @rmdir($caseUploadDir);
+        }
     }
 
     // 2) Remove this case's line-items from payable invoices and recompute invoice totals.

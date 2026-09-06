@@ -41,12 +41,9 @@
      * Valid bridge connections
      * ---------------------------------------------------------
      *
-     * There is intentionally NO connection between:
-     *
-     * 11 | 21
-     * 41 | 31
-     *
-     * because those are the midlines of the arches.
+     * Includes the two cross-midline bridges between the central
+     * incisors (11-21 upper, 41-31 lower), which are real contact
+     * points when a bridge crosses the midline.
      */
 
     var BRIDGE_PAIRS = [
@@ -84,7 +81,11 @@
         [34, 35],
         [35, 36],
         [36, 37],
-        [37, 38]
+        [37, 38],
+
+        // Cross-midline (central incisors)
+        [11, 21],
+        [41, 31]
     ];
 
 
@@ -419,9 +420,10 @@
          * Left half
          */
 
-        row.appendChild(
-            createHalf(leftSide)
-        );
+        var firstHalf =
+            createHalf(leftSide);
+
+        row.appendChild(firstHalf);
 
 
         /*
@@ -434,11 +436,6 @@
         midline.className =
             'case-teeth-picker__midline';
 
-        midline.setAttribute(
-            'aria-hidden',
-            'true'
-        );
-
 
         row.appendChild(midline);
 
@@ -450,6 +447,28 @@
         row.appendChild(
             createHalf(rightSide)
         );
+
+
+        /*
+         * Cross-midline bridge: connect the two central incisors
+         * (11-21 upper, 41-31 lower). The key is placed on the
+         * (shortened) midline, centered between the two teeth, so
+         * it does not collide with the separator line.
+         */
+
+        var crossKey =
+            createBridgeButton(
+                leftSide[
+                    leftSide.length - 1
+                ],
+                rightSide[0]
+            );
+
+        crossKey.classList.add(
+            'case-bridge-key--midline'
+        );
+
+        midline.appendChild(crossKey);
 
 
         section.appendChild(heading);

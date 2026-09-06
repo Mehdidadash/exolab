@@ -79,6 +79,7 @@ panel_layout_start('فاکتورهای طلب از شعبه‌ها');
             </td>
             <td class="actions" style="white-space:nowrap;">
                 <button type="button" class="btn receivable-pay-toggle" data-inv="<?= (int) $inv['id'] ?>" style="background:#06B6D4; color:#fff; padding:4px 10px;">💳 ثبت دریافت</button>
+                <a class="btn" href="branch_receivable_form.php?id=<?= (int) $inv['id'] ?>" title="ویرایش" style="background:#eef2ff; color:#3730a3; padding:4px 10px; text-decoration:none;">✏️</a>
                 <a class="btn" href="branch_receivable_pdf.php?id=<?= (int) $inv['id'] ?>" target="_blank" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">PDF</a>
                 <?= action_dropdown(null, null, 'delete_branch_receivable.php', (int) $inv['id']) ?>
             </td>

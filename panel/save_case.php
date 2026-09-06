@@ -71,7 +71,17 @@ $received_date = parseJalaliToGregorian($data['received_date'] ?? '');
 if ($received_date === '') {
     $received_date = parseDateInput($data['received_date'] ?? '');
     if ($received_date === '') {
-        $received_date = date('Y-m-d');
+        if ($id) {
+            // ویرایش بدون ارسال تاریخ: مقدار ثبت‌شده در دیتابیس حفظ شود (نه «امروز»)
+            $ex = db()->prepare('SELECT received_date FROM cases WHERE id = ?');
+            $ex->execute([$id]);
+            $received_date = (string) ($ex->fetchColumn() ?: '');
+            if ($received_date === '') {
+                $received_date = date('Y-m-d');
+            }
+        } else {
+            $received_date = date('Y-m-d');
+        }
     }
 }
 $status_id = !empty($data['status_id']) ? (int)$data['status_id'] : null;
@@ -182,7 +192,7 @@ function handleCaseFileUploads(int $caseId, array $files): array
     $errors = [];
     if (empty($files) || empty($files['name'])) return $errors;
 
-    $uploadDir = rtrim(__DIR__ . '/../assets/uploads/cases/' . $caseId, '/') . '/';
+    $uploadDir = ensure_uploads_dir('cases/' . $caseId) . '/';
 
     // Try to create directory
     if (!is_dir($uploadDir)) {
@@ -244,8 +254,8 @@ function handleCaseFileUploads(int $caseId, array $files): array
 
 try {
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, updated_at = NOW() WHERE id = ?';
-        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $id];
+        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, updated_at = NOW() WHERE id = ?';
+        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
@@ -257,10 +267,13 @@ try {
         $caseId = (int) db()->lastInsertId();
     }
 
+    log_case_activity($caseId, $id ? 'update' : 'create', $id ? 'ویرایش کیس' : 'ایجاد کیس');
+
     // Handle file uploads
     $uploadErrors = [];
     if (!empty($_FILES['case_files'])) {
         $uploadErrors = handleCaseFileUploads($caseId, $_FILES['case_files']);
+        if (empty($uploadErrors)) log_case_activity($caseId, 'file_upload', 'آپلود فایل هنگام ذخیره کیس');
     }
 
     // Notifications for lab & designer assignment

@@ -81,9 +81,12 @@ function renderTeethChart($teeth) {
         }
         return $h;
     };
-    $archHtml = function ($quads) use ($halfHtml) {
+    $archHtml = function ($quads) use ($halfHtml, $bridgeHtml) {
+        $firstHalf = $halfHtml($quads[0]);
+        // Cross-midline bridge between the central incisors (11-21, 41-31)
+        $firstHalf .= $bridgeHtml($quads[0][count($quads[0]) - 1], $quads[1][0]);
         return '<div class="ctc-row">'
-            . '<div class="ctc-half">' . $halfHtml($quads[0]) . '</div>'
+            . '<div class="ctc-half">' . $firstHalf . '</div>'
             . '<div class="ctc-midline"></div>'
             . '<div class="ctc-half">' . $halfHtml($quads[1]) . '</div>'
             . '</div>';
@@ -144,32 +147,117 @@ function toJalaliDate($gregorianDate) {
 }
 
 /**
- * Convert Persian (Farsi) text to a readable Finglish (Latin) transliteration.
+ * Convert Persian (Farsi) text to a readable Latin transliteration.
  * Used e.g. for ZIP file names so Persian patient names become Latin.
- * Example: "خانوم حیدری" => "khanoum heydari".
- * This is a best-effort approximation (Persian omits most short vowels).
+ * Example: "محمد حسینی" => "Mohammad Hosseini".
+ *
+ * Strategy (much better than pure letter-by-letter rules):
+ *   1) Split into words and check a curated dictionary of common Iranian
+ *      first/last names — these give the standard correct spellings
+ *      ("حسینی" → "Hosseini", not "haseyni"; "محمد" → "Mohammad", not "mahamad").
+ *   2) Unknown words fall back to an improved rule-based transliteration.
+ * Persian omits most short vowels, so arbitrary names are still best-effort.
  */
 function persian_to_finglish($text) {
+    static $names = [
+        // ── نام‌های کوچک ──
+        'محمد' => 'Mohammad', 'محمدرضا' => 'Mohammadreza', 'محمدحسین' => 'Mohammadhossein',
+        'محمدعلی' => 'Mohammadali', 'محمدامین' => 'Mohammadamin', 'علی' => 'Ali',
+        'علیرضا' => 'Alireza', 'رضا' => 'Reza', 'حسین' => 'Hossein', 'حسن' => 'Hassan',
+        'مهدی' => 'Mehdi', 'امیر' => 'Amir', 'امیرحسین' => 'Amirhossein', 'امیرعلی' => 'Amirali',
+        'امیرمحمد' => 'Amirmohammad', 'سید' => 'Seyed', 'سعید' => 'Saeid', 'علی‌اکبر' => 'Aliakbar',
+        'مرتضی' => 'Morteza', 'مجتبی' => 'Mojtaba', 'مصطفی' => 'Mostafa', 'احمد' => 'Ahmad',
+        'حمید' => 'Hamid', 'حمیدرضا' => 'Hamidreza', 'کاظم' => 'Kazem', 'قاسم' => 'Ghasem',
+        'عباس' => 'Abbas', 'ناصر' => 'Naser', 'داوود' => 'Davoud', 'حبیب' => 'Habib',
+        'رحیم' => 'Rahim', 'کریم' => 'Karim', 'جواد' => 'Javad', 'محسن' => 'Mohsen',
+        'فرهاد' => 'Farhad', 'بهرام' => 'Bahram', 'بابک' => 'Babak', 'کامران' => 'Kamran',
+        'کیوان' => 'Keyvan', 'امید' => 'Omid', 'آرمان' => 'Arman', 'آرش' => 'Arash',
+        'پیمان' => 'Peyman', 'شاهین' => 'Shahin', 'شهاب' => 'Shahab', 'روزبه' => 'Rouzbeh',
+        'سیامک' => 'Siamak', 'سهراب' => 'Sohrab', 'سروش' => 'Soroush', 'میلاد' => 'Milad',
+        'پارسا' => 'Parsa', 'ایلیا' => 'Ilya', 'آریا' => 'Arya', 'باران' => 'Baran',
+        'فاطمه' => 'Fatemeh', 'زهرا' => 'Zahra', 'مریم' => 'Maryam', 'محدثه' => 'Mohaddeseh',
+        'معصومه' => 'Masoumeh', 'رقیه' => 'Roghayeh', 'صدیقه' => 'Sedigheh', 'خدیجه' => 'Khadijeh',
+        'نرگس' => 'Narges', 'لیلا' => 'Leila', 'سارا' => 'Sara', 'نگار' => 'Negar',
+        'شیما' => 'Shima', 'شیدا' => 'Sheida', 'نسیم' => 'Nasim', 'الهام' => 'Elham',
+        'مرجان' => 'Marjan', 'مهسا' => 'Mahsa', 'مینا' => 'Mina', 'نازنین' => 'Nazanin',
+        'پریسا' => 'Parisa', 'سمیرا' => 'Samira', 'رویا' => 'Roya', 'شیرین' => 'Shirin',
+        'آتنا' => 'Athena', 'هانیه' => 'Haniyeh', 'فائزه' => 'Faezeh', 'زینب' => 'Zeynab',
+        'طاهره' => 'Tahereh', 'سمیه' => 'Somayeh', 'حمیده' => 'Hamideh', 'آزاده' => 'Azadeh',
+        'مرضیه' => 'Marziyeh', 'محبوبه' => 'Mahboobeh', 'فریبا' => 'Fariba', 'فرشته' => 'Fereshteh',
+        'مهین' => 'Mahin', 'پروین' => 'Parvin', 'اکرم' => 'Akram', 'اعظم' => 'Azam',
+        'بتول' => 'Batoul', 'فرزانه' => 'Farzaneh', 'سمانه' => 'Samaneh', 'مونا' => 'Mona',
+        'دنیا' => 'Donya', 'سحر' => 'Sahar', 'یاسمن' => 'Yasaman',
+        // ── نام خانوادگی ──
+        'حسینی' => 'Hosseini', 'حسینیان' => 'Hosseinian', 'محمدی' => 'Mohammadi',
+        'محمدیان' => 'Mohammadian', 'رضایی' => 'Rezaei', 'رضوی' => 'Razavi',
+        'احمدی' => 'Ahmadi', 'قاسمی' => 'Ghasemi', 'کاظمی' => 'Kazemi', 'موسوی' => 'Mousavi',
+        'حیدری' => 'Heydari', 'نوری' => 'Nouri', 'کریمی' => 'Karimi', 'عباسی' => 'Abbasi',
+        'جعفری' => 'Jafari', 'اکبری' => 'Akbari', 'صادقی' => 'Sadeghi', 'قربانی' => 'Ghorbani',
+        'محمدزاده' => 'Mohammadzadeh', 'حسین‌زاده' => 'Hosseinzadeh', 'زاده' => 'Zadeh',
+        'نادری' => 'Naderi', 'کمالی' => 'Kamali', 'شفیعی' => 'Shafiei', 'صالحی' => 'Salehi',
+        'عباس‌نژاد' => 'Abbasnejad', 'نژاد' => 'Nejad', 'پور' => 'Pour', 'مقدم' => 'Moghaddam',
+        'تقوی' => 'Taghavi', 'روحانی' => 'Rouhani', 'سلیمانی' => 'Soleimani',
+        'مرادی' => 'Moradi', 'محمدپور' => 'Mohammadpour', 'رحیمی' => 'Rahimi',
+        'یزدانی' => 'Yazdani', 'میرزایی' => 'Mirzaei', 'صادق‌زاده' => 'Sadeghzadeh',
+        'امینی' => 'Amini', 'بابایی' => 'Babaei', 'جهانی' => 'Jahani', 'شفیع‌زاده' => 'Shafiezadeh',
+        'غفاری' => 'Ghaffari', 'فلاحی' => 'Falahi', 'قلی‌زاده' => 'Gholizadeh',
+        'طاهری' => 'Taheri', 'مظاهری' => 'Mazaheri', 'صفری' => 'Safari', 'کوهی' => 'Kouhi',
+        'رستمی' => 'Rostami', 'صمدی' => 'Samadi', 'زارعی' => 'Zarei', 'مهدوی' => 'Mahdavi',
+        'دبیری' => 'Dabiri', 'شریفی' => 'Sharifi', 'بهرامی' => 'Bahrami', 'فرجی' => 'Faraji',
+        'نجفی' => 'Najafi', 'هاشمی' => 'Hashemi', 'حاجی' => 'Haji', 'پناهی' => 'Panahi',
+        'خدایی' => 'Khodaei', 'علی‌پور' => 'Alipour', 'حسین‌پور' => 'Hosseinpour',
+        'قنبری' => 'Ghanbari', 'سلطانی' => 'Soltani', 'عظیمی' => 'Azimi', 'گودرزی' => 'Goudarzi',
+        'کیانی' => 'Kiani', 'مجیدی' => 'Majidi', 'یوسفی' => 'Yousefi', 'رحمانی' => 'Rahmani',
+        'شاه‌حسینی' => 'Shahhosseini', 'ترکاشوند' => 'Torkashvand', 'رحمتی' => 'Rahmati',
+        'مومنی' => 'Momeni', 'براتی' => 'Barati', 'معصومی' => 'Masoumi', 'داودی' => 'Davoudi',
+        'شمس' => 'Shams', 'علیزاده' => 'Alizadeh', 'خلیلی' => 'Khalili', 'مصطفوی' => 'Mostafavi',
+        'یعقوبی' => 'Yaghoubi', 'صفرزاده' => 'Safarzadeh', 'بهاری' => 'Bahari',
+        'گل‌محمدی' => 'Golmohammadi', 'عظیم‌زاده' => 'Azimzadeh', 'ملکی' => 'Maleki',
+        'قاسم‌پور' => 'Ghasempour', 'کرمی' => 'Karami', 'حقیقی' => 'Haghighi', 'فتحی' => 'Fathi',
+        'باقری' => 'Bagheri', 'خسروی' => 'Khosravi', 'پورمند' => 'Pourmand', 'نجاری' => 'Najjari',
+        'مظفری' => 'Mozaffari', 'شجاعی' => 'Shojaei', 'همتی' => 'Hemmati', 'رئیسی' => 'Raeisi',
+        'جمشیدی' => 'Jamshidi', 'نعمتی' => 'Nematy', 'کبیری' => 'Kabiri', 'ایزدی' => 'Izadi',
+        'پورمحمدی' => 'Pourmohammadi', 'آرزوبخش' => 'Arzoubakhsh', 'میرجوادی' => 'Mirjavadi',
+        'یگانه' => 'Yeganeh', 'ساجدی' => 'Sajedi', 'خطیب' => 'Khatib', 'شیخی' => 'Sheikhi',
+        'حسینی‌نژاد' => 'Hosseininejad',
+        // ── کلمات متداول ──
+        'خانم' => 'Khanom', 'خانوم' => 'Khanom', 'آقای' => 'Aghay', 'بیمار' => 'Bimar',
+    ];
+    // حذف نشانه‌ها و نیم‌فاصله
     $text = trim((string) $text);
     $text = preg_replace('/[\x{064B}-\x{0652}\x{0640}\x{200C}]/u', '', $text);
-    $chars = preg_split('//u', $text, -1, PREG_SPLIT_NO_EMPTY);
+
+    $words = preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+    $outParts = [];
+    foreach ($words as $w) {
+        if (isset($names[$w])) {
+            $outParts[] = $names[$w];
+            continue;
+        }
+        $outParts[] = ucfirst(persian_word_to_finglish_fallback($w));
+    }
+    return implode(' ', $outParts);
+}
+
+/** Improved rule-based fallback for a single Persian word (بدون فاصله). */
+function persian_word_to_finglish_fallback(string $word): string {
+    $chars = preg_split('//u', $word, -1, PREG_SPLIT_NO_EMPTY);
     $out = '';
-    $lastVowel = true;          // avoid inserting a short vowel at word start
+    $lastVowel = true;
     $wordStart = true;
     $vowelLetters = ['ا', 'آ', 'و', 'ی'];
     $consonantMap = [
-        'ب' => 'b', 'پ' => 'p', 'ت' => 't', 'ث' => 's', 'ج' => 'j', 'چ' => 'ch', 'ح' => 'h', 'خ' => 'kh', 'د' => 'd',
-        'ذ' => 'z', 'ر' => 'r', 'ز' => 'z', 'ژ' => 'zh', 'س' => 's', 'ش' => 'sh', 'ص' => 's', 'ض' => 'z', 'ط' => 't',
-        'ظ' => 'z', 'غ' => 'gh', 'ف' => 'f', 'ق' => 'gh', 'ک' => 'k', 'گ' => 'g', 'ل' => 'l', 'م' => 'm', 'ن' => 'n',
-        'ه' => 'h', 'و' => 'v', 'ی' => 'y',
+        'ب' => 'b', 'پ' => 'p', 'ت' => 't', 'ث' => 's', 'ج' => 'j', 'چ' => 'ch', 'ح' => 'h',
+        'خ' => 'kh', 'د' => 'd', 'ذ' => 'z', 'ر' => 'r', 'ز' => 'z', 'ژ' => 'zh', 'س' => 's',
+        'ش' => 'sh', 'ص' => 's', 'ض' => 'z', 'ط' => 't', 'ظ' => 'z', 'غ' => 'gh', 'ف' => 'f',
+        'ق' => 'gh', 'ک' => 'k', 'گ' => 'g', 'ل' => 'l', 'م' => 'm', 'ن' => 'n', 'ه' => 'h',
+        'و' => 'v', 'ی' => 'y',
     ];
     $vowelMap = ['ا' => 'a', 'آ' => 'a', 'ء' => '', 'ة' => 'h'];
     foreach ($chars as $i => $ch) {
         $next = $chars[$i + 1] ?? '';
         $prev = $chars[$i - 1] ?? '';
-
         if ($ch === 'ع') {
-            // Word-initial ع carries the "a" vowel; otherwise silent but acts as a vowel.
             if ($wordStart) {
                 $out .= 'a';
                 $lastVowel = true;
@@ -180,13 +268,24 @@ function persian_to_finglish($text) {
             continue;
         }
         if ($ch === 'و') {
-            // Consonant "v" at word start or before a vowel letter; otherwise vowel "ou".
-            if ($wordStart || in_array($next, $vowelLetters, true)) { $seg = 'v'; $isV = false; }
-            else { $seg = 'ou'; $isV = true; }
+            if ($wordStart || in_array($next, $vowelLetters, true)) {
+                $seg = 'v';
+                $isV = false;
+            } else {
+                $seg = 'ou';
+                $isV = true;
+            }
         } elseif ($ch === 'ی') {
-            if ($wordStart || in_array($next, $vowelLetters, true)) { $seg = 'y'; $isV = false; }
-            elseif ($prev !== '' && !in_array($prev, $vowelLetters, true) && $next !== '' && !in_array($next, $vowelLetters, true)) { $seg = 'ey'; $isV = true; }
-            else { $seg = 'i'; $isV = true; }
+            if ($wordStart || in_array($next, $vowelLetters, true)) {
+                $seg = 'y';
+                $isV = false;
+            } elseif ($prev !== '' && !in_array($prev, $vowelLetters, true) && $next !== '' && !in_array($next, $vowelLetters, true)) {
+                $seg = 'ey';
+                $isV = true;
+            } else {
+                $seg = 'i';
+                $isV = true;
+            }
         } elseif (isset($vowelMap[$ch])) {
             $seg = $vowelMap[$ch];
             $isV = true;
@@ -194,14 +293,13 @@ function persian_to_finglish($text) {
             $seg = $consonantMap[$ch];
             $isV = false;
         } else {
-            // Space or punctuation: keep as-is, reset word state.
             $out .= $ch;
             $lastVowel = true;
             $wordStart = true;
             continue;
         }
         if (!$isV && !$lastVowel && $out !== '') {
-            $out .= 'a'; // insert a short "a" between consecutive consonants for readability
+            $out .= 'a';
         }
         $out .= $seg;
         $lastVowel = $isV;
@@ -219,6 +317,64 @@ function toJalaliDateFormatted($gregorianDate) {
     } catch (\Throwable $e) {
         return $gregorianDate;
     }
+}
+
+/**
+ * Human-readable file size (e.g. "۱.۲ مگابایت").
+ */
+function formatFileSize($bytes): string {
+    $bytes = (int) $bytes;
+    if ($bytes >= 1073741824) return toPersianDigits(round($bytes / 1073741824, 1)) . ' گیگابایت';
+    if ($bytes >= 1048576)   return toPersianDigits(round($bytes / 1048576, 1)) . ' مگابایت';
+    if ($bytes >= 1024)      return toPersianDigits(round($bytes / 1024, 1)) . ' کیلوبایت';
+    return toPersianDigits((string) $bytes) . ' بایت';
+}
+
+/**
+ * Config for the «نوع فایل» selector on uploads (options + badge colors).
+ */
+function caseFileTypeConfig(): array {
+    $options = [
+        'raw_scan'      => 'اسکن خام',
+        'final_design'  => 'طراحی نهایی',
+        'patient_photo' => 'عکس بیمار',
+        'design_html'   => 'HTML طراحی',
+        'other'         => 'سایر',
+    ];
+    $badge = [
+        'raw_scan'      => ['اسکن خام', '#e0f2fe', '#0369a1'],
+        'final_design'  => ['طراحی نهایی', '#dcfce7', '#166534'],
+        'patient_photo' => ['عکس بیمار', '#fef3c7', '#92400e'],
+        'design_html'   => ['HTML طراحی', '#ede9fe', '#5b21b6'],
+        'other'         => ['سایر', '#f3f4f6', '#374151'],
+    ];
+    return ['options' => $options, 'badge' => $badge];
+}
+
+/** Default «نوع فایل» بر اساس نقش: طراح → طراحی نهایی؛ بقیه → اسکن خام. */
+function caseFileTypeDefault(array $user): string {
+    $isDesigner = (($user['role'] ?? '') === 'designer') || !empty($user['is_designer']);
+    return $isDesigner ? 'final_design' : 'raw_scan';
+}
+
+/** Badge «نوع فایل» برای نمایش: اول نوع ذخیره‌شده، وگرنه تشخیص خودکار از پسوند. */
+function caseFileBadge(?string $fileType, string $ext): string {
+    $cfg = caseFileTypeConfig();
+    if ($fileType && isset($cfg['badge'][$fileType])) {
+        [$label, $bg, $color] = $cfg['badge'][$fileType];
+        return '<span style="background:' . $bg . '; color:' . $color . '; border-radius:6px; padding:0 6px; white-space:nowrap;">' . $label . '</span>';
+    }
+    $map = [
+        'stl' => ['اسکن/مدل', '#dcfce7', '#166534'], 'ply' => ['اسکن/مدل', '#dcfce7', '#166534'],
+        'stp' => ['مدل سه‌بعدی', '#e0e7ff', '#3730a3'], 'step' => ['مدل سه‌بعدی', '#e0e7ff', '#3730a3'],
+        'obj' => ['مدل سه‌بعدی', '#e0e7ff', '#3730a3'], '3mf' => ['مدل سه‌بعدی', '#e0e7ff', '#3730a3'],
+        'jpg' => ['تصویر/کنترل', '#fef9c3', '#854d0e'], 'jpeg' => ['تصویر/کنترل', '#fef9c3', '#854d0e'],
+        'png' => ['تصویر/کنترل', '#fef9c3', '#854d0e'], 'gif' => ['تصویر/کنترل', '#fef9c3', '#854d0e'],
+        'webp' => ['تصویر/کنترل', '#fef9c3', '#854d0e'], 'bmp' => ['تصویر/کنترل', '#fef9c3', '#854d0e'],
+        'zip' => ['بایگانی', '#f3f4f6', '#374151'], 'rar' => ['بایگانی', '#f3f4f6', '#374151'],
+    ];
+    $t = $map[strtolower((string) $ext)] ?? ['سایر', '#f3f4f6', '#374151'];
+    return '<span style="background:' . $t[1] . '; color:' . $t[2] . '; border-radius:6px; padding:0 6px; white-space:nowrap;">' . $t[0] . '</span>';
 }
 
 /**
@@ -435,4 +591,37 @@ function audit_log_save(string $entityType, int $entityId, string $label): void
 function audit_log_delete(string $entityType, int $entityId, string $label): void
 {
     audit_log("delete_{$entityType}", $entityType, $entityId, "حذف {$label} #{$entityId}");
+}
+
+// =====================================================
+// Case Activity Log Helpers (لاگ فعالیت‌های هر کیس)
+// =====================================================
+/**
+ * ثبت رویداد روی یک کیس (ایجاد، ویرایش، آپلود/دانلود فایل، مشاهده، کامنت، تغییر وضعیت و...).
+ * جزئیات می‌تواند رشته‌ی ساده یا JSON باشد.
+ */
+function log_case_activity(int $caseId, string $action, ?string $details = null): void
+{
+    if ($caseId <= 0) return;
+    try {
+        $userId = null;
+        if (function_exists('current_user')) {
+            $user = current_user();
+            $userId = $user['id'] ?? null;
+        }
+        $ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
+        $stmt = db()->prepare('INSERT INTO case_activity_log (case_id, user_id, action, details, ip_address, created_at) VALUES (?, ?, ?, ?, ?, NOW())');
+        $stmt->execute([$caseId, $userId, $action, $details, $ip]);
+    } catch (\Throwable $e) {
+        // لاگ نباید جریان اصلی را بشکند
+        error_log('case_activity_log: ' . $e->getMessage());
+    }
+}
+
+/** ردیف‌های لاگ یک کیس (جدیدترین اول). */
+function getCaseActivityLog(int $caseId): array
+{
+    $stmt = db()->prepare('SELECT l.*, u.full_name AS user_name FROM case_activity_log l LEFT JOIN users u ON u.id = l.user_id WHERE l.case_id = ? ORDER BY l.id DESC LIMIT 500');
+    $stmt->execute([$caseId]);
+    return $stmt->fetchAll();
 }

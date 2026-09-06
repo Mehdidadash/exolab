@@ -22,9 +22,13 @@ if (!$up || (int) $up['user_id'] !== (int) $user['id']) {
     exit;
 }
 
-$path = __DIR__ . '/../assets/uploads/user/' . $up['filename'];
+$path = resolve_upload_path('user/' . $up['filename']);
 if (file_exists($path)) {
     @unlink($path);
+}
+$legacyPath = legacy_uploads_path('user/' . $up['filename']);
+if ($legacyPath !== $path && file_exists($legacyPath)) {
+    @unlink($legacyPath);
 }
 db()->prepare('DELETE FROM user_uploads WHERE id = ?')->execute([$id]);
 

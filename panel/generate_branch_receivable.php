@@ -5,14 +5,15 @@
 // outsource amount they owe us. Mirror of the creating branch's outsource invoice.
 require_once __DIR__ . '/auth.php';
 require_admin();
-if (!is_branch_scoped()) {
-    die('این صفحه مخصوص مدیران شعبه است.');
+// مدیر کل (بدون شعبه) نیز مجاز است — به‌عنوان شعبه‌ی اصلی/مرکزی صادر می‌کند.
+if (!is_branch_scoped() && !is_root_admin()) {
+    die('این صفحه مخصوص مدیران شعبه یا مدیر کل است.');
 }
 
 use Morilog\Jalali\Jalalian;
 
-// Partner branches = branches other than our own
-$myBranchId = currentBranchId();
+// Partner branches = branches other than our own (مدیر کل → شعبه‌ی اصلی/مرکزی = ۱)
+$myBranchId = currentBranchId() ?? 1;
 $branches = array_filter(getAllBranches(), function ($b) use ($myBranchId) {
     return (int) $b['id'] !== (int) $myBranchId;
 });
@@ -163,8 +164,8 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                         <?php endforeach; ?>
                         <p style="margin-top:14px; font-weight:bold;">جمع کل: <span style="color:#166534;"><?= formatAmountToman($total) ?> تومان</span></p>
                         <div style="display:flex; gap:10px; margin-top:16px;">
-                            <button type="submit" name="preview_selected" value="1" style="background:#6366f1; color:#fff;">فاکتور موارد انتخاب‌شده</button>
-                            <button type="submit" name="generate" value="1" style="background:#059669; color:#fff;">صدور فاکتور (همه موارد)</button>
+                            <button type="submit" name="preview_selected" value="1" style="background:#6366f1; color:#fff;">به‌روزرسانی انتخاب</button>
+                            <button type="submit" name="confirm" value="1" style="background:#059669; color:#fff;">تأیید و صدور فاکتور (موارد انتخاب‌شده)</button>
                             <a href="generate_branch_receivable.php" class="btn" style="background:#E5E7EB; color:#0F172A;">تغییر بازه/شعبه</a>
                         </div>
                     </form>
@@ -177,15 +178,63 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
         }
     }
 
-    // ─── Create ───
-    if (empty($message) && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate']) && $startDate !== '' && $endDate !== '' && $branchId) {
-        $cases = getUninvoicedInboundPartnerCases($branchId, $startDate, $endDate);
-        if (!empty($cases)) {
-            $generatedInvoiceId = createBranchReceivable($branchId, $cases, date('Y-m-d'), $periodLabel);
-            $message = 'فاکتور طلب از شعبه با موفقیت صادر شد.';
+    // ─── Confirm (create) ───
+    // (create was previously unreachable – it is now a separate step after preview,
+    //  mirroring the designer-invoice flow)
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm']) && (int) $_POST['confirm'] === 1) {
+    $branchId = (int) ($_POST['branch_id'] ?? 0);
+    $month = (int) ($_POST['month'] ?? 0);
+    $year = (int) ($_POST['year'] ?? 0);
+    $selectedCaseIds = isset($_POST['case_ids']) && is_array($_POST['case_ids']) ? array_map('intval', $_POST['case_ids']) : [];
+    $periodType = isset($_POST['period_type']) ? (string) $_POST['period_type'] : 'monthly';
+    if (!in_array($periodType, ['monthly', 'custom'], true)) $periodType = 'monthly';
+    $dateFrom = trim((string) ($_POST['date_from'] ?? ''));
+    $dateTo = trim((string) ($_POST['date_to'] ?? ''));
+    $startDate = '';
+    $endDate = '';
+    $periodLabel = '';
+    if ($periodType === 'custom') {
+        $startDate = parseJalaliToGregorian($dateFrom);
+        $endDate = parseJalaliToGregorian($dateTo);
+        if ($startDate === '' || $endDate === '') {
+            $message = 'لطفاً تاریخ شروع و پایان (بازه) را وارد کنید.';
+            goto show_message;
         }
+        if ($startDate > $endDate) {
+            $message = 'تاریخ شروع نباید از تاریخ پایان بزرگ‌تر باشد.';
+            goto show_message;
+        }
+        $periodLabel = toJalaliDateFormatted($startDate) . ' تا ' . toJalaliDateFormatted($endDate);
+    } elseif ($branchId && $month && $year) {
+        $jalaliDateStr = sprintf('%04d/%02d/01', $year, $month);
+        try {
+            $jalaliStart = Jalalian::fromFormat('Y/m/d', $jalaliDateStr);
+            $startDate = $jalaliStart->toCarbon()->toDateString();
+            $endDate = $jalaliStart->addMonths(1)->subDay()->toCarbon()->toDateString();
+            $periodLabel = $jalaliMonths[$month] . ' ' . $year;
+        } catch (\Exception $e) {
+            $message = 'تاریخ نامعتبر';
+            goto show_message;
+        }
+    } else {
+        $message = 'لطفاً شعبه همکار و بازه زمانی را انتخاب کنید.';
+        goto show_message;
+    }
+    $cases = getUninvoicedInboundPartnerCases($branchId, $startDate, $endDate);
+    if (!empty($selectedCaseIds)) {
+        $cases = array_values(array_filter($cases, function ($c) use ($selectedCaseIds) {
+            return in_array((int) $c['id'], $selectedCaseIds);
+        }));
+    }
+    if (empty($cases)) {
+        $message = 'هیچ کیس انتخاب‌شده‌ای برای صدور فاکتور وجود ندارد.';
+    } else {
+        $generatedInvoiceId = createBranchReceivable($branchId, $cases, date('Y-m-d'), $periodLabel);
+        $message = 'فاکتور طلب از شعبه با موفقیت صادر شد.';
     }
 }
+show_message:
 
 panel_layout_start('صدور فاکتور طلب از شعبه');
 ?>

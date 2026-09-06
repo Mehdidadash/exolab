@@ -663,6 +663,76 @@ th {
     -webkit-overflow-scrolling: touch;
 }
 
+/* Invoice items table (invoice_form.php) – fixed layout so every input fills its
+   column and totals stay fully visible (no empty gaps). */
+.invoice-items-table {
+    table-layout: fixed;
+    width: 100%;
+    font-size: 0.85rem;
+}
+.invoice-items-table th,
+.invoice-items-table td {
+    padding: 6px 8px;
+    vertical-align: middle;
+    overflow: hidden;
+}
+.invoice-items-table th {
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+.invoice-items-table th:nth-child(1), .invoice-items-table td:nth-child(1) { width: 16% !important; } /* نوع */
+.invoice-items-table th:nth-child(2), .invoice-items-table td:nth-child(2) { width: 25% !important; } /* شرح */
+.invoice-items-table th:nth-child(3), .invoice-items-table td:nth-child(3) { width: 13% !important; } /* نام بیمار */
+.invoice-items-table th:nth-child(4), .invoice-items-table td:nth-child(4) { width: 13% !important; } /* فی */
+.invoice-items-table th:nth-child(5), .invoice-items-table td:nth-child(5) { width: 4% !important; }  /* تعداد */
+.invoice-items-table th:nth-child(6), .invoice-items-table td:nth-child(6) { width: 10% !important; } /* جمع */
+.invoice-items-table th:nth-child(7), .invoice-items-table td:nth-child(7) { width: 4% !important; text-align: center; } /* عملیات */
+.invoice-items-table .item-description,
+.invoice-items-table .item-patient,
+.invoice-items-table .item-unit-price,
+.invoice-items-table .item-quantity,
+.invoice-items-table .item-total,
+.invoice-items-table select {
+    width: 100% !important;
+    box-sizing: border-box;
+    font-size: 0.8rem;
+}
+.invoice-items-table .item-unit-price {
+    font-weight: 600;
+}
+.invoice-items-table .item-total {
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-align: left;
+    border: none;
+    background: transparent;
+    cursor: default;
+}
+.invoice-items-table .remove-item-btn {
+    width: 100%;
+    background: transparent;
+    border: none;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 4px 0;
+    color: #b91c1c;
+    border-radius: 6px;
+    cursor: pointer;
+}
+.invoice-items-table .remove-item-btn:hover {
+    background: #fee2e2;
+}
+@media (max-width: 640px) {
+    .table-scroll .invoice-items-table {
+        display: table;
+        min-width: 760px;
+    }
+    .invoice-items-table th,
+    .invoice-items-table td {
+        padding: 5px 6px;
+    }
+}
+
 @media (max-width: 640px) {
     .container {
         padding: 0 10px;

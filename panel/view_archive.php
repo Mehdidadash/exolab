@@ -40,7 +40,7 @@ if (!$canAccess) {
     exit;
 }
 
-$path = __DIR__ . '/../assets/uploads/cases/' . (int) $file['case_id'] . '/' . $file['filename'];
+$path = resolve_upload_path('cases/' . (int) $file['case_id'] . '/' . $file['filename']);
 $ext = strtolower(pathinfo($file['filename'], PATHINFO_EXTENSION));
 
 if (!file_exists($path)) {

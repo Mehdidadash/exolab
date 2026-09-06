@@ -45,15 +45,17 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
         <input type="email" id="doctor_email" name="doctor_email" value="<?= htmlspecialchars($invoice['doctor_email'] ?? '') ?>">
 
         <label>آیتم‌های فاکتور</label>
+        <div class="table-scroll">
         <table class="invoice-items-table" style="width:100%; border-collapse: collapse;">
             <thead>
                 <tr>
                     <th>نوع</th>
                     <th>شرح</th>
                     <th>نام بیمار</th>
-                    <th style="width: 90px;">تعداد</th>
+                    <th>فی</th>
+                    <th>تعداد</th>
                     <th>جمع</th>
-                    <th>عملیات</th>
+                    <th title="عملیات">⚙</th>
                 </tr>
             </thead>
             <tbody id="invoice-items" data-items='<?= json_encode(array_map(function ($item) {
@@ -77,10 +79,30 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
             }, $invoiceItems), JSON_UNESCAPED_UNICODE) ?>'>
             </tbody>
         </table>
+        </div>
         <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
             <button type="button" id="add-invoice-item" class="btn" style="background: #0F172A; color: #fff;">افزودن آیتم جدید</button>
             <button type="button" id="add-cases-from-doctor" class="btn" style="background: #06B6D4; color: #fff;">افزودن از کیس‌های دکتر</button>
             <button type="button" id="add-discount-item" class="btn" style="background: #f59e0b; color: #fff;">افزودن تخفیف</button>
+        </div>
+
+        <?php
+        // تعداد هر خدمت به تفکیک (نمایش اولیه؛ با JS هم زنده به‌روز می‌شود)
+        $serviceSummary = [];
+        foreach ($invoiceItems as $item) {
+            $svc = trim((string) ($item['item_title'] ?: $item['price_title'] ?: ''));
+            $qty = (int) ($item['quantity'] ?? 0);
+            if ($svc === '' || $qty <= 0) continue;
+            $serviceSummary[$svc] = ($serviceSummary[$svc] ?? 0) + $qty;
+        }
+        ?>
+        <div id="service-summary" style="<?= empty($serviceSummary) ? 'display:none;' : '' ?> margin-top:12px; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px;">
+            <strong style="color:#0F172A; font-size:0.9rem;">تعداد خدمات به تفکیک:</strong>
+            <div id="service-summary-body" style="margin-top:7px; display:flex; gap:6px 12px; flex-wrap:wrap;">
+                <?php foreach ($serviceSummary as $svc => $qty): ?>
+                    <span style="background:#eef2ff; padding:3px 10px; border-radius:20px; white-space:nowrap; font-size:0.82rem;"><?= htmlspecialchars($svc) ?>: <b style="color:#1d4ed8;"><?= toPersianDigits($qty) ?></b></span>
+                <?php endforeach; ?>
+            </div>
         </div>
 
         <label for="total_amount">مبلغ کل (تومان)</label>

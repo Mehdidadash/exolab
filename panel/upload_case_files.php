@@ -62,10 +62,7 @@ if (!$check->fetch()) {
     exit;
 }
 
-$uploadDir = rtrim(__DIR__ . '/../assets/uploads/cases/' . $caseId, '/') . '/';
-if (!is_dir($uploadDir)) {
-    @mkdir($uploadDir, 0755, true);
-}
+$uploadDir = ensure_uploads_dir('cases/' . $caseId) . '/';
 
 $allowed = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'rar', 'zip'];
 $errors = [];
@@ -85,6 +82,15 @@ if ($description === '') {
     $description = trim($_GET['description'] ?? '');
 }
 $description = $description !== '' ? $description : null;
+
+// نوع فایل: پیش‌فرض بر اساس نقش (طراح → طراحی نهایی، بقیه → اسکن خام)
+$fileType = trim($_POST['file_type'] ?? '');
+if ($fileType === '') {
+    $fileType = trim($_GET['file_type'] ?? '');
+}
+if (!in_array($fileType, array_keys(caseFileTypeConfig()['options']), true)) {
+    $fileType = caseFileTypeDefault($user);
+}
 
 // ─── Optional: package all selected files into a single ZIP ───
 $compress = !empty($_POST['compress']) || !empty($_GET['compress']);
@@ -144,8 +150,8 @@ if ($compress && $fileCount > 1) {
             @unlink($zipPath);
         } else {
             try {
-                $ins = db()->prepare('INSERT INTO case_files (case_id, filename, original_name, description, mime, size, created_at) VALUES (?, ?, ?, ?, "application/zip", ?, NOW())');
-                $ins->execute([$caseId, $zipName, $zipName, $description, $size]);
+                $ins = db()->prepare('INSERT INTO case_files (case_id, filename, original_name, description, file_type, mime, size, uploader_id, created_at) VALUES (?, ?, ?, ?, ?, "application/zip", ?, ?, NOW())');
+                $ins->execute([$caseId, $zipName, $zipName, $description, $fileType, $size, (int) ($user['id'] ?? 0)]);
                 $uploaded = 1;
             } catch (\Throwable $e) {
                 $errors[] = 'db_insert_error';
@@ -155,6 +161,7 @@ if ($compress && $fileCount > 1) {
         }
     }
     header('Content-Type: application/json; charset=utf-8');
+    if ($uploaded > 0) log_case_activity($caseId, 'file_upload', 'آپلود فایل ZIP: ' . $zipName . ' (نوع: ' . $fileType . ')');
     echo json_encode([
         'success' => empty($errors),
         'uploaded' => $uploaded,
@@ -193,9 +200,9 @@ foreach ($files['error'] as $idx => $err) {
         @chmod($dest, 0644);
         try {
             $ins = db()->prepare(
-                'INSERT INTO case_files (case_id, filename, original_name, description, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())'
+                'INSERT INTO case_files (case_id, filename, original_name, description, file_type, mime, size, uploader_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())'
             );
-            $ins->execute([$caseId, $safe, $displayName, $description, $mime, $size]);
+            $ins->execute([$caseId, $safe, $displayName, $description, $fileType, $mime, $size, (int) ($user['id'] ?? 0)]);
             $uploaded++;
         } catch (\Throwable $e) {
             $errors[] = "db_insert_error";
@@ -208,6 +215,7 @@ foreach ($files['error'] as $idx => $err) {
 }
 
 header('Content-Type: application/json; charset=utf-8');
+if ($uploaded > 0) log_case_activity($caseId, 'file_upload', 'آپلود ' . $uploaded . ' فایل (نوع: ' . $fileType . ')');
 echo json_encode([
     'success' => empty($errors),
     'uploaded' => $uploaded,

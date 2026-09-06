@@ -6,56 +6,70 @@ require_login();
 $user = current_user();
 $isAdmin = is_admin();
 $isDoctor = ($user['role'] === 'doctor');
+$isDesigner = ($user['role'] === 'designer');
+$isLab = in_array($user['role'] ?? '', ['outsource_lab', 'partner_lab', 'customer_lab', 'lab'], true);
+$isOwnView = $isDoctor || $isDesigner || $isLab;
 $doctorId = $isDoctor ? $user['id'] : null;
 
-// Branch scoping for staff/branch admins
-$invBranchFilter = '';
-$invBranchParams = [];
-if (is_branch_scoped() && !$isDoctor) {
-    $bid = currentBranchId();
-    $granted = accessibleDoctorIds();
-    $invBranchFilter = ' AND (i.branch_id = ' . (int) $bid;
-    if (!empty($granted)) {
-        $ph = implode(',', array_fill(0, count($granted), '?'));
-        $invBranchFilter .= " OR i.doctor_id IN ({$ph})";
-        $invBranchParams = array_merge($invBranchParams, $granted);
+// External parties (طراح / لابراتوار) may ONLY see their own invoices — no editing.
+if ($isDesigner || $isLab) {
+    if (!has_permission('view_own_invoices') && !has_permission('view_invoices') && !is_admin()) {
+        http_response_code(403);
+        die('دسترسی غیرمجاز');
     }
-    $invBranchFilter .= ')';
-}
-
-// Fetch ALL invoices – DataTables handles client-side pagination/search
-if ($isDoctor) {
-    $stmt = db()->prepare(
-        "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
-         FROM doctor_invoices i
-         LEFT JOIN users u ON i.doctor_id = u.id
-         WHERE i.doctor_id = ?
-         ORDER BY i.invoice_date DESC, i.id DESC"
-    );
-    $stmt->execute([$doctorId]);
-} elseif (has_permission('view_clinic_invoices') && $user['role'] === 'clinic') {
-    $clinicScope = getClinicScope('i');
-    $stmt = db()->prepare(
-        "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
-         FROM doctor_invoices i
-         LEFT JOIN users u ON i.doctor_id = u.id
-         WHERE {$clinicScope['sql']}
-         ORDER BY i.invoice_date DESC, i.id DESC"
-    );
-    $stmt->execute($clinicScope['params']);
+    $invoices = $isDesigner
+        ? getInvoicesForDesigner((int) $user['id'])
+        : getInvoicesForLab((int) $user['id']);
 } else {
-    $stmt = db()->prepare(
-        "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
-         FROM doctor_invoices i
-         LEFT JOIN users u ON i.doctor_id = u.id
-         WHERE 1=1{$invBranchFilter}
-         ORDER BY i.invoice_date DESC, i.id DESC"
-    );
-    $stmt->execute($invBranchParams);
-}
-$invoices = $stmt->fetchAll();
+    // Branch scoping for staff/branch admins
+    $invBranchFilter = '';
+    $invBranchParams = [];
+    if (is_branch_scoped() && !$isDoctor) {
+        $bid = currentBranchId();
+        $granted = accessibleDoctorIds();
+        $invBranchFilter = ' AND (i.branch_id = ' . (int) $bid;
+        if (!empty($granted)) {
+            $ph = implode(',', array_fill(0, count($granted), '?'));
+            $invBranchFilter .= " OR i.doctor_id IN ({$ph})";
+            $invBranchParams = array_merge($invBranchParams, $granted);
+        }
+        $invBranchFilter .= ')';
+    }
 
-panel_layout_start($isDoctor ? 'فاکتورهای من' : 'لیست فاکتورها');
+    if ($isDoctor) {
+        $invoices = getInvoicesForDoctor($doctorId);
+    } elseif (has_permission('view_clinic_invoices') && $user['role'] === 'clinic') {
+        $clinicScope = getClinicScope('i');
+        $stmt = db()->prepare(
+            "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
+             FROM doctor_invoices i
+             LEFT JOIN users u ON i.doctor_id = u.id
+             WHERE {$clinicScope['sql']}
+             ORDER BY i.invoice_date DESC, i.id DESC"
+        );
+        $stmt->execute($clinicScope['params']);
+        $invoices = $stmt->fetchAll();
+    } else {
+        // Any other role with access: staff/secretary/finance/technician/admin — full list
+        if (!is_admin() && !has_permission('view_invoices') && !has_permission('view_clinic_invoices') && !has_permission('view_own_invoices')) {
+            http_response_code(403);
+            die('دسترسی غیرمجاز');
+        }
+        $stmt = db()->prepare(
+            "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
+             FROM doctor_invoices i
+             LEFT JOIN users u ON i.doctor_id = u.id
+             WHERE 1=1{$invBranchFilter}
+             ORDER BY i.invoice_date DESC, i.id DESC"
+        );
+        $stmt->execute($invBranchParams);
+        $invoices = $stmt->fetchAll();
+    }
+}
+
+$pdfFile = $isDesigner ? 'designer_invoice_pdf.php' : ($isLab ? 'outsource_invoice_pdf.php' : 'invoice_pdf.php');
+
+panel_layout_start($isOwnView ? 'فاکتورهای من' : 'لیست فاکتورها');
 ?>
 <?php if ($isAdmin): ?>
 <div style="margin-bottom: 18px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; align-items: center;">
@@ -121,7 +135,7 @@ function setDefaultBankAccount(id) {
                     $pdfLink = '<a class="action-icon" href="invoice_pdf.php?id=' . $invoice['id'] . '" target="_blank">' . svg_icon('pdf', 'icon-sm') . '</a>';
                     echo action_dropdown(null, 'invoice_form.php?id=' . $invoice['id'], 'delete_invoice.php', $invoice['id'], $pdfLink);
                 else: ?>
-                    <a class="btn" href="invoice_pdf.php?id=<?= $invoice['id'] ?>" target="_blank">PDF</a>
+                    <a class="btn" href="<?= $pdfFile ?>?id=<?= $invoice['id'] ?>" target="_blank">PDF</a>
                 <?php endif; ?>
             </td>
         </tr>

@@ -178,6 +178,19 @@ function currentBranchId(): ?int {
     return $bid !== null && $bid !== '' ? (int) $bid : null;
 }
 
+/**
+ * آیا این کاربر مسئول «هزینه‌های طراحی» است؟ هزینه طراحی همیشه توسط شعبه‌ی مرکزی (۱) پرداخت
+ * می‌شود — حتی برای کیس‌های مالِ شعب دیگر که به لابراتوار مرکزی وصل‌اند. پس صدور/مشاهده‌ی
+ * فاکتور طراحی فقط برای مدیر کل (بدون شعبه) یا مدیرِ شعبه‌ی مرکزی مجاز است.
+ */
+function isCentralDesignPayer(): bool {
+    $user = current_user();
+    if (!$user) return false;
+    if (!in_array($user['role'] ?? '', ['admin', 'branch_admin'], true)) return false;
+    $bid = currentBranchId();
+    return $bid === null || $bid === 1;
+}
+
 /** Whether the current user may access a given branch. */
 function canAccessBranch(int $branchId): bool {
     $user = current_user();
@@ -208,26 +221,48 @@ function branchScope(string $alias, string $column = 'branch_id'): array {
  *   - cases OWNED by their branch (branch_id = theirs)
  *   - cases where their branch is the SOURCE/partner (source_branch_id = theirs) —
  *     i.e. work outsourced to them or from them (two-financial-views shared case).
+ *   - cases side-outsourced TO a lab that belongs to their branch (outsourced_lab_id)
+ *     and cases fully outsourced to a lab of their branch (lab_id) — even when
+ *     source_branch_id was not filled in.
  *   - cases of doctors GRANTED to them via branch_doctor_access.
+ *   - the whole case family: if a case is visible, its parent and children are
+ *     visible too (so a side-outsourced sub-case and its main case are both seen).
  * Root/global admins see everything.
  * Returns ['sql' => '...', 'params' => [...], 'scoped' => bool].
  */
-function branchCaseScope(string $alias = 'c'): array {
-    $bid = currentBranchId();
+function branchCaseScope(string $alias = 'c', ?int $branchId = null): array {
+    $bid = $branchId !== null ? (int) $branchId : currentBranchId();
     if ($bid === null) {
         return ['sql' => '1=1', 'params' => [], 'scoped' => false];
     }
     $granted = accessibleDoctorIds();
-    // Whole expression is wrapped in parentheses so that combining it with other
-    // AND conditions elsewhere in the query keeps correct operator precedence.
-    $sql = "({$alias}.branch_id = ? OR {$alias}.source_branch_id = ?";
-    $params = [(int) $bid, (int) $bid];
-    if (!empty($granted)) {
-        $ph = implode(',', array_fill(0, count($granted), '?'));
-        $sql .= " OR {$alias}.doctor_id IN ({$ph})";
-        $params = array_merge($params, $granted);
-    }
-    $sql .= ")";
+
+    // Base visibility (expressed for an arbitrary alias).
+    $base = function ($a) use ($bid, $granted) {
+        $s = "({$a}.branch_id = ? OR {$a}.source_branch_id = ?"
+            . " OR {$a}.outsourced_lab_id IN (SELECT id FROM users WHERE branch_id = ?)"
+            . " OR {$a}.lab_id IN (SELECT id FROM users WHERE branch_id = ?)";
+        $p = [(int) $bid, (int) $bid, (int) $bid, (int) $bid];
+        if (!empty($granted)) {
+            $ph = implode(',', array_fill(0, count($granted), '?'));
+            $s .= " OR {$a}.doctor_id IN ({$ph})";
+            $p = array_merge($p, $granted);
+        }
+        $s .= ")";
+        return [$s, $p];
+    };
+
+    [$baseSql, $params] = $base($alias);
+
+    // Expand to the whole case family (parents of visible children + children
+    // of visible parents). Subqueries scan the cases table with alias 'sub'.
+    [$subSql, $subParams] = $base('sub');
+    $sql = "({$baseSql}"
+        . " OR {$alias}.parent_id IN (SELECT id FROM cases AS sub WHERE {$subSql})"
+        . " OR {$alias}.id IN (SELECT parent_id FROM cases AS sub WHERE {$subSql} AND sub.parent_id IS NOT NULL)"
+        . ")";
+    $params = array_merge($params, $subParams, $subParams);
+
     return ['sql' => $sql, 'params' => $params, 'scoped' => true];
 }
 
@@ -361,6 +396,155 @@ function setBranchServiceCustomPrice(int $serviceId, ?float $price): void {
     } else {
         $ins = db()->prepare('INSERT INTO branch_service_prices (branch_id, service_id, custom_price, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())');
         $ins->execute([$bid, $serviceId, $price]);
+    }
+}
+
+// =====================================================
+// Unified price-link → legacy tables sync (dual-write)
+// =====================================================
+// The unified price map (price_links) is the single place to manage rates. We
+// keep the legacy billing tables in sync so invoice/cost logic stays untouched.
+
+/** Upsert a doctor_price_overrides row (target = doctor/clinic/designer/lab user). */
+function upsertDoctorPriceOverrideLegacy(int $targetId, ?int $serviceId, string $priceType, float $price, int $bid): void {
+    $existing = db()->prepare('SELECT id FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND ((? IS NULL AND service_id IS NULL) OR service_id = ?)');
+    $existing->execute([$targetId, $priceType, $serviceId, $serviceId]);
+    $id = $existing->fetchColumn();
+    if ($id) {
+        db()->prepare('UPDATE doctor_price_overrides SET custom_price = ?, service_id = ?, branch_id = ?, updated_at = NOW() WHERE id = ?')->execute([$price, $serviceId, $bid, $id]);
+    } else {
+        db()->prepare('INSERT INTO doctor_price_overrides (doctor_id, service_id, price_type, custom_price, branch_id, created_at, updated_at) VALUES (?,?,?,?,?,NOW(),NOW())')->execute([$targetId, $serviceId, $priceType, $price, $bid]);
+    }
+}
+
+/** Delete a doctor_price_overrides row for a target+service (price_type service|design_fee). */
+function deleteDoctorPriceOverrideByTarget(int $targetId, ?int $serviceId, string $priceType): void {
+    if ($serviceId !== null) {
+        $stmt = db()->prepare('DELETE FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id = ?');
+        $stmt->execute([$targetId, $priceType, $serviceId]);
+    } else {
+        $stmt = db()->prepare('DELETE FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id IS NULL');
+        $stmt->execute([$targetId, $priceType]);
+    }
+}
+
+/** Upsert an outsource_rates row (what a lab charges us). */
+function upsertOutsourceRateLegacy(int $labId, ?int $serviceId, float $rate, ?int $branchId, int $bid): void {
+    if ($serviceId === null) return;
+    $target = $branchId !== null ? $branchId : $bid;
+    $existing = db()->prepare('SELECT id, branch_id FROM outsource_rates WHERE lab_id = ? AND service_id = ? AND (branch_id = ? OR branch_id IS NULL) ORDER BY (branch_id = ?) DESC LIMIT 1');
+    $existing->execute([$labId, $serviceId, $target, $target]);
+    $row = $existing->fetch();
+    if ($row && ($branchId === null || (int) $row['branch_id'] === $target)) {
+        db()->prepare('UPDATE outsource_rates SET rate = ?, updated_at = NOW() WHERE id = ?')->execute([$rate, (int) $row['id']]);
+    } else {
+        db()->prepare('INSERT INTO outsource_rates (lab_id, service_id, rate, branch_id, created_at, updated_at) VALUES (?,?,?,?,NOW(),NOW())')->execute([$labId, $serviceId, $rate, $branchId]);
+    }
+}
+
+/** Delete outsource_rates rows for a lab+service. */
+function deleteOutsourceRateByLabService(int $labId, ?int $serviceId): void {
+    if ($serviceId === null) return;
+    db()->prepare('DELETE FROM outsource_rates WHERE lab_id = ? AND service_id = ?')->execute([$labId, $serviceId]);
+}
+
+/** Upsert a lab_price_overrides row (legacy lab price). */
+function upsertLabPriceOverrideLegacy(int $labId, ?int $serviceId, float $price): void {
+    if ($serviceId === null) return;
+    $existing = db()->prepare('SELECT id FROM lab_price_overrides WHERE lab_id = ? AND service_id = ?');
+    $existing->execute([$labId, $serviceId]);
+    $id = $existing->fetchColumn();
+    if ($id) {
+        db()->prepare('UPDATE lab_price_overrides SET custom_price = ?, updated_at = NOW() WHERE id = ?')->execute([$price, $id]);
+    } else {
+        db()->prepare('INSERT INTO lab_price_overrides (lab_id, service_id, custom_price, branch_id, created_at, updated_at) VALUES (?,?,?,?,NOW(),NOW())')->execute([$labId, $serviceId, $price, currentBranchId() ?? 1]);
+    }
+}
+
+/** Delete lab_price_overrides rows for a lab+service. */
+function deleteLabPriceOverrideByLabService(int $labId, ?int $serviceId): void {
+    if ($serviceId === null) return;
+    db()->prepare('DELETE FROM lab_price_overrides WHERE lab_id = ? AND service_id = ?')->execute([$labId, $serviceId]);
+}
+
+/** Set (or clear) an arbitrary branch's default price for a service (branch_service_prices). */
+function setBranchServiceCustomPriceFor(int $branchId, int $serviceId, ?float $price): void {
+    $existing = db()->prepare('SELECT id FROM branch_service_prices WHERE branch_id = ? AND service_id = ?');
+    $existing->execute([$branchId, $serviceId]);
+    $id = $existing->fetchColumn();
+    if ($price === null || $price <= 0) {
+        if ($id) db()->prepare('DELETE FROM branch_service_prices WHERE id = ?')->execute([$id]);
+        return;
+    }
+    if ($id) {
+        db()->prepare('UPDATE branch_service_prices SET custom_price = ?, updated_at = NOW() WHERE id = ?')->execute([$price, $id]);
+    } else {
+        db()->prepare('INSERT INTO branch_service_prices (branch_id, service_id, custom_price, created_at, updated_at) VALUES (?,?,?,NOW(),NOW())')->execute([$branchId, $serviceId, $price]);
+    }
+}
+
+/**
+ * Mirror a price_links row into the legacy billing table it represents.
+ * Called on insert/update of a unified price-link so existing billing stays intact.
+ */
+function syncLegacyFromPriceLink(array $l): void {
+    $kind = $l['price_type'] ?? '';
+    $serviceId = isset($l['service_id']) && $l['service_id'] !== '' && $l['service_id'] !== null ? (int) $l['service_id'] : null;
+    $price = (float) $l['price'];
+    $branchId = isset($l['branch_id']) && $l['branch_id'] !== '' && $l['branch_id'] !== null ? (int) $l['branch_id'] : null;
+    $bid = currentBranchId() ?? 1;
+
+    if ($kind === 'design_fee' && in_array($l['provider_type'] ?? '', ['doctor', 'designer'], true) && !empty($l['provider_id'])) {
+        upsertDoctorPriceOverrideLegacy((int) $l['provider_id'], $serviceId, 'design_fee', $price, $bid);
+    }
+    if ($kind === 'branch_default' && ($l['provider_type'] ?? '') === 'branch' && !empty($l['provider_id']) && $serviceId) {
+        setBranchServiceCustomPriceFor((int) $l['provider_id'], $serviceId, $price);
+    }
+    // ردیف‌های جهت‌دار «اختصاصی» (نوع قدیمی «outsource» هم برای سازگاری): جهت از روی طرفین
+    // مشخص است — ارائه‌دهنده = انجام‌دهنده کار، دریافت‌کننده = پرداخت‌کننده.
+    if (in_array($kind, ['outsource', 'specific'], true)) {
+        $pType = $l['provider_type'] ?? '';
+        $rType = $l['receiver_type'] ?? '';
+        if ($pType === 'lab' && !empty($l['provider_id']) && $rType === 'branch') {
+            // یک شعبه به این لابراتوار می‌پردازد → همگام با جدول نرخ برون‌سپاری قدیمی
+            upsertOutsourceRateLegacy((int) $l['provider_id'], $serviceId, $price, (int) $l['receiver_id'], $bid);
+            upsertLabPriceOverrideLegacy((int) $l['provider_id'], $serviceId, $price);
+        }
+        if ($rType === 'doctor' && !empty($l['receiver_id'])) {
+            // از این پزشک می‌گیریم → قیمت اختصاصی پزشک
+            upsertDoctorPriceOverrideLegacy((int) $l['receiver_id'], $serviceId, 'service', $price, $bid);
+        }
+        if ($rType === 'lab' && !empty($l['receiver_id'])) {
+            // این لابراتوار به ما می‌پردازد → قیمت اختصاصیِ همان لابراتوار
+            upsertLabPriceOverrideLegacy((int) $l['receiver_id'], $serviceId, $price);
+        }
+    }
+}
+
+/** Remove the legacy rows mirrored by a price_links row (called on delete). */
+function unsyncLegacyFromPriceLink(array $l): void {
+    $kind = $l['price_type'] ?? '';
+    $serviceId = isset($l['service_id']) && $l['service_id'] !== '' && $l['service_id'] !== null ? (int) $l['service_id'] : null;
+    if ($kind === 'design_fee' && in_array($l['provider_type'] ?? '', ['doctor', 'designer'], true) && !empty($l['provider_id'])) {
+        deleteDoctorPriceOverrideByTarget((int) $l['provider_id'], $serviceId, 'design_fee');
+    }
+    if ($kind === 'branch_default' && ($l['provider_type'] ?? '') === 'branch' && !empty($l['provider_id']) && $serviceId) {
+        setBranchServiceCustomPriceFor((int) $l['provider_id'], $serviceId, null);
+    }
+    // جهت‌دار «اختصاصی» / قدیمی «outsource»
+    if (in_array($kind, ['outsource', 'specific'], true)) {
+        $pType = $l['provider_type'] ?? '';
+        $rType = $l['receiver_type'] ?? '';
+        if ($pType === 'lab' && !empty($l['provider_id']) && $rType === 'branch') {
+            deleteOutsourceRateByLabService((int) $l['provider_id'], $serviceId);
+            deleteLabPriceOverrideByLabService((int) $l['provider_id'], $serviceId);
+        }
+        if ($rType === 'doctor' && !empty($l['receiver_id'])) {
+            deleteDoctorPriceOverrideByTarget((int) $l['receiver_id'], $serviceId, 'service');
+        }
+        if ($rType === 'lab' && !empty($l['receiver_id'])) {
+            deleteLabPriceOverrideByLabService((int) $l['receiver_id'], $serviceId);
+        }
     }
 }
 
@@ -702,6 +886,69 @@ function getPaymentsForDoctor($doctorId) {
     return $stmt->fetchAll();
 }
 
+// ----- "Own" invoice/payment helpers for external parties (designer / lab) -----
+// These let a designer / lab see ONLY their own invoices and the payments made
+// to them, without any edit/delete capability (edit stays admin-only).
+
+/** Designer invoices visible to a designer (their own). */
+function getInvoicesForDesigner(int $designerId): array {
+    $stmt = db()->prepare('SELECT i.*, u.full_name AS designer_name
+        FROM designer_invoices i
+        LEFT JOIN users u ON i.designer_id = u.id
+        WHERE i.designer_id = ?
+        ORDER BY i.invoice_date DESC, i.id DESC');
+    $stmt->execute([$designerId]);
+    return $stmt->fetchAll();
+}
+
+/** A designer may only fetch one of their own invoices. */
+function getDesignerInvoiceForUser(int $id, int $designerId): ?array {
+    $stmt = db()->prepare('SELECT i.*, u.full_name AS designer_name FROM designer_invoices i LEFT JOIN users u ON i.designer_id = u.id WHERE i.id = ? AND i.designer_id = ?');
+    $stmt->execute([$id, $designerId]);
+    return $stmt->fetch() ?: null;
+}
+
+/** Outsource invoices visible to a lab (their own). */
+function getInvoicesForLab(int $labId): array {
+    $stmt = db()->prepare('SELECT i.*, u.full_name AS lab_name
+        FROM outsource_invoices i
+        LEFT JOIN users u ON i.lab_id = u.id
+        WHERE i.lab_id = ?
+        ORDER BY i.invoice_date DESC, i.id DESC');
+    $stmt->execute([$labId]);
+    return $stmt->fetchAll();
+}
+
+/** A lab may only fetch one of their own outsource invoices. */
+function getOutsourceInvoiceForUser(int $id, int $labId): ?array {
+    $stmt = db()->prepare('SELECT i.*, u.full_name AS lab_name FROM outsource_invoices i LEFT JOIN users u ON i.lab_id = u.id WHERE i.id = ? AND i.lab_id = ?');
+    $stmt->execute([$id, $labId]);
+    return $stmt->fetch() ?: null;
+}
+
+/** Payments we made to a specific party (designer or lab) — for their "پرداخت‌های من". */
+function getExpensePaymentsForParty(string $expenseType, int $userId): array {
+    if ($expenseType === 'designer') {
+        $stmt = db()->prepare('SELECT p.*, di.designer_name AS party_name, di.invoice_number AS invoice_number
+            FROM expense_payments p
+            JOIN (SELECT di.id, di.invoice_number, di.designer_id, u.full_name AS designer_name
+                  FROM designer_invoices di LEFT JOIN users u ON di.designer_id = u.id) di
+              ON p.invoice_id = di.id AND p.expense_type = "designer"
+            WHERE di.designer_id = ?
+            ORDER BY p.payment_date DESC, p.id DESC');
+    } else {
+        $stmt = db()->prepare('SELECT p.*, oi.lab_name AS party_name, oi.invoice_number AS invoice_number
+            FROM expense_payments p
+            JOIN (SELECT oi.id, oi.invoice_number, oi.lab_id, u.full_name AS lab_name
+                  FROM outsource_invoices oi LEFT JOIN users u ON oi.lab_id = u.id) oi
+              ON p.invoice_id = oi.id AND p.expense_type = "outsource"
+            WHERE oi.lab_id = ?
+            ORDER BY p.payment_date DESC, p.id DESC');
+    }
+    $stmt->execute([$userId]);
+    return $stmt->fetchAll();
+}
+
 // ----- Invoice and payment functions (global) -----
 function getAllInvoices() {
     $stmt = db()->query('SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
@@ -847,6 +1094,7 @@ function deleteInvoice($id) {
 // ----- Payment functions -----
 function getAllPayments() {
     $bid = currentBranchId();
+    $params = [];
     $filter = '';
     if ($bid !== null) {
         $granted = accessibleDoctorIds();
@@ -854,10 +1102,11 @@ function getAllPayments() {
         if (!empty($granted)) {
             $ph = implode(',', array_fill(0, count($granted), '?'));
             $filter .= " OR p.doctor_id IN ({$ph})";
+            $params = array_merge($params, array_map('intval', $granted));
         }
         $filter .= ')';
     }
-    $stmt = db()->query('SELECT p.*, b.bank_name, b.account_owner_name,
+    $stmt = db()->prepare('SELECT p.*, b.bank_name, b.account_owner_name,
             COALESCE(u.full_name, p.doctor_name) AS doctor_name,
             GROUP_CONCAT(DISTINCT i.invoice_number SEPARATOR ", ") AS linked_invoices
         FROM doctor_payments p
@@ -867,6 +1116,7 @@ function getAllPayments() {
         LEFT JOIN doctor_invoices i ON i.id = pi.invoice_id' . $filter . "
         GROUP BY p.id
         ORDER BY p.payment_date DESC, p.id DESC");
+    $stmt->execute($params);
     return $stmt->fetchAll();
 }
 
@@ -1118,6 +1368,26 @@ function getDesignerDesignFeeOverride($designer_id, $service_id = null) {
 
 /** Per-unit design fee (تومان) for a designer and optionally a specific service. */
 function getApplicableDesignFee($designer_id, $service_id = null) {
+    // Phase 3: price_links (design_fee) is authoritative first when enabled.
+    if (defined('USE_PRICE_LINKS') && USE_PRICE_LINKS) {
+        $did = (int) $designer_id;
+        $svc = $service_id !== null ? (int) $service_id : 0;
+        $pl = function (string $sql, array $params) {
+            $stmt = db()->prepare($sql);
+            $stmt->execute($params);
+            $v = $stmt->fetchColumn();
+            return ($v !== false && $v !== null) ? (float) $v : null;
+        };
+        // 1) designer + specific service
+        if ($svc > 0) {
+            $v = $pl("SELECT price FROM price_links WHERE active = 1 AND price_type = 'design_fee' AND provider_type IN ('designer','doctor') AND provider_id = ? AND service_id = ? ORDER BY id DESC LIMIT 1", [$did, $svc]);
+            if ($v !== null) return $v;
+        }
+        // 2) fallback to general per-designer design fee
+        $v = $pl("SELECT price FROM price_links WHERE active = 1 AND price_type = 'design_fee' AND provider_type IN ('designer','doctor') AND provider_id = ? AND service_id IS NULL ORDER BY id DESC LIMIT 1", [$did]);
+        if ($v !== null) return $v;
+    }
+
     $override = getDesignerDesignFeeOverride((int) $designer_id, $service_id);
     return $override ? (float) $override['custom_price'] : null;
 }
@@ -1129,8 +1399,15 @@ function getApplicableDesignFee($designer_id, $service_id = null) {
 /**
  * Uninvoiced cases done by a designer within a date range.
  * Each case's per-unit design fee is resolved from the designer's override.
+ * When $payerBranch is given, only cases whose DESIGN is paid by that branch are
+ * returned (پرداخت‌کننده = شعبه‌ی لابراتوار انجام‌دهنده، وگرنه صاحب کیس). این یعنی یک
+ * شعبه فقط می‌تواند طراحیِ کیس‌هایی را فاکتور کند که خودش باید بپردازد؛ کیس‌هایِ لابراتوار
+ * مرکزی (که مرکزی می‌پردازد) در فهرستِ شعبه‌های دیگر نمی‌آیند.
  */
-function getUninvoicedCasesForDesigner(int $designerId, string $startDate, string $endDate): array {
+function getUninvoicedCasesForDesigner(int $designerId, string $startDate, string $endDate, ?int $payerBranch = null): array {
+    $payerCond = $payerBranch !== null
+        ? " AND (COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id) = ?)"
+        : '';
     $stmt = db()->prepare('
         SELECT c.*, p.title AS service_title, u.full_name AS doctor_name
         FROM cases c
@@ -1138,10 +1415,12 @@ function getUninvoicedCasesForDesigner(int $designerId, string $startDate, strin
         LEFT JOIN users u ON c.doctor_id = u.id
         WHERE c.designer_id = ?
           AND c.designer_invoice_id IS NULL
-          AND c.received_date BETWEEN ? AND ?
+          AND c.received_date BETWEEN ? AND ?' . $payerCond . '
         ORDER BY c.received_date ASC, c.id ASC
     ');
-    $stmt->execute([$designerId, $startDate, $endDate]);
+    $params = [$designerId, $startDate, $endDate];
+    if ($payerBranch !== null) $params[] = (int) $payerBranch;
+    $stmt->execute($params);
     $cases = $stmt->fetchAll();
     foreach ($cases as &$c) {
         $c['unit_design_fee'] = getApplicableDesignFee($designerId, (int) ($c['service_id'] ?? 0));
@@ -1231,6 +1510,63 @@ function getAllDesignerInvoices(): array {
     $filter = $bid === null ? '' : ' WHERE i.branch_id = ' . (int) $bid;
     $stmt = db()->query('SELECT i.*, u.full_name AS designer_name FROM designer_invoices i LEFT JOIN users u ON i.designer_id = u.id' . $filter . ' ORDER BY i.invoice_date DESC, i.id DESC');
     return $stmt->fetchAll();
+}
+
+/** Delete a designer invoice: release its cases and remove its items/payments. */
+function deleteDesignerInvoice(int $id): void {
+    $inv = getDesignerInvoice($id);
+    if (!$inv) return;
+    // release cases that were billed on this invoice so they can be re-invoiced
+    db()->prepare('UPDATE cases SET designer_invoice_id = NULL WHERE designer_invoice_id = ?')->execute([$id]);
+    db()->prepare('DELETE FROM designer_invoice_items WHERE invoice_id = ?')->execute([$id]);
+    // remove expense payments recorded against this designer invoice
+    db()->prepare("DELETE FROM expense_payments WHERE expense_type = 'designer' AND invoice_id = ?")->execute([$id]);
+    db()->prepare('DELETE FROM designer_invoices WHERE id = ?')->execute([$id]);
+}
+
+/**
+ * Edit a designer invoice header + line items.
+ * $rows: each = [item_id, qty, unit]; items not present in the list are removed
+ * and their case is released (designer_invoice_id → NULL). Totals are recomputed.
+ */
+function saveDesignerInvoiceEdit(int $invoiceId, string $invoiceDate, ?string $periodLabel, ?string $notes, array $rows): void {
+    $now = date('Y-m-d H:i:s');
+    $invoice = getDesignerInvoice($invoiceId);
+    if (!$invoice) return;
+
+    $keepIds = [];
+    $total = 0.0;
+    $upd = db()->prepare('UPDATE designer_invoice_items SET quantity = ?, unit_design_fee = ?, total_amount = ? WHERE id = ? AND invoice_id = ?');
+    foreach ($rows as $r) {
+        $itemId = (int) ($r['item_id'] ?? 0);
+        if ($itemId <= 0) continue;
+        $qty = max(1, (int) ($r['qty'] ?? 1));
+        $unit = max(0, (float) ($r['unit'] ?? 0));
+        $amt = round($qty * $unit);
+        $total += $amt;
+        $upd->execute([$qty, $unit, $amt, $itemId, $invoiceId]);
+        $keepIds[] = $itemId;
+    }
+
+    // drop rows that were unchecked (removed) and release their case
+    $existing = db()->prepare('SELECT id, case_id FROM designer_invoice_items WHERE invoice_id = ?');
+    $existing->execute([$invoiceId]);
+    $removeIds = [];
+    $rel = db()->prepare('UPDATE cases SET designer_invoice_id = NULL WHERE id = ? AND designer_invoice_id = ?');
+    foreach ($existing->fetchAll() as $it) {
+        if (in_array((int) $it['id'], $keepIds, true)) continue;
+        $removeIds[] = (int) $it['id'];
+        if (!empty($it['case_id'])) {
+            $rel->execute([(int) $it['case_id'], $invoiceId]);
+        }
+    }
+    if (!empty($removeIds)) {
+        $ph = implode(',', array_fill(0, count($removeIds), '?'));
+        db()->prepare("DELETE FROM designer_invoice_items WHERE id IN ($ph)")->execute($removeIds);
+    }
+
+    $updInv = db()->prepare('UPDATE designer_invoices SET total_amount = ?, invoice_date = ?, period_label = ?, notes = ? WHERE id = ?');
+    $updInv->execute([round($total), $invoiceDate, ($periodLabel !== '' ? $periodLabel : null), ($notes !== '' ? $notes : null), $invoiceId]);
 }
 
 // =====================================================
@@ -1328,15 +1664,63 @@ function createClinicInvoice(int $clinicId, array $cases, string $invoiceDate, ?
 // Outsourcing (برون‌سپاری) Helpers – per-lab per-service rates + invoices
 // =====================================================
 
-/** Get the outsourcing rate for a lab+service (what we pay the lab). */
+/**
+ * Phase 3: SQL subquery fragment that resolves the payable outsource price from
+ * price_links for a row, using its provider lab column + service column.
+ * Direction-based: the RECEIVER of the link must be the paying branch (payerCol,
+ * usually the case's owning branch c.branch_id), so a link like «شعبه→لابراتوار»
+ * (which is income to us) never matches an outsource the case owner pays.
+ * - direct lab-provider link (provider_type='lab', provider_id=labCol)
+ * - branch-provider link (provider_type='branch', provider_id=the lab's branch)
+ * When USE_PRICE_LINKS is off, returns NULL (caller falls back to legacy).
+ */
+function priceLinkOutsourceSqlExpr(string $labCol, string $svcCol, string $payerCol = 'c.branch_id'): ?string {
+    if (!defined('USE_PRICE_LINKS') || !USE_PRICE_LINKS) return null;
+    $payerArm = "pl.receiver_type='branch' AND pl.receiver_id = {$payerCol}";
+    return "(SELECT pl.price FROM price_links pl WHERE pl.active=1 AND pl.price_type IN ('outsource','specific') AND pl.service_id={$svcCol} AND ((pl.provider_type='lab' AND pl.provider_id={$labCol} AND {$payerArm}) OR (pl.provider_type='branch' AND pl.provider_id=(SELECT u.branch_id FROM users u WHERE u.id={$labCol}) AND {$payerArm})) ORDER BY (pl.provider_type='lab') DESC, pl.id DESC LIMIT 1)";
+}
+
+/**
+ * Get the outsourcing rate for a lab+service (what we pay the lab).
+ * Phase 3: when USE_PRICE_LINKS is on, price_links is authoritative first
+ * (direct lab-provider link, then branch-provider link for the lab's own branch);
+ * falls back to the legacy outsource_rates table.
+ */
 function getOutsourceRate(int $labId, int $serviceId): ?float {
+    if (defined('USE_PRICE_LINKS') && USE_PRICE_LINKS && $serviceId > 0) {
+        // 1) direct lab-provider link: گیرنده باید یک شعبه (پرداخت‌کننده) باشد
+        $stmt = db()->prepare("SELECT price FROM price_links WHERE active = 1 AND price_type IN ('outsource','specific') AND provider_type = 'lab' AND provider_id = ? AND service_id = ? AND receiver_type = 'branch' ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$labId, $serviceId]);
+        $val = $stmt->fetchColumn();
+        if ($val !== false && $val !== null) return (float) $val;
+
+        // 2) branch-provider link: the lab's own branch provides the work;
+        //    receiver must be a branch (the payer). When scoped → the current branch.
+        $pb = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+        $pb->execute([$labId]);
+        $labBranch = $pb->fetchColumn();
+        if ($labBranch !== false && $labBranch !== null) {
+            $bid = currentBranchId();
+            if ($bid !== null) {
+                $stmt = db()->prepare("SELECT price FROM price_links WHERE active = 1 AND price_type IN ('outsource','specific') AND provider_type = 'branch' AND provider_id = ? AND service_id = ? AND receiver_type = 'branch' AND receiver_id = ? ORDER BY id DESC LIMIT 1");
+                $stmt->execute([(int) $labBranch, $serviceId, $bid]);
+            } else {
+                $stmt = db()->prepare("SELECT price FROM price_links WHERE active = 1 AND price_type IN ('outsource','specific') AND provider_type = 'branch' AND provider_id = ? AND service_id = ? AND receiver_type = 'branch' ORDER BY id DESC LIMIT 1");
+                $stmt->execute([(int) $labBranch, $serviceId]);
+            }
+            $val = $stmt->fetchColumn();
+            if ($val !== false && $val !== null) return (float) $val;
+        }
+    }
+
     $bid = currentBranchId();
     if ($bid === null) {
         $stmt = db()->prepare('SELECT rate FROM outsource_rates WHERE lab_id = ? AND service_id = ?');
         $stmt->execute([$labId, $serviceId]);
     } else {
-        $stmt = db()->prepare('SELECT rate FROM outsource_rates WHERE lab_id = ? AND service_id = ? AND (branch_id = ? OR branch_id IS NULL)');
-        $stmt->execute([$labId, $serviceId, $bid]);
+        // Prefer the branch-specific rate, fall back to the shared/global row.
+        $stmt = db()->prepare('SELECT rate FROM outsource_rates WHERE lab_id = ? AND service_id = ? AND (branch_id = ? OR branch_id IS NULL) ORDER BY (branch_id = ?) DESC LIMIT 1');
+        $stmt->execute([$labId, $serviceId, $bid, $bid]);
     }
     $val = $stmt->fetchColumn();
     return ($val !== false && $val !== null) ? (float) $val : null;
@@ -1345,12 +1729,14 @@ function getOutsourceRate(int $labId, int $serviceId): ?float {
 /** Save (insert or update) an outsourcing rate. */
 function saveOutsourceRate(int $labId, int $serviceId, float $rate): void {
     $bid = currentBranchId() ?? 1;
-    $existing = db()->prepare('SELECT id FROM outsource_rates WHERE lab_id = ? AND service_id = ? AND branch_id = ?');
-    $existing->execute([$labId, $serviceId, $bid]);
-    $id = $existing->fetchColumn();
-    if ($id) {
+    // Prefer the exact branch row, otherwise use the shared/global row (branch_id
+    // IS NULL) so we don't create redundant per-branch copies of a shared rate.
+    $existing = db()->prepare('SELECT id, branch_id FROM outsource_rates WHERE lab_id = ? AND service_id = ? AND (branch_id = ? OR branch_id IS NULL) ORDER BY (branch_id = ?) DESC LIMIT 1');
+    $existing->execute([$labId, $serviceId, $bid, $bid]);
+    $row = $existing->fetch();
+    if ($row) {
         $stmt = db()->prepare('UPDATE outsource_rates SET rate = ?, updated_at = NOW() WHERE id = ?');
-        $stmt->execute([$rate, $id]);
+        $stmt->execute([$rate, (int) $row['id']]);
     } else {
         $stmt = db()->prepare('INSERT INTO outsource_rates (lab_id, service_id, rate, branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, NOW(), NOW())');
         $stmt->execute([$labId, $serviceId, $rate, $bid]);
@@ -1679,7 +2065,7 @@ function getInboundReceivableAmount(array $case): float {
  */
 function getUninvoicedInboundPartnerCases(?int $partnerBranchId, string $startDate, string $endDate): array {
     $bid = currentBranchId();
-    if ($bid === null) return []; // only meaningful for a branch
+    if ($bid === null) $bid = 1;   // مدیر کل به‌عنوان شعبه‌ی اصلی/مرکزی صادر می‌کند
     $sql = 'SELECT c.*, p.title AS service_title, os.title AS outsourced_service_title, u.full_name AS doctor_name
         FROM cases c
         LEFT JOIN site_prices p ON c.service_id = p.id
@@ -1863,6 +2249,53 @@ function deleteBranchReceivable(int $id): void {
 }
 
 /**
+ * Edit a branch-receivable invoice header + line items.
+ * $rows: each = [item_id, qty, unit]; items not present in the list are removed
+ * and their case is released (receivable_invoice_id → NULL). Totals are recomputed
+ * and the payment_status is refreshed against recorded receipts.
+ */
+function saveBranchReceivableEdit(int $receivableId, string $invoiceDate, ?string $periodLabel, ?string $notes, array $rows): void {
+    $now = date('Y-m-d H:i:s');
+    $inv = getBranchReceivable($receivableId);
+    if (!$inv) return;
+
+    $keepIds = [];
+    $total = 0.0;
+    $upd = db()->prepare('UPDATE branch_receivable_items SET quantity = ?, unit_rate = ?, total_amount = ? WHERE id = ? AND receivable_id = ?');
+    foreach ($rows as $r) {
+        $itemId = (int) ($r['item_id'] ?? 0);
+        if ($itemId <= 0) continue;
+        $qty = max(1, (int) ($r['qty'] ?? 1));
+        $unit = max(0, (float) ($r['unit'] ?? 0));
+        $amt = round($qty * $unit);
+        $total += $amt;
+        $upd->execute([$qty, $unit, $amt, $itemId, $receivableId]);
+        $keepIds[] = $itemId;
+    }
+
+    // drop rows that were unchecked (removed) and release their case
+    $existing = db()->prepare('SELECT id, case_id FROM branch_receivable_items WHERE receivable_id = ?');
+    $existing->execute([$receivableId]);
+    $removeIds = [];
+    $rel = db()->prepare('UPDATE cases SET receivable_invoice_id = NULL WHERE id = ? AND receivable_invoice_id = ?');
+    foreach ($existing->fetchAll() as $it) {
+        if (in_array((int) $it['id'], $keepIds, true)) continue;
+        $removeIds[] = (int) $it['id'];
+        if (!empty($it['case_id'])) {
+            $rel->execute([(int) $it['case_id'], $receivableId]);
+        }
+    }
+    if (!empty($removeIds)) {
+        $ph = implode(',', array_fill(0, count($removeIds), '?'));
+        db()->prepare("DELETE FROM branch_receivable_items WHERE id IN ($ph)")->execute($removeIds);
+    }
+
+    $updInv = db()->prepare('UPDATE branch_receivables SET total_amount = ?, invoice_date = ?, period_label = ?, notes = ? WHERE id = ?');
+    $updInv->execute([round($total), $invoiceDate, ($periodLabel !== '' ? $periodLabel : null), ($notes !== '' ? $notes : null), $receivableId]);
+    refreshBranchReceivableStatus($receivableId);
+}
+
+/**
  * Get the applicable price for a doctor+service combination.
  * Resolution order:
  *   1) doctor's per-service override (doctor_price_overrides)
@@ -2017,7 +2450,7 @@ function getUninvoicedCasesForDoctor($doctor_id, $startDate, $endDate) {
         LEFT JOIN site_prices p ON c.service_id = p.id
         WHERE c.doctor_id = ?
           AND c.invoice_id IS NULL
-          AND c.case_type IN ("doctor", "lab_out")
+          AND c.case_type IN ("doctor", "lab_out", "lab_in")
           AND c.received_date BETWEEN ? AND ?
         ORDER BY c.received_date ASC
     ');
@@ -2298,6 +2731,14 @@ function getUninvoicedCasesForLab(int $labId, string $startDate, string $endDate
 
 /** Get lab price override for a service, or fallback to default price */
 function getLabApplicablePrice(int $labId, int $serviceId): float {
+    // Phase 3: specific lab link (receiver = lab) is authoritative first.
+    if (defined('USE_PRICE_LINKS') && USE_PRICE_LINKS && $serviceId > 0) {
+        $stmt = db()->prepare("SELECT price FROM price_links WHERE active = 1 AND price_type = 'specific' AND receiver_type = 'lab' AND receiver_id = ? AND service_id = ? ORDER BY id DESC LIMIT 1");
+        $stmt->execute([$labId, $serviceId]);
+        $val = $stmt->fetchColumn();
+        if ($val !== false && $val !== null) return (float) $val;
+    }
+
     // 1) Unified override table (lab stored as target with price_type = service)
     $override = db()->prepare('SELECT custom_price FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = "service" AND service_id = ?');
     $override->execute([$labId, $serviceId]);

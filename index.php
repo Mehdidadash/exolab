@@ -175,7 +175,7 @@ $contact = require __DIR__ . '/contact.php';
                 <div class="lightbox-gallery" id="works-gallery">
                     <?php foreach ($works as $work): ?>
                         <div class="lightbox-item">
-                            <img src="assets/uploads/<?= htmlspecialchars($work['image_filename']) ?>" alt="<?= htmlspecialchars($work['title']) ?>">
+                            <img src="media.php?f=<?= rawurlencode($work['image_filename']) ?>" alt="<?= htmlspecialchars($work['title']) ?>">
                         </div>
                     <?php endforeach; ?>
                 </div>

@@ -33,8 +33,10 @@ try {
         echo json_encode(['success'=>false,'error'=>'notfound']);
         exit;
     }
-    $path = __DIR__ . '/../assets/uploads/cases/' . $row['case_id'] . '/' . $row['filename'];
+    $path = resolve_upload_path('cases/' . $row['case_id'] . '/' . $row['filename']);
     if (is_file($path)) @unlink($path);
+    $legacy = legacy_uploads_path('cases/' . $row['case_id'] . '/' . $row['filename']);
+    if ($legacy !== $path && is_file($legacy)) @unlink($legacy);
     $del = db()->prepare('DELETE FROM case_files WHERE id = ?');
     $del->execute([$id]);
     echo json_encode(['success'=>true]);

@@ -36,7 +36,7 @@ panel_layout_start($editing ? 'ویرایش نمونه کار' : 'افزودن �
                 <small style="display: block; margin-top: 8px; color: #525252;">
                     تصویر فعلی: <strong><?= htmlspecialchars($work['image_filename']) ?></strong>
                 </small>
-                <img src="../assets/uploads/<?= htmlspecialchars($work['image_filename']) ?>" style="max-width: 150px; margin-top: 8px; border-radius: 8px;">
+                <img src="../media.php?f=<?= rawurlencode($work['image_filename']) ?>" style="max-width: 150px; margin-top: 8px; border-radius: 8px;">
             <?php endif; ?>
         </div>
         <div class="form-group">
