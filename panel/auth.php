@@ -363,7 +363,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
             <nav class="site-nav" id="siteNav">
                 <?php
                 $navCanCases  = has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_assigned_cases') || has_permission('view_clinic_cases') || has_role('designer');
-                $navCanUpload = $user && in_array($user['role'] ?? '', ['doctor', 'designer', 'admin', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
+                $navCanUpload = $user && in_array($user['role'] ?? '', ['doctor', 'designer', 'admin', 'branch_admin', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
                 $navCanInv    = has_permission('view_invoices') || has_permission('view_clinic_invoices') || has_permission('view_own_invoices') || is_admin();
                 $navCanPay    = has_permission('view_own_payments') || has_permission('view_clinic_payments') || has_permission('view_payments') || is_admin();
                 $navIsAdmin   = is_admin();

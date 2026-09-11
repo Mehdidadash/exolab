@@ -37,12 +37,40 @@ $uploadsStmt = db()->prepare('SELECT u.*, c.patient_name, c.id AS case_id FROM u
 $uploadsStmt->execute([$user['id']]);
 $uploads = $uploadsStmt->fetchAll();
 
-// Designers and admins can also access the shared files uploaded by others
-$canViewAllUploads = has_role('admin') || $user['role'] === 'designer';
+// Designers and admins (اصلی و مدیران شعب) can also access the shared files uploaded by others
+$canViewAllUploads = is_admin() || $user['role'] === 'designer';
 $allUploads = [];
 if ($canViewAllUploads) {
-    $allUploads = db()->query('SELECT u.*, c.patient_name, c.id AS case_id, uu.full_name AS uploader_name FROM user_uploads u LEFT JOIN cases c ON u.case_id = c.id LEFT JOIN users uu ON u.user_id = uu.id ORDER BY u.created_at DESC')->fetchAll();
+    $allUploads = db()->query('SELECT u.*, uu.full_name AS uploader_name FROM user_uploads u LEFT JOIN users uu ON uu.id = u.user_id ORDER BY u.created_at DESC')->fetchAll();
 }
+
+// Cases that an admin may attach a library file to (branch scoping: مدیر شعبه → شعبهٔ خودش،
+// مدیر کل = شعبهٔ مرکزی — همراستا با بقیهٔ صفحات).
+$attachCaseOptions = [];
+if (is_admin()) {
+    $sb = currentBranchId();
+    if ($sb === null) $sb = 1;
+    $sc = branchCaseScope('c', $sb);
+    $st = db()->prepare('SELECT c.id, c.patient_name, u.full_name AS doctor_name FROM cases c LEFT JOIN users u ON c.doctor_id = u.id WHERE ' . $sc['sql'] . ' ORDER BY c.id DESC');
+    $st->execute($sc['params']);
+    $attachCaseOptions = $st->fetchAll();
+}
+
+// Render helpers for the tables below.
+// Which cases the CURRENT user may attach library files to (admins → شعبهٔ خود، بقیه → کیس‌های خودشان)
+$upAttachList = is_admin() ? $attachCaseOptions : $cases;
+$upLinkLabels = function (int $uploadId): array {
+    $ids = userUploadLinkedCaseIds($uploadId);
+    if (!$ids) return [];
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = db()->prepare('SELECT id, patient_name FROM cases WHERE id IN (' . $ph . ') ORDER BY id DESC');
+    $st->execute($ids);
+    $out = [];
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $out[(int) $r['id']] = '#' . $r['id'] . ' ' . htmlspecialchars($r['patient_name'] ?: '');
+    }
+    return $out;
+};
 
 panel_layout_start('آپلود فایل');
 ?>
@@ -88,7 +116,7 @@ panel_layout_start('آپلود فایل');
             <thead>
             <tr>
                 <th>فایل</th>
-                <th>کیس</th>
+                <th>کیس‌های متصل</th>
                 <th>توضیحات</th>
                 <th>حجم</th>
                 <th>تاریخ</th>
@@ -96,20 +124,48 @@ panel_layout_start('آپلود فایل');
             </tr>
             </thead>
             <tbody>
-            <?php foreach ($uploads as $u): ?>
+            <?php foreach ($uploads as $u):
+                $myLinkCases = $upLinkLabels((int) $u['id']);
+                $myCanManage = is_admin() || (int) $u['user_id'] === (int) $user['id'];
+                ?>
                 <tr>
                     <td><?= htmlspecialchars($u['original_name']) ?></td>
-                    <td><?= !empty($u['case_id']) ? ('#' . $u['case_id'] . ' - ' . htmlspecialchars($u['patient_name'] ?: '')) : '—' ?></td>
+                    <td>
+                        <?php foreach ($myLinkCases as $cid => $clabel): ?>
+                            <span style="display:inline-flex; align-items:center; gap:4px; background:#e0f2fe; color:#0369a1; border-radius:6px; padding:2px 6px; margin:1px; font-size:0.85rem;">
+                                <a href="view_case.php?id=<?= $cid ?>" style="text-decoration:none; color:#0369a1;"><?= $clabel ?></a>
+                                <?php if ($myCanManage): ?><a href="#" class="js-unlink-upl" data-upload="<?= (int) $u['id'] ?>" data-case="<?= $cid ?>" style="text-decoration:none; color:#b91c1c; font-weight:bold;" title="حذف اتصال از این کیس">✕</a><?php endif; ?>
+                            </span>
+                        <?php endforeach; ?>
+                        <?php if (!$myLinkCases): ?>—<?php endif; ?>
+                        <?php if ($myCanManage && !empty($upAttachList)):
+                            $myAvail = array_values(array_filter($upAttachList, fn($c) => !isset($myLinkCases[(int) $c['id']]))); ?>
+                            <?php if ($myAvail): ?>
+                                <div style="margin-top:5px; display:flex; gap:4px; align-items:center;">
+                                    <select class="js-upl-case-sel" data-upload="<?= (int) $u['id'] ?>" style="padding:4px 6px; font-size:0.85rem; max-width:210px;">
+                                        <option value="">اتصال به کیس…</option>
+                                        <?php foreach ($myAvail as $c): ?>
+                                            <option value="<?= (int) $c['id'] ?>">#<?= (int) $c['id'] ?> - <?= htmlspecialchars($c['patient_name'] ?: '') ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                    <button type="button" class="btn js-upl-link-btn" data-upload="<?= (int) $u['id'] ?>" style="padding:3px 8px; font-size:0.85rem; background:#0F172A; color:#fff;">اتصال</button>
+                                </div>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </td>
                     <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
                     <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
                     <td><?= toJalaliDateFormatted($u['created_at']) ?></td>
-                    <td class="actions">
+                    <td class="actions" style="white-space:nowrap;">
+                        <a class="btn" href="serve_user_upload.php?id=<?= (int) $u['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:4px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
                         <a class="btn" href="download_user_upload.php?id=<?= (int) $u['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">دانلود</a>
+                        <?php if ((int) $u['user_id'] === (int) $user['id']): ?>
                         <form method="post" action="delete_user_upload.php" style="display:inline;">
                             <?= csrf_field() ?>
                             <input type="hidden" name="id" value="<?= (int) $u['id'] ?>">
                             <button class="btn" style="background:#fee2e2; color:#991b1b; padding:4px 10px;">حذف</button>
                         </form>
+                        <?php endif; ?>
                     </td>
                 </tr>
             <?php endforeach; ?>
@@ -119,14 +175,14 @@ panel_layout_start('آپلود فایل');
 </div>
 
 <?php if ($canViewAllUploads && !empty($allUploads)): ?>
-<h3 style="margin-top:28px;">همه فایل‌ها (مشترک)</h3>
+<h3 style="margin-top:28px;">همه فایل‌ها (کتابخانهٔ مشترک)</h3>
 <div class="form-card" style="margin-top:12px;">
     <table class="display datatable" style="width:100%">
         <thead>
         <tr>
             <th>فایل</th>
             <th>آپلودکننده</th>
-            <th>کیس</th>
+            <th>کیس‌های متصل</th>
             <th>توضیحات</th>
             <th>حجم</th>
             <th>تاریخ</th>
@@ -134,15 +190,41 @@ panel_layout_start('آپلود فایل');
         </tr>
         </thead>
         <tbody>
-        <?php foreach ($allUploads as $u): ?>
+        <?php foreach ($allUploads as $u):
+            $allLinkCases = $upLinkLabels((int) $u['id']);
+            $allCanManage = is_admin();
+            ?>
             <tr>
                 <td><?= htmlspecialchars($u['original_name']) ?></td>
                 <td><?= htmlspecialchars($u['uploader_name'] ?: '—') ?></td>
-                <td><?= !empty($u['case_id']) ? ('#' . $u['case_id'] . ' - ' . htmlspecialchars($u['patient_name'] ?: '')) : '—' ?></td>
-                <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
+                <td>
+                    <?php foreach ($allLinkCases as $cid => $clabel): ?>
+                        <span style="display:inline-flex; align-items:center; gap:4px; background:#e0f2fe; color:#0369a1; border-radius:6px; padding:2px 6px; margin:1px; font-size:0.85rem;">
+                            <a href="view_case.php?id=<?= $cid ?>" style="text-decoration:none; color:#0369a1;"><?= $clabel ?></a>
+                            <?php if ($allCanManage): ?><a href="#" class="js-unlink-upl" data-upload="<?= (int) $u['id'] ?>" data-case="<?= $cid ?>" style="text-decoration:none; color:#b91c1c; font-weight:bold;" title="حذف اتصال از این کیس">✕</a><?php endif; ?>
+                        </span>
+                    <?php endforeach; ?>
+                    <?php if (!$allLinkCases): ?>—<?php endif; ?>
+                    <?php if ($allCanManage && !empty($upAttachList)):
+                        $allAvail = array_values(array_filter($upAttachList, fn($c) => !isset($allLinkCases[(int) $c['id']]))); ?>
+                        <?php if ($allAvail): ?>
+                            <div style="margin-top:5px; display:flex; gap:4px; align-items:center;">
+                                <select class="js-upl-case-sel" data-upload="<?= (int) $u['id'] ?>" style="padding:4px 6px; font-size:0.85rem; max-width:190px;">
+                                    <option value="">اتصال به کیس…</option>
+                                    <?php foreach ($allAvail as $c): ?>
+                                        <option value="<?= (int) $c['id'] ?>">#<?= (int) $c['id'] ?> - <?= htmlspecialchars($c['patient_name'] ?: '') ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <button type="button" class="btn js-upl-link-btn" data-upload="<?= (int) $u['id'] ?>" style="padding:3px 8px; font-size:0.85rem; background:#0F172A; color:#fff;">اتصال</button>
+                            </div>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </td>
+                <td style="white-space:pre-wrap; max-width:220px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
                 <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
                 <td><?= toJalaliDateFormatted($u['created_at']) ?></td>
-                <td class="actions">
+                <td class="actions" style="white-space:nowrap;">
+                    <a class="btn" href="serve_user_upload.php?id=<?= (int) $u['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:4px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
                     <a class="btn" href="download_user_upload.php?id=<?= (int) $u['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">دانلود</a>
                 </td>
             </tr>
@@ -151,6 +233,38 @@ panel_layout_start('آپلود فایل');
     </table>
 </div>
 <?php endif; ?>
+<script>
+(function(){
+    var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+    function uplPost(url, data, cb){
+        var fd = new FormData();
+        Object.keys(data).forEach(function(k){ fd.append(k, data[k]); });
+        fd.append('_csrf_token', csrf);
+        fetch(url, { method:'POST', headers:{ 'X-CSRF-Token': csrf }, body: fd })
+            .then(function(r){ return r.json().catch(function(){ return {success:false}; }); })
+            .then(function(resp){ cb(resp); })
+            .catch(function(){ cb({success:false}); });
+    }
+    document.addEventListener('click', function(e){
+        var unl = e.target.closest && e.target.closest('.js-unlink-upl');
+        if (unl) {
+            e.preventDefault();
+            var uploadId = unl.getAttribute('data-upload'), caseId = unl.getAttribute('data-case');
+            if (!confirm('اتصال این فایل از کیس حذف شود؟ (خود فایل در کتابخانه می‌ماند)')) return;
+            uplPost('unlink_user_upload_from_case.php', { upload_id: uploadId, case_id: caseId }, function(){ location.reload(); });
+            return;
+        }
+        var btn = e.target.closest && e.target.closest('.js-upl-link-btn');
+        if (btn) {
+            e.preventDefault();
+            var uid = btn.getAttribute('data-upload');
+            var sel = document.querySelector('.js-upl-case-sel[data-upload="'+uid+'"]');
+            if (!sel || !sel.value) return;
+            uplPost('link_user_upload_to_case.php', { upload_id: uid, case_id: sel.value }, function(){ location.reload(); });
+        }
+    });
+})();
+</script>
 <script>
 (function(){
     var form = document.getElementById('upload-form');

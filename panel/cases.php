@@ -22,6 +22,12 @@ $allowedStatusIds = getAllowedStatusIdsForUser();
 $user = current_user();
 $isDoctor = ($user['role'] === 'doctor');
 $isDesigner = ($user['role'] === 'designer');
+// کاربرانی که «ستون چک‌باکسِ انتخاب» را در لیست کیس‌ها می‌بینند تا بتوانند با دکمه‌های
+// گروهی (پرینت برچسب، تغییر وضعیت گروهی، خروجی CSV، دانلود...) کار کنند — بسته به دسترسی‌شان.
+$canSelectCases = in_array($user['role'] ?? '', ['admin', 'branch_admin', 'staff', 'secretary', 'technician', 'designer', 'outsource_lab', 'partner_lab', 'customer_lab', 'lab'], true)
+    || has_permission('batch_print_labels') || has_permission('batch_update_status')
+    || has_permission('export_csv') || has_permission('edit_cases')
+    || has_permission('upload_files') || has_permission('upload_design_files') || has_permission('delete_files');
 $designers = getAllDesigners();
 $defaultDesigner = getDefaultDesigner();
 $defaultDesignerId = $defaultDesigner ? (int) $defaultDesigner['id'] : 0;
@@ -192,7 +198,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     <label for="case-lab-id" id="lab-label">لابراتوار</label>
                     <select id="case-lab-id" name="lab_id">
                         <option value="">انتخاب لابراتوار...</option>
-                        <?php $allLabs = getAllLabs(); foreach ($allLabs as $lab): ?>
+                        <?php $allLabs = getOutsourceLabOptions(); foreach ($allLabs as $lab): ?>
                         <option value="<?= $lab['id'] ?>" data-role="<?= $lab['role'] ?>"><?= htmlspecialchars($lab['full_name']) ?><?= !empty($lab['branch_name']) ? ' (' . htmlspecialchars($lab['branch_name']) . ')' : '' ?></option>
                         <?php endforeach; ?>
                     </select>
@@ -760,6 +766,8 @@ panel_layout_start('مدیریت کیس‌ها');
     (function(){
         var todayJalali = '<?= toJalaliDateFormatted(date('Y-m-d')) ?>';
         var editReceivedJalali = '';   // تاریخ دریافتِ معتبر هنگام ویرایش (از دیتابیس)
+        // برای نگه‌داشتن انتخابِ قبلیِ لابراتوار در حالت ویرایش (اگر در لیستِ مقصد نبود)
+        window.__LAB_NAMES__ = <?= json_encode(array_column(getAllLabs(), 'full_name', 'id'), JSON_UNESCAPED_UNICODE) ?>;
 
         function getDatepickerPlugin() {
             if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.persianDatepicker === 'function') {
@@ -911,10 +919,10 @@ panel_layout_start('مدیریت کیس‌ها');
                     { targets: [16], searchPanes: { header: 'وضعیت' } }
                 ],
                 columns: [
-                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= (has_role('admin') || has_role('designer') || in_array($user['role'] ?? '', ['outsource_lab','partner_lab','customer_lab','lab'])) ? 'true' : 'false' ?> },
+                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= $canSelectCases ? 'true' : 'false' ?> },
                     { data: 0, render: function(data, type, row){ if (type === 'display' && row[14]) { return '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>'; } return data; } },
                     { data: 1 },
-                    { data: 12, visible: <?= canSeeDesignerInfo() ? 'true' : 'false' ?> }, /* designer – internal only */
+                    { data: 12, visible: <?= (!$isDesigner && canSeeDesignerInfo()) ? 'true' : 'false' ?> }, /* designer – internal only; designers only see their own case → no need */
                     { data: 2 },
                     { data: 3 },
                     { data: 4, render: function(data, type){ if (type !== 'display') return data; return '<div class="case-teeth-cell" title="' + (data ? String(data).replace(/"/g, '&quot;') : '') + '">' + (data || '') + '</div>'; } },
@@ -1244,9 +1252,21 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-received-date').val(data.received_date || ''); // sets correct date
                 editReceivedJalali = data.received_date || '';
                 jQuery('#case-status-id').val(data.status_id || '');
-                jQuery('#case-lab-id').val(data.lab_id || '');
+                var keepLabId = String(data.lab_id || '');
+                var keepOutLabId = String(data.outsourced_lab_id || '');
+                jQuery('#case-lab-id').val(keepLabId);
                 jQuery('#case-designer-id').val(data.designer_id || '');
-                jQuery('#case-outsourced-lab').val(data.outsourced_lab_id || '');
+                jQuery('#case-outsourced-lab').val(keepOutLabId);
+                // اگر لابراتوارِ انتخاب‌شده در لیستِ مقصد نیست (مثلاً لابراتوارِ خودِ شعبه در کیس‌های
+                // قدیمی)، گزینه‌اش را اضافه کن تا هنگام ویرایش انتخاب از بین نرود.
+                function keepLabOption(selId, val) {
+                    if (!val) return;
+                    if (jQuery(selId + ' option[value="' + val + '"]').length) return;
+                    var nm = (window.__LAB_NAMES__ && window.__LAB_NAMES__[val]) ? window.__LAB_NAMES__[val] : ('لابراتوار #' + val);
+                    jQuery(selId).append(new Option(nm, val));
+                }
+                keepLabOption('#case-lab-id', keepLabId);
+                keepLabOption('#case-outsourced-lab', keepOutLabId);
                 jQuery('#case-outsourced-service').val(data.outsourced_service_id || '');
                 jQuery('#case-outsourced-qty').val(data.outsourced_qty || 0);
                 // Keep the saved per-case rate (do NOT overwrite with lookup on edit; user can re-pick to re-fetch)

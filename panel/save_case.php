@@ -172,6 +172,40 @@ if (is_branch_scoped() && $branch_id !== currentBranchId()) {
     $branch_id = currentBranchId();
 }
 
+// ─── جلوگیری از برون‌سپاری به لابراتوارِ خودِ شعبه ───
+// (یک شعبه نه به خودش می‌تواند کار بدهد نه از خودش بگیرد)
+$effBranchGuard = currentBranchId();
+if ($effBranchGuard === null && function_exists('is_root_admin') && is_root_admin()) {
+    $effBranchGuard = 1; // مدیر کل = شعبهٔ مرکزی
+}
+if ($effBranchGuard !== null) {
+    $labBranchOf = function ($labUserId) {
+        if (!$labUserId) return null;
+        $s = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+        $s->execute([(int) $labUserId]);
+        $v = $s->fetchColumn();
+        return ($v === null || $v === '') ? null : (int) $v;
+    };
+    if (in_array($case_type, ['lab_out', 'lab_in'], true) && $lab_id) {
+        $lb = $labBranchOf($lab_id);
+        if ($lb !== null && $lb === (int) $effBranchGuard) {
+            http_response_code(400);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => false, 'error' => 'self_lab', 'message' => 'یک شعبه نمی‌تواند به لابراتوارِ خودِ شعبه برون‌سپاری کند.']);
+            exit;
+        }
+    }
+    if ($outsourced_lab_id && $outsourced_qty > 0) {
+        $lb = $labBranchOf($outsourced_lab_id);
+        if ($lb !== null && $lb === (int) $effBranchGuard) {
+            http_response_code(400);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(['success' => false, 'error' => 'self_lab', 'message' => 'برون‌سپاری جانبی نمی‌تواند به لابراتوارِ خودِ شعبه باشد.']);
+            exit;
+        }
+    }
+}
+
 if (empty($patient_name)) {
     http_response_code(400);
     header('Content-Type: application/json; charset=utf-8');

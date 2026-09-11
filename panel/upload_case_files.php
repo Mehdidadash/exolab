@@ -6,13 +6,8 @@
 require_once __DIR__ . '/auth.php';
 require_login();
 
-// Permission: admins, and roles with file-upload / design-file permissions
-if (!has_role('admin') && !has_permission('upload_design_files') && !has_permission('upload_files') && !has_permission('edit_cases')) {
-    http_response_code(403);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success' => false, 'error' => 'forbidden']);
-    exit;
-}
+// مجوز، پس از مشخص‌شدن کیس و نقش بررسی می‌شود (پایین): مدیران/کارکنان/طراح مثل قبل؛
+// و اکنون «پزشکِ صاحبِ کیس» هم می‌تواند برای کیس خودش فایل آپلود کند.
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
@@ -46,16 +41,23 @@ if ($caseId <= 0) {
     exit;
 }
 
-// Verify case exists and the user may access it
+// Verify the user may upload to this case.
 $user = current_user();
-if ($user['role'] === 'designer') {
+$permUpload = has_role('admin') || has_permission('upload_design_files') || has_permission('upload_files') || has_permission('edit_cases');
+if ($user['role'] === 'designer' && has_permission('upload_design_files')) {
     $check = db()->prepare('SELECT id FROM cases WHERE id = ? AND designer_id = ?');
     $check->execute([$caseId, (int) $user['id']]);
-} else {
+} elseif ($user['role'] === 'doctor') {
+    // پزشک فقط برای کیس‌های خودش
+    $check = db()->prepare('SELECT id FROM cases WHERE id = ? AND doctor_id = ?');
+    $check->execute([$caseId, (int) $user['id']]);
+} elseif ($permUpload) {
     $check = db()->prepare('SELECT id FROM cases WHERE id = ?');
     $check->execute([$caseId]);
+} else {
+    $check = null;
 }
-if (!$check->fetch()) {
+if (!$check || !$check->fetch()) {
     http_response_code(403);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => false, 'error' => 'case_not_found', 'message' => 'کیس یافت نشد یا دسترسی ندارید.']);

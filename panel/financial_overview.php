@@ -14,6 +14,8 @@ use Morilog\Jalali\Jalalian;
 $bid = currentBranchId();
 if ($bid === null) $bid = 1;
 $finInvoiceFilter = $bid === null ? '' : ' AND branch_id = ' . (int) $bid;   // doctor_invoices / designer_invoices / outsource_invoices
+// فاکتورهای پزشک: شعبه = branch_id، یا (برای فاکتورهای قدیمی بدون شعبه) شعبهٔ خودِ پزشک.
+$finDocInvoiceFilter = $bid === null ? '' : " AND COALESCE(doctor_invoices.branch_id, (SELECT u.branch_id FROM users u WHERE u.id = doctor_invoices.doctor_id)) = " . (int) $bid;
 $finCaseFilter    = $bid === null ? '' : ' AND c.branch_id = ' . (int) $bid;  // cases (alias c)
 $finCaseFilterNoAlias = $bid === null ? '' : ' AND branch_id = ' . (int) $bid; // cases (no alias)
 
@@ -115,7 +117,7 @@ $unrealizedExpense = 0;   // design fees + side-outsourcing cost on received cas
 
 if ($startDate !== '' && $endDate !== '') {
     // Realized income = paid invoices
-    $stmt = db()->prepare("SELECT invoice_number, total_amount FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finInvoiceFilter);
+    $stmt = db()->prepare("SELECT invoice_number, total_amount FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finDocInvoiceFilter);
     $stmt->execute([$startDate, $endDate]);
     foreach ($stmt->fetchAll() as $r) {
         $amt = (float) $r['total_amount'];
@@ -177,7 +179,7 @@ foreach ($months as $key => &$mm) {
     $ms = Jalalian::fromFormat('Y/m/d', sprintf('%04d/%02d/01', $mm['year'], $mm['month']))->toCarbon()->toDateString();
     $me = Jalalian::fromFormat('Y/m/d', sprintf('%04d/%02d/01', $mm['year'], $mm['month']))->addMonths(1)->subDay()->toCarbon()->toDateString();
 
-    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finInvoiceFilter);
+    $s = db()->prepare("SELECT COALESCE(SUM(total_amount),0) FROM doctor_invoices WHERE invoice_date BETWEEN ? AND ? AND payment_status = 'paid'" . $finDocInvoiceFilter);
     $s->execute([$ms, $me]);
     $mm['inc_real'] = (float) $s->fetchColumn();
 

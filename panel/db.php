@@ -133,6 +133,106 @@ function uniqueUserUploadName(int $userId, ?int $caseId, string $originalName): 
     return $candidate;
 }
 
+// ----- Shared file library (user_uploads ⇄ cases, many-to-many) -----
+
+/** Case IDs a library file (user_uploads) is linked to (pivot links + legacy single case_id). */
+function userUploadLinkedCaseIds(int $uploadId): array {
+    $pdo = db();
+    $ids = [];
+    $st = $pdo->prepare('SELECT case_id FROM user_upload_case_links WHERE upload_id = ?');
+    $st->execute([$uploadId]);
+    foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $v) if ($v !== null && $v !== '') $ids[(int) $v] = true;
+    $st2 = $pdo->prepare('SELECT case_id FROM user_uploads WHERE id = ? AND case_id IS NOT NULL');
+    $st2->execute([$uploadId]);
+    foreach ($st2->fetchAll(PDO::FETCH_COLUMN) as $v) if ($v !== null && $v !== '') $ids[(int) $v] = true;
+    return array_keys($ids);
+}
+
+/** All library files (user_uploads) attached to a case — new pivot links + legacy case_id. */
+function getUserUploadsForCase(int $caseId): array {
+    $cid = (int) $caseId;
+    return db()->query("SELECT DISTINCT u.*, uu.full_name AS uploader_name
+            FROM user_uploads u
+            LEFT JOIN user_upload_case_links l ON l.upload_id = u.id
+            LEFT JOIN users uu ON uu.id = u.user_id
+            WHERE (l.case_id = {$cid} OR u.case_id = {$cid})
+            ORDER BY u.created_at DESC, u.id DESC")->fetchAll();
+}
+
+/** Link a library file to a case (idempotent). */
+function linkUserUploadToCase(int $uploadId, int $caseId): void {
+    $pdo = db();
+    $st = $pdo->prepare('INSERT IGNORE INTO user_upload_case_links (upload_id, case_id, created_at) VALUES (?, ?, NOW())');
+    $st->execute([(int) $uploadId, (int) $caseId]);
+    // Mirror into the legacy "primary case" column when empty (keeps old UI consistent).
+    $pdo->prepare('UPDATE user_uploads SET case_id = ? WHERE id = ? AND (case_id IS NULL OR case_id = 0)')->execute([(int) $caseId, (int) $uploadId]);
+}
+
+/** Unlink a library file from a case (idempotent). */
+function unlinkUserUploadFromCase(int $uploadId, int $caseId): void {
+    $pdo = db();
+    $pdo->prepare('DELETE FROM user_upload_case_links WHERE upload_id = ? AND case_id = ?')->execute([(int) $uploadId, (int) $caseId]);
+    $pdo->prepare('UPDATE user_uploads SET case_id = NULL WHERE id = ? AND case_id = ?')->execute([(int) $uploadId, (int) $caseId]);
+}
+
+/** Whether the given user can open a case (used for library-file access). Mirrors view_case.php. */
+function userCanViewCaseId(int $caseId, ?array $user = null): bool {
+    $user = $user ?: (function_exists('current_user') ? current_user() : null);
+    if (!$user) return false;
+    $id = (int) $user['id'];
+    $role = $user['role'];
+    if ($role === 'doctor') {
+        $st = db()->prepare('SELECT id FROM cases WHERE id = ? AND doctor_id = ?');
+        $st->execute([$caseId, $id]);
+        return (bool) $st->fetch();
+    }
+    if ($role === 'clinic') {
+        $sc = getClinicScope('c');
+        $st = db()->prepare('SELECT COUNT(*) FROM cases c WHERE c.id = ? AND ' . $sc['sql']);
+        $st->execute(array_merge([$caseId], $sc['params']));
+        return ((int) $st->fetchColumn()) > 0;
+    }
+    if (in_array($role, ['lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true)) {
+        $st = db()->prepare('SELECT COUNT(*) FROM cases WHERE id = ? AND (lab_id = ? OR outsourced_lab_id = ?)');
+        $st->execute([$caseId, $id, $id]);
+        return ((int) $st->fetchColumn()) > 0;
+    }
+    if ($role === 'designer') {
+        $st = db()->prepare('SELECT id FROM cases WHERE id = ? AND designer_id = ?');
+        $st->execute([$caseId, $id]);
+        return (bool) $st->fetch();
+    }
+    if (has_permission('view_all_cases') || has_permission('view_assigned_cases') || has_permission('view_own_cases')) {
+        $scopeBranch = currentBranchId();
+        if ($scopeBranch === null && function_exists('is_root_admin') && is_root_admin()) $scopeBranch = 1;
+        if ($scopeBranch !== null) {
+            $sc = branchCaseScope('c', $scopeBranch);
+            $st = db()->prepare('SELECT COUNT(*) FROM cases c WHERE c.id = ? AND ' . $sc['sql']);
+            $st->execute(array_merge([$caseId], $sc['params']));
+            return ((int) $st->fetchColumn()) > 0;
+        }
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Whether the current user may access a library file (user_uploads).
+ * Root admin / branch admins / designers see the whole shared pool; the uploader sees
+ * their own files; other roles (doctor/clinic/lab/staff…) may view a file only if it is
+ * linked to a case they may open.
+ */
+function userCanViewUserUpload(array $up, ?array $user = null): bool {
+    $user = $user ?: (function_exists('current_user') ? current_user() : null);
+    if (!$user) return false;
+    if (in_array($user['role'] ?? '', ['admin', 'branch_admin', 'designer'], true)) return true;
+    if ((int) $up['user_id'] === (int) $user['id']) return true;
+    foreach (userUploadLinkedCaseIds((int) $up['id']) as $cid) {
+        if (userCanViewCaseId((int) $cid, $user)) return true;
+    }
+    return false;
+}
+
 // ----- Branch helpers (multi-branch / hierarchical lab system) -----
 
 /** Get a single branch row. */
@@ -164,6 +264,27 @@ function getAllLabs(): array {
 }
 
 /**
+ * Lab options for OUTSOURCING a case (برون‌سپاری / کار از لابراتوار همکار).
+ * A branch cannot outsource to its own lab, so labs belonging to the current
+ * branch are excluded (external labs with no branch stay). One lab id can be
+ * kept (the value already set on a case being edited). مدیر کل = شعبهٔ مرکزی.
+ */
+function getOutsourceLabOptions(?int $keepLabId = null): array {
+    $bid = currentBranchId();
+    if ($bid === null && function_exists('is_root_admin') && is_root_admin()) {
+        $bid = 1;
+    }
+    $labs = getAllLabs();
+    if ($bid === null) {
+        return $labs;
+    }
+    return array_values(array_filter($labs, function ($l) use ($bid, $keepLabId) {
+        if ($keepLabId !== null && (int) $l['id'] === (int) $keepLabId) return true;
+        return empty($l['branch_id']) || (int) $l['branch_id'] !== (int) $bid;
+    }));
+}
+
+/**
  * The branch the current user is scoped to.
  * - Root admin (role = 'admin') is ALWAYS global → returns null, regardless of branch_id.
  * - A branch-scoped user (branch_id set, e.g. branch_admin/staff/doctor) sees only that branch.
@@ -176,6 +297,27 @@ function currentBranchId(): ?int {
     if ($user['role'] === 'admin') return null;   // root admin is always global
     $bid = $user['branch_id'] ?? null;
     return $bid !== null && $bid !== '' ? (int) $bid : null;
+}
+
+/**
+ * Which branch a doctor_invoice BELONGS to, financially.
+ * Prefers the invoice's own branch_id; for legacy/self-made invoices that were
+ * saved without a branch (branch_id NULL), falls back to the doctor's branch.
+ * (کلینیک‌/لابراتوارهایی که شعبه ندارند و فاکتورشان هم بدون شعبه است → به هیچ شعبه‌ای تعلق
+ *  نمی‌گیرند و فقط در آمار سراسری می‌آیند.)
+ * @param string $alias SQL alias of the doctor_invoices table.
+ * @param int|null $branchId target branch (default: current user's branch).
+ * @return array ['sql'=>.., 'params'=>[..]]
+ */
+function doctorInvoiceBranchScope(string $alias = 'i', ?int $branchId = null): array {
+    $bid = $branchId !== null ? (int) $branchId : currentBranchId();
+    if ($bid === null) {
+        return ['sql' => '1=1', 'params' => []];
+    }
+    return [
+        'sql' => "COALESCE({$alias}.branch_id, (SELECT u.branch_id FROM users u WHERE u.id = {$alias}.doctor_id)) = ?",
+        'params' => [$bid],
+    ];
 }
 
 /**
@@ -1614,9 +1756,11 @@ function createClinicInvoice(int $clinicId, array $cases, string $invoiceDate, ?
     $clinic->execute([$clinicId]);
     $clinicUser = $clinic->fetch();
     $clinicName = $clinicUser['full_name'] ?? 'کلینیک';
+    $clinicBranch = ($clinicUser['branch_id'] ?? null);
+    $clinicBranch = ($clinicBranch !== null && $clinicBranch !== '') ? (int) $clinicBranch : null;
 
     $notes = 'فاکتور کلینیک' . ($periodLabel ? ' — بازه: ' . $periodLabel : '');
-    $stmt = db()->prepare('INSERT INTO doctor_invoices (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, created_at) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)');
+    $stmt = db()->prepare('INSERT INTO doctor_invoices (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, branch_id, created_at) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         $invoiceNumber,
         $clinicId,
@@ -1626,6 +1770,7 @@ function createClinicInvoice(int $clinicId, array $cases, string $invoiceDate, ?
         $invoiceDate,
         $notes,
         $bankAccountId,
+        $clinicBranch,
         $now,
     ]);
     $invoiceId = (int) db()->lastInsertId();
@@ -2504,10 +2649,17 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankA
     }
 
     // Insert invoice
+    // (Branch: منسوب به شعبه‌ی خودِ پزشک است — بعد از افزودن «شعبه» به سامانه، فاکتورهایی که
+    //  بدون branch_id صادر شدند در آمار مدیر شعبه حساب نمی‌شدند؛ اینجا اصلاح می‌شود.)
+    $bs = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+    $bs->execute([$doctor_id]);
+    $branchId = $bs->fetchColumn();
+    $branchId = ($branchId !== null && $branchId !== '') ? (int) $branchId : null;
+
     $stmt = db()->prepare('
         INSERT INTO doctor_invoices 
-        (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, branch_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ');
     // Get doctor info
     $doctor = getDoctor($doctor_id);
@@ -2522,6 +2674,7 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankA
         $invoiceDate,
         'فاکتور ماهانه خودکار',
         $bankAccountId,
+        $branchId,
         $now
     ]);
     $invoiceId = db()->lastInsertId();
@@ -2831,11 +2984,13 @@ function createMonthlyLabInvoice(int $labId, array $cases, float $balance, strin
     $lab = db()->prepare('SELECT * FROM users WHERE id = ?');
     $lab->execute([$labId]);
     $labUser = $lab->fetch();
+    $labBranch = ($labUser['branch_id'] ?? null);
+    $labBranch = ($labBranch !== null && $labBranch !== '') ? (int) $labBranch : null;
 
     $stmt = db()->prepare('
         INSERT INTO doctor_invoices
-        (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, created_at)
-        VALUES (?, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
+        (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, branch_id, created_at)
+        VALUES (?, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
     ');
     $notes = 'فاکتور لابراتوار';
     if ($periodLabel !== null && $periodLabel !== '') {
@@ -2849,6 +3004,7 @@ function createMonthlyLabInvoice(int $labId, array $cases, float $balance, strin
         $invoiceDate,
         $notes,
         $bankAccountId,
+        $labBranch,
         $now
     ]);
     $invoiceId = (int) db()->lastInsertId();

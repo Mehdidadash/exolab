@@ -93,6 +93,9 @@ if ($id) {
 $statuses = db()->query('SELECT * FROM case_statuses ORDER BY name ASC')->fetchAll();
 $designers = getAllDesigners();
 $labs = getAllLabs();
+// لیست لابراتوارهای «مقصدِ برون‌سپاری» بدون لابراتوارِ خودِ شعبه (مقصد برای کیسِ فعلی)
+$editLabs    = getOutsourceLabOptions((int) ($case['lab_id'] ?? 0));
+$editOutLabs = getOutsourceLabOptions((int) ($case['outsourced_lab_id'] ?? 0));
 $doctors = getAllDoctors();
 $prices = getAllPrices();
 // Whether the current user may edit this case (admin / staff / secretary …)
@@ -163,6 +166,15 @@ panel_layout_start('مشاهده کیس');
             $pb = db()->prepare('SELECT name FROM branches WHERE id = ?');
             $pb->execute([(int) $case['source_branch_id']]);
             $partnerBranchName = (string) $pb->fetchColumn();
+        }
+
+        // پزشک‌ها همیشه کیس خود را «کیس دکتر» می‌بینند — جزئیات برون‌سپاری/همکار برایشان
+        // نمایش داده نمی‌شود (نه عنوان نوع کیس، نه برچسب و نه نام شعبهٔ همکار).
+        if ($isDoctor) {
+            $caseTypeLabel = 'کیس دکتر';
+            $branchBadge = '';
+            $branchLabel = '';
+            $partnerBranchName = '';
         }
         ?>
 
@@ -478,34 +490,54 @@ panel_layout_start('مشاهده کیس');
         </div>
 
         <div class="form-card" style="margin-top:20px;">
-            <h4>تاریخچه فعالیت‌های کیس</h4>
-            <?php $activityLog = getCaseActivityLog($case['id']); ?>
-            <?php if (!empty($activityLog)): ?>
-                <div style="max-height:340px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-left:4px;">
-                    <?php
-                    $actLabels = [
-                        'create'        => ['ایجاد کیس', '#dcfce7', '#166534'],
-                        'update'        => ['ویرایش کیس', '#fef9c3', '#854d0e'],
-                        'file_upload'   => ['آپلود فایل', '#cffafe', '#155e75'],
-                        'file_download' => ['دانلود فایل', '#ede9fe', '#5b21b6'],
-                        'view'          => ['مشاهده صفحه', '#f3f4f6', '#374151'],
-                        'comment'       => ['کامنت', '#ffe4e6', '#9f1239'],
-                        'status_change' => ['تغییر وضعیت', '#e0e7ff', '#3730a3'],
-                    ];
-                    foreach ($activityLog as $log):
-                        $act = $actLabels[$log['action']] ?? [$log['action'], '#f3f4f6', '#374151'];
-                    ?>
-                        <div style="display:flex; align-items:center; gap:8px; font-size:0.85rem; padding:6px 8px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; flex-wrap:wrap;">
-                            <span class="badge" style="background:<?= $act[1] ?>; color:<?= $act[2] ?>;"><?= htmlspecialchars($act[0]) ?></span>
-                            <span style="flex:1; min-width:120px;"><?= htmlspecialchars($log['user_name'] ?? 'سیستم') ?></span>
-                            <span style="color:#6b7280; font-size:0.78rem;"><?= toJalaliDateFormatted($log['created_at']) ?></span>
+            <details id="case-activity-history" style="--bg:#fff;">
+                <summary style="cursor:pointer; list-style:none; outline:none; font-size:1.05rem; font-weight:700; color:#0f172a; display:flex; align-items:center; gap:8px;">
+                    <span id="activity-caret" style="transition:transform .2s; display:inline-block;">▶</span>
+                    تاریخچه فعالیت‌های کیس
+                    <?php $activityLog = getCaseActivityLog($case['id']); ?>
+                    <?php if (!empty($activityLog)): ?>
+                        <span class="badge" style="background:#e0e7ff; color:#3730a3;"><?= count($activityLog) ?></span>
+                    <?php endif; ?>
+                </summary>
+                <div style="margin-top:10px;">
+                    <?php if (!empty($activityLog)): ?>
+                        <div style="max-height:340px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-left:4px;">
+                            <?php
+                            $actLabels = [
+                                'create'        => ['ایجاد کیس', '#dcfce7', '#166534'],
+                                'update'        => ['ویرایش کیس', '#fef9c3', '#854d0e'],
+                                'file_upload'   => ['آپلود فایل', '#cffafe', '#155e75'],
+                                'file_download' => ['دانلود فایل', '#ede9fe', '#5b21b6'],
+                                'view'          => ['مشاهده صفحه', '#f3f4f6', '#374151'],
+                                'comment'       => ['کامنت', '#ffe4e6', '#9f1239'],
+                                'status_change' => ['تغییر وضعیت', '#e0e7ff', '#3730a3'],
+                            ];
+                            foreach ($activityLog as $log):
+                                $act = $actLabels[$log['action']] ?? [$log['action'], '#f3f4f6', '#374151'];
+                            ?>
+                                <div style="display:flex; align-items:center; gap:8px; font-size:0.85rem; padding:6px 8px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; flex-wrap:wrap;">
+                                    <span class="badge" style="background:<?= $act[1] ?>; color:<?= $act[2] ?>;"><?= htmlspecialchars($act[0]) ?></span>
+                                    <span style="flex:1; min-width:120px;"><?= htmlspecialchars($log['user_name'] ?? 'سیستم') ?></span>
+                                    <span style="color:#6b7280; font-size:0.78rem;"><?= toJalaliDateFormatted($log['created_at']) ?></span>
+                                </div>
+                            <?php endforeach; ?>
                         </div>
-                    <?php endforeach; ?>
+                    <?php else: ?>
+                        <p class="empty">هنوز فعالیتی برای این کیس ثبت نشده است.</p>
+                    <?php endif; ?>
                 </div>
-            <?php else: ?>
-                <p class="empty">هنوز فعالیتی برای این کیس ثبت نشده است.</p>
-            <?php endif; ?>
+            </details>
         </div>
+        <script>
+        (function(){
+            var d = document.getElementById('case-activity-history');
+            if (!d) return;
+            d.addEventListener('toggle', function(){
+                var c = document.getElementById('activity-caret');
+                if (c) c.style.transform = d.open ? 'rotate(90deg)' : '';
+            });
+        })();
+        </script>
 
         <?php if (!empty($subCases)): ?>
             <h4>کیس‌های وابسته (زیرمجموعه)</h4>
@@ -577,7 +609,7 @@ panel_layout_start('مشاهده کیس');
             </div>
         <?php } ?>
 
-        <?php if (has_role('admin') || has_permission('upload_design_files') || has_permission('upload_files') || has_permission('edit_cases')): ?>
+        <?php if (has_role('admin') || has_permission('upload_design_files') || has_permission('upload_files') || has_permission('edit_cases') || ($isDoctor && (int) ($case['doctor_id'] ?? 0) === (int) $user['id'])): ?>
         <div style="margin:12px 0; padding:12px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px;">
             <strong>آپلود فایل</strong>
             <form id="case-upload-form" enctype="multipart/form-data" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
@@ -1224,6 +1256,106 @@ panel_layout_start('مشاهده کیس');
                 });
             </script>
         <?php endif; ?>
+
+        <?php
+        // ── فایل‌های مشترک/کتابخانه: فایل‌هایی که در «آپلود فایل» گذاشته شده و به این کیس
+        //    وصل شده‌اند (هر فایل می‌تواند به چند کیس وصل باشد و در همه دیده شود).
+        $caseSharedFiles = getUserUploadsForCase((int) $case['id']);
+        $attachPool = [];
+        if (is_admin()) {
+            $pool = db()->query('SELECT u.id, u.original_name, u.created_at, uu.full_name AS uploader_name FROM user_uploads u LEFT JOIN users uu ON uu.id = u.user_id ORDER BY u.created_at DESC')->fetchAll();
+            $linkedIds = array_map('intval', array_column($caseSharedFiles, 'id'));
+            $attachPool = array_values(array_filter($pool, fn($f) => !in_array((int) $f['id'], $linkedIds, true)));
+        }
+        if (!empty($caseSharedFiles) || !empty($attachPool)):
+        ?>
+        <div class="form-card" style="margin-top:20px;">
+            <h4 style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; margin:0 0 8px;">
+                <span>📎 فایل‌های مشترک این کیس (کتابخانه)</span>
+                <?php if (count($caseSharedFiles)): ?>
+                    <span class="badge" style="background:#ede9fe; color:#5b21b6;"><?= count($caseSharedFiles) ?> فایل</span>
+                <?php endif; ?>
+            </h4>
+            <?php if (is_admin() && !empty($attachPool)): ?>
+                <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:#f5f3ff; border:1px dashed #c4b5fd; border-radius:8px; padding:8px 10px; margin-bottom:10px;">
+                    <span style="font-weight:600; font-size:0.9rem;">اتصال فایل از کتابخانه به این کیس:</span>
+                    <select id="vc-attach-pool" style="flex:1; min-width:220px; padding:6px 8px; border:1px solid #d1d5db; border-radius:6px;">
+                        <option value="">انتخاب فایل…</option>
+                        <?php foreach ($attachPool as $f): ?>
+                            <option value="<?= (int) $f['id'] ?>"><?= htmlspecialchars($f['original_name']) ?><?= !empty($f['uploader_name']) ? ' — ' . htmlspecialchars($f['uploader_name']) : '' ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="button" id="vc-attach-btn" class="btn" style="background:#0F172A; color:#fff;">اتصال</button>
+                    <span id="vc-attach-msg" style="font-weight:bold;"></span>
+                </div>
+            <?php endif; ?>
+            <?php if (empty($caseSharedFiles)): ?>
+                <p class="empty">فایل مشترکی به این کیس وصل نشده است.</p>
+            <?php else: ?>
+                <table class="display" style="width:100%; font-size:0.9rem;">
+                    <thead>
+                    <tr>
+                        <th style="text-align:right;">فایل</th>
+                        <th style="text-align:right;">فرستنده</th>
+                        <th style="text-align:right;">توضیحات</th>
+                        <th style="text-align:right;">اندازه</th>
+                        <th style="text-align:right;">تاریخ</th>
+                        <th style="text-align:right;">عملیات</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($caseSharedFiles as $sf): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($sf['original_name']) ?></td>
+                            <td><?= htmlspecialchars($sf['uploader_name'] ?? '—') ?></td>
+                            <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($sf['description'] ?? '') ?: '—' ?></td>
+                            <td><?= !empty($sf['size']) ? toPersianDigits(round((int) $sf['size'] / 1024)) . ' KB' : '—' ?></td>
+                            <td><?= toJalaliDateFormatted($sf['created_at']) ?></td>
+                            <td class="actions" style="white-space:nowrap;">
+                                <a class="btn" href="serve_user_upload.php?id=<?= (int) $sf['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:3px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
+                                <a class="btn" href="download_user_upload.php?id=<?= (int) $sf['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:3px 8px; text-decoration:none;">دانلود</a>
+                                <?php if (is_admin()): ?>
+                                    <button type="button" class="btn js-vc-unlink" data-upload="<?= (int) $sf['id'] ?>" style="background:#fee2e2; color:#991b1b; padding:3px 8px;" title="حذف اتصال این فایل از این کیس">✕</button>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+        <script>
+        (function(){
+            var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+            function vcPost(url, data, cb){
+                var fd = new FormData();
+                for (var k in data) fd.append(k, data[k]);
+                fd.append('_csrf_token', csrf);
+                fetch(url, { method:'POST', headers:{ 'X-CSRF-Token': csrf }, body: fd })
+                    .then(function(r){ return r.json().catch(function(){ return {success:false}; }); })
+                    .then(cb)
+                    .catch(function(){ cb({success:false}); });
+            }
+            var attBtn = document.getElementById('vc-attach-btn');
+            if (attBtn) attBtn.addEventListener('click', function(){
+                var sel = document.getElementById('vc-attach-pool');
+                var msg = document.getElementById('vc-attach-msg');
+                if (!sel || !sel.value) return;
+                vcPost('link_user_upload_to_case.php', { upload_id: sel.value, case_id: '<?= (int) $case['id'] ?>' }, function(r){
+                    if (msg) { msg.textContent = r && r.success ? '✅ وصل شد' : '❌ خطا'; msg.style.color = r && r.success ? '#166534' : '#b91c1c'; }
+                    if (r && r.success) setTimeout(function(){ location.reload(); }, 600);
+                });
+            });
+            document.addEventListener('click', function(e){
+                var unl = e.target.closest && e.target.closest('.js-vc-unlink');
+                if (!unl) return;
+                e.preventDefault();
+                if (!confirm('اتصال این فایل از این کیس حذف شود؟ (فایل در کتابخانه می‌ماند)')) return;
+                vcPost('unlink_user_upload_from_case.php', { upload_id: unl.getAttribute('data-upload'), case_id: '<?= (int) $case['id'] ?>' }, function(){ location.reload(); });
+            });
+        })();
+        </script>
+        <?php endif; ?>
     <?php endif; ?>
 </div>
 
@@ -1265,7 +1397,7 @@ panel_layout_start('مشاهده کیس');
                     <label id="ec-lab-label">لابراتوار</label>
                     <select name="lab_id">
                         <option value="">— انتخاب —</option>
-                        <?php foreach ($labs as $lab): ?>
+                        <?php foreach ($editLabs as $lab): ?>
                             <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?> (<?= htmlspecialchars($lab['role']) ?><?= !empty($lab['branch_name']) ? ' — ' . htmlspecialchars($lab['branch_name']) : '' ?>)</option>
                         <?php endforeach; ?>
                     </select>
@@ -1350,7 +1482,7 @@ panel_layout_start('مشاهده کیس');
                                 <label>برون‌سپاری جانبی: لابراتوار</label>
                                 <select name="outsourced_lab_id">
                                     <option value="">ندارد</option>
-                                    <?php foreach ($labs as $lab): ?>
+                                    <?php foreach ($editOutLabs as $lab): ?>
                                         <option value="<?= (int) $lab['id'] ?>" <?= (int) ($case['outsourced_lab_id'] ?? 0) === (int) $lab['id'] ? 'selected' : '' ?>><?= htmlspecialchars($lab['full_name']) ?><?= !empty($lab['branch_name']) ? ' (' . htmlspecialchars($lab['branch_name']) . ')' : '' ?></option>
                                     <?php endforeach; ?>
                                 </select>

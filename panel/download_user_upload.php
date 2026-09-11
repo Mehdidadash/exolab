@@ -11,8 +11,8 @@ $stmt = db()->prepare('SELECT * FROM user_uploads WHERE id = ?');
 $stmt->execute([$id]);
 $up = $stmt->fetch();
 
-// Owners, admins, and designers (shared file area) may download
-if (!$up || ((int) $up['user_id'] !== (int) $user['id'] && !has_role('admin') && $user['role'] !== 'designer')) {
+// Owners / admins (اصلی و شعب) / طراحان، و هرکسی که به کیسِ متصلِ فایل دسترسی دارد.
+if (!$up || !userCanViewUserUpload($up)) {
     http_response_code(403);
     die('دسترسی غیرمجاز');
 }
@@ -24,7 +24,8 @@ if (!file_exists($path)) {
 }
 
 header('Content-Type: application/octet-stream');
-header('Content-Disposition: attachment; filename="' . $up['original_name'] . '"');
+$safeName = str_replace(["\r", "\n", '"'], '', $up['original_name']);
+header('Content-Disposition: attachment; filename="' . $safeName . '"');
 header('Content-Length: ' . filesize($path));
 header('Cache-Control: private, max-age=0');
 header('Pragma: public');

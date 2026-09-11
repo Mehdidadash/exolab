@@ -5,18 +5,58 @@ require_login();
 $user = current_user();
 $role = $user['role'];
 
+use Morilog\Jalali\Jalalian;
+
 panel_layout_start('داشبورد');
 
-if ($role === 'admin') {
+if ($role === 'admin' || $role === 'branch_admin') {
     // ─── آمارهای لحظه‌ای ───
-    $stats = [];
-    $stats['doctors'] = db()->query("SELECT COUNT(*) FROM users WHERE role='doctor' AND active=1")->fetchColumn();
-    $stats['cases'] = db()->query("SELECT COUNT(*) FROM cases")->fetchColumn();
-    $stats['active_cases'] = db()->query("SELECT COUNT(*) FROM cases WHERE status_id != 4")->fetchColumn();
-    $stats['total_invoices'] = db()->query("SELECT COUNT(*) FROM doctor_invoices")->fetchColumn();
-    $stats['unpaid_invoices'] = db()->query("SELECT COUNT(*) FROM doctor_invoices WHERE payment_status='unpaid'")->fetchColumn();
-    $stats['monthly_revenue'] = db()->query("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid' AND MONTH(invoice_date) = MONTH(CURDATE()) AND YEAR(invoice_date) = YEAR(CURDATE())")->fetchColumn();
-    $stats['total_revenue'] = db()->query("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid'")->fetchColumn();
+    // مدیر کل = کل مجموعه؛ مدیر شعبه = فقط مواردِ شعبهٔ خودش (کیس‌ها، فاکتورها، ...)
+    $branchScoped = ($role === 'branch_admin');
+    $bid = $branchScoped ? (int) ($user['branch_id'] ?? 0) : null;
+
+    $runStat = function (string $sql, array $params = []): int {
+        $st = db()->prepare($sql);
+        $st->execute($params);
+        return (int) $st->fetchColumn();
+    };
+
+    // «درآمد ماه جاری» = فاکتورهای «پرداخت‌شده» با تاریخِ صدور در ماهِ جاریِ شمسی.
+    // (نگاه قبلی ماه میلادی بود و اوایلِ ماهِ شمسی، ماه قبل را نادیده می‌گرفت.)
+    try {
+        $curJ = Jalalian::now();
+        $curJalaliStart = Jalalian::fromFormat('Y/m/d', sprintf('%04d/%02d/01', $curJ->getYear(), $curJ->getMonth()));
+        $curMonthFrom = $curJalaliStart->toCarbon()->toDateString();
+        $curMonthTo = $curJalaliStart->addMonths(1)->subDay()->toCarbon()->toDateString();
+    } catch (\Throwable $e) {
+        $curMonthFrom = date('Y-m-01');
+        $curMonthTo = date('Y-m-t');
+    }
+
+    if (!$branchScoped) {
+        $stats['doctors'] = $runStat("SELECT COUNT(*) FROM users WHERE role='doctor' AND active=1");
+        $stats['cases'] = $runStat('SELECT COUNT(*) FROM cases');
+        $stats['active_cases'] = $runStat("SELECT COUNT(*) FROM cases WHERE status_id != 4");
+        $stats['total_invoices'] = $runStat('SELECT COUNT(*) FROM doctor_invoices');
+        $stats['unpaid_invoices'] = $runStat("SELECT COUNT(*) FROM doctor_invoices WHERE payment_status='unpaid'");
+        $stats['monthly_revenue'] = $runStat("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid' AND invoice_date BETWEEN ? AND ?", [$curMonthFrom, $curMonthTo]);
+        $stats['total_revenue'] = $runStat("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid'");
+    } else {
+        $caseScope = branchCaseScope('c', $bid);
+        $caseCountSql = 'SELECT COUNT(*) FROM cases c WHERE ' . $caseScope['sql'];
+        $stats['doctors'] = $runStat("SELECT COUNT(*) FROM users WHERE role='doctor' AND active=1 AND branch_id = ?", [$bid]);
+
+        // Invoice branch = invoice.branch_id, یا (برای فاکتورهای قدیمیِ بدون شعبه) شعبهٔ خودِ پزشک.
+        $invBr = doctorInvoiceBranchScope('i', $bid);
+        $invBase = 'FROM doctor_invoices i WHERE ' . $invBr['sql'];
+
+        $stats['cases'] = $runStat($caseCountSql, $caseScope['params']);
+        $stats['active_cases'] = $runStat($caseCountSql . ' AND c.status_id != 4', $caseScope['params']);
+        $stats['total_invoices'] = $runStat('SELECT COUNT(*) ' . $invBase, $invBr['params']);
+        $stats['unpaid_invoices'] = $runStat("SELECT COUNT(*) {$invBase} AND i.payment_status='unpaid'", $invBr['params']);
+        $stats['monthly_revenue'] = $runStat("SELECT COALESCE(SUM(i.total_amount), 0) {$invBase} AND i.payment_status='paid' AND i.invoice_date BETWEEN ? AND ?", array_merge($invBr['params'], [$curMonthFrom, $curMonthTo]));
+        $stats['total_revenue'] = $runStat("SELECT COALESCE(SUM(i.total_amount), 0) {$invBase} AND i.payment_status='paid'", $invBr['params']);
+    }
     ?>
     <!-- Stats Cards -->
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 32px;">
