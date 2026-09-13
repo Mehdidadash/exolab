@@ -155,7 +155,7 @@ panel_layout_start('آپلود فایل');
                     </td>
                     <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
                     <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
-                    <td><?= toJalaliDateFormatted($u['created_at']) ?></td>
+                    <td><?= toJalaliDateTimeFormatted($u['created_at']) ?></td>
                     <td class="actions" style="white-space:nowrap;">
                         <a class="btn" href="serve_user_upload.php?id=<?= (int) $u['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:4px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
                         <a class="btn" href="download_user_upload.php?id=<?= (int) $u['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">دانلود</a>
@@ -222,7 +222,7 @@ panel_layout_start('آپلود فایل');
                 </td>
                 <td style="white-space:pre-wrap; max-width:220px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
                 <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
-                <td><?= toJalaliDateFormatted($u['created_at']) ?></td>
+                <td><?= toJalaliDateTimeFormatted($u['created_at']) ?></td>
                 <td class="actions" style="white-space:nowrap;">
                     <a class="btn" href="serve_user_upload.php?id=<?= (int) $u['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:4px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
                     <a class="btn" href="download_user_upload.php?id=<?= (int) $u['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">دانلود</a>

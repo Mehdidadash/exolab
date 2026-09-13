@@ -493,7 +493,7 @@ function getDefaultDesigner() {
  * branch_service_prices. This function returns the shared catalog.
  */
 function getPrices() {
-    $stmt = db()->query("SELECT * FROM site_prices WHERE active = 1 ORDER BY (display_order = 0) ASC, CASE WHEN display_order = 0 THEN id ELSE display_order END ASC");
+    $stmt = db()->query("SELECT * FROM site_prices WHERE active = 1 AND hide_on_site = 0 ORDER BY (display_order = 0) ASC, CASE WHEN display_order = 0 THEN id ELSE display_order END ASC");
     return $stmt->fetchAll();
 }
 
@@ -866,26 +866,69 @@ function ensureNotificationsTable($pdo) {
     }
 }
 
+/** کاربران مرتبط با کیس: پزشک، طراح، لابراتوار + مدیران و تکنسین‌های شعبهٔ کیس. */
+function caseParticipantUserIds(array $case): array {
+    $ids = [];
+    foreach (['doctor_id', 'designer_id', 'lab_id'] as $k) {
+        if (!empty($case[$k])) $ids[] = (int) $case[$k];
+    }
+    if (!empty($case['branch_id'])) {
+        $st = db()->prepare("SELECT id FROM users WHERE active = 1 AND branch_id = ? AND role IN ('branch_admin','technician')");
+        $st->execute([(int) $case['branch_id']]);
+        foreach ($st->fetchAll(PDO::FETCH_COLUMN) as $v) $ids[] = (int) $v;
+    }
+    return array_values(array_unique(array_filter($ids)));
+}
+
+/**
+ * اعلان تغییر وضعیت به یک وضعیتِ «خارج از ترتیب» (sort_order > 30).
+ * وضعیت‌های عادی اعلان تولید نمی‌کنند تا نوتیفیکیشن‌ها زیاد نشوند.
+ */
+function notifyCaseStatusChangeParticipants(int $caseId, int $authorUserId, int $newStatusId, ?int $oldStatusId = null): void {
+    $st = db()->prepare('SELECT id, name, sort_order, is_abnormal FROM case_statuses WHERE id = ? LIMIT 1');
+    $st->execute([$newStatusId]);
+    $new = $st->fetch();
+    if (!$new) return;
+    $newAbnormal = ((int) $new['sort_order'] > 30) || !empty($new['is_abnormal']);
+    if (!$newAbnormal) return; // وضعیت عادی → اعلان نمی‌دهیم
+
+    if ($oldStatusId) {
+        $stOld = db()->prepare('SELECT sort_order, is_abnormal FROM case_statuses WHERE id = ? LIMIT 1');
+        $stOld->execute([$oldStatusId]);
+        $old = $stOld->fetch();
+        if ($old && (((int) $old['sort_order'] > 30) || !empty($old['is_abnormal']))) return; // قبلاً هم غیرعادی بود → تکرار نکن
+    }
+
+    $stc = db()->prepare('SELECT id, patient_name, doctor_id, designer_id, lab_id, branch_id FROM cases WHERE id = ? LIMIT 1');
+    $stc->execute([$caseId]);
+    $case = $stc->fetch();
+    if (!$case) return;
+
+    $recipients = caseParticipantUserIds($case);
+    if (empty($recipients)) return;
+
+    $caseTitle = !empty($case['patient_name']) ? trim((string) $case['patient_name']) : 'کیس #' . $case['id'];
+    foreach ($recipients as $rid) {
+        if ((int) $rid === (int) $authorUserId) continue;
+        createNotification(
+            (int) $rid,
+            'تغییر وضعیت غیرعادی در ' . $caseTitle,
+            'وضعیت این کیس به «' . $new['name'] . '» تغییر کرد.',
+            $caseId,
+            'status'
+        );
+    }
+}
+
 function notifyCaseCommentParticipants(int $caseId, int $authorUserId, string $commentMessage): void {
-    $stmt = db()->prepare('SELECT c.id, c.patient_name, c.doctor_id, c.designer_id, c.lab_id FROM cases c WHERE c.id = ? LIMIT 1');
+    $stmt = db()->prepare('SELECT c.id, c.patient_name, c.doctor_id, c.designer_id, c.lab_id, c.branch_id FROM cases c WHERE c.id = ? LIMIT 1');
     $stmt->execute([$caseId]);
     $case = $stmt->fetch();
     if (!$case) {
         return;
     }
 
-    $recipientIds = [];
-    if (!empty($case['doctor_id'])) {
-        $recipientIds[] = (int) $case['doctor_id'];
-    }
-    if (!empty($case['designer_id'])) {
-        $recipientIds[] = (int) $case['designer_id'];
-    }
-    if (!empty($case['lab_id'])) {
-        $recipientIds[] = (int) $case['lab_id'];
-    }
-
-    $recipientIds = array_values(array_unique(array_filter($recipientIds)));
+    $recipientIds = caseParticipantUserIds($case);
     if (empty($recipientIds)) {
         return;
     }
@@ -912,6 +955,37 @@ function notifyCaseCommentParticipants(int $caseId, int $authorUserId, string $c
             $authorName . ' یک پیام جدید در این کیس ثبت کرد: ' . $preview,
             $caseId,
             'comment'
+        );
+    }
+}
+
+/**
+ * اعلان آپلود فایل جدید به کاربران مرتبط با کیس: پزشک، طراح، لابراتوار و مدیر(های) شعبهٔ کیس.
+ */
+function notifyCaseFileParticipants(int $caseId, int $authorUserId, int $fileCount = 1): void {
+    $stmt = db()->prepare('SELECT c.id, c.patient_name, c.doctor_id, c.designer_id, c.lab_id, c.branch_id FROM cases c WHERE c.id = ? LIMIT 1');
+    $stmt->execute([$caseId]);
+    $case = $stmt->fetch();
+    if (!$case) return;
+
+    $recipientIds = caseParticipantUserIds($case);
+    if (empty($recipientIds)) return;
+
+    $authorStmt = db()->prepare('SELECT full_name FROM users WHERE id = ? LIMIT 1');
+    $authorStmt->execute([$authorUserId]);
+    $authorUser = $authorStmt->fetch();
+    $authorName = !empty($authorUser['full_name']) ? trim((string) $authorUser['full_name']) : 'کاربر';
+
+    $caseTitle = !empty($case['patient_name']) ? trim((string) $case['patient_name']) : 'کیس #' . $case['id'];
+
+    foreach ($recipientIds as $rid) {
+        if ((int) $rid === (int) $authorUserId) continue;
+        createNotification(
+            (int) $rid,
+            'فایل جدید در ' . $caseTitle,
+            $authorName . ' ' . ($fileCount > 1 ? $fileCount . ' فایل جدید' : 'یک فایل جدید') . ' برای این کیس آپلود کرد.',
+            $caseId,
+            'file'
         );
     }
 }
@@ -948,6 +1022,73 @@ function deleteEntityComment($commentId, $userId, $isAdmin = false) {
     $stmt = db()->prepare('DELETE FROM entity_comments WHERE id = ? AND user_id = ?');
     $stmt->execute([(int) $commentId, (int) $userId]);
     return $stmt->rowCount() > 0;
+}
+
+// ----- Case statuses (ordered) -----
+/** همهٔ وضعیت‌ها به ترتیبِ تعیین‌شده (sort_order سپس id). در همهٔ selectها از این استفاده کنید. */
+function getAllCaseStatuses(): array {
+    return db()->query('SELECT * FROM case_statuses ORDER BY sort_order ASC, id ASC')->fetchAll();
+}
+
+// ----- Comment likes -----
+function getCommentLikeData(int $commentId, ?int $userId = null): array {
+    $st = db()->prepare('SELECT COUNT(*) FROM comment_likes WHERE comment_id = ?');
+    $st->execute([$commentId]);
+    $count = (int) $st->fetchColumn();
+    $liked = false;
+    if ($userId) {
+        $st2 = db()->prepare('SELECT 1 FROM comment_likes WHERE comment_id = ? AND user_id = ?');
+        $st2->execute([$commentId, (int) $userId]);
+        $liked = (bool) $st2->fetchColumn();
+    }
+    $st3 = db()->prepare('SELECT u.full_name FROM comment_likes cl JOIN users u ON u.id = cl.user_id WHERE cl.comment_id = ? ORDER BY cl.id');
+    $st3->execute([$commentId]);
+    $names = array_map('strval', $st3->fetchAll(PDO::FETCH_COLUMN));
+    return ['count' => $count, 'liked' => $liked, 'names' => $names];
+}
+
+/** لایک/برداشتن‌لایک یک کامنت؛ وضعیت جدید را برمی‌گرداند. */
+function toggleCommentLike(int $commentId, int $userId): array {
+    $st = db()->prepare('SELECT id FROM comment_likes WHERE comment_id = ? AND user_id = ?');
+    $st->execute([$commentId, (int) $userId]);
+    $existing = $st->fetchColumn();
+    if ($existing) {
+        db()->prepare('DELETE FROM comment_likes WHERE id = ?')->execute([(int) $existing]);
+    } else {
+        db()->prepare('INSERT INTO comment_likes (comment_id, user_id, created_at) VALUES (?, ?, NOW())')->execute([$commentId, (int) $userId]);
+    }
+    return getCommentLikeData($commentId, (int) $userId);
+}
+
+/**
+ * خلاصهٔ «تعداد خدمات به تفکیک» برای فاکتورها.
+ * آ یتم‌های تخفیف (مبلغ منفی) در این خلاصه نمایش داده نمی‌شوند.
+ */
+function invoiceServiceSummaryHtml(array $items, string $titleLabel = 'خدمت', string $qtyLabel = 'تعداد'): string {
+    $services = [];
+    foreach ($items as $item) {
+        $amount = (float) ($item['total_amount'] ?? 0);
+        $qty = (int) ($item['quantity'] ?? 0);
+        if ($amount < 0) {
+            continue; // تخفیف‌ها در خلاصه نمایش داده نمی‌شوند
+        }
+        $svc = $item['price_title'] ?? ($item['service_title'] ?? ($item['item_title'] ?? '—'));
+        if ($svc === '' || $svc === null) $svc = '—';
+        $svc = (string) $svc;
+        if (!isset($services[$svc])) $services[$svc] = 0;
+        $services[$svc] += $qty;
+    }
+    if (empty($services)) return '';
+    arsort($services);
+    $html = '<div class="section"><div class="section-title">تعداد خدمات به تفکیک</div><table>'
+        . '<thead><tr><th>' . htmlspecialchars($titleLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</th>'
+        . '<th>' . htmlspecialchars($qtyLabel, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</th></tr></thead><tbody>';
+    foreach ($services as $title => $qty) {
+        $html .= '<tr><td>' . htmlspecialchars($title, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>'
+            . '<td>' . toPersianDigits(number_format($qty, 0)) . '</td></tr>';
+    }
+    $html .= '</tbody></table></div>';
+    return $html;
 }
 
 // ----- Authentication helpers -----
@@ -1711,6 +1852,97 @@ function saveDesignerInvoiceEdit(int $invoiceId, string $invoiceDate, ?string $p
     $updInv->execute([round($total), $invoiceDate, ($periodLabel !== '' ? $periodLabel : null), ($notes !== '' ? $notes : null), $invoiceId]);
 }
 
+/**
+ * کیس‌های بدون فاکتورِ یک طراح (بدون محدودیت تاریخ) — برای افزودن به فاکتور موجود.
+ * $payerBranch = شعبه‌ای که هزینهٔ طراحی را می‌پردازد (برای محدودکردن به کیس‌های همان شعبه).
+ */
+function getUninvoicedCasesForDesignerAll(int $designerId, ?int $payerBranch = null): array {
+    $payerCond = $payerBranch !== null
+        ? " AND (COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id) = ?)"
+        : '';
+    $stmt = db()->prepare('
+        SELECT c.id, c.patient_name, c.service_id, c.quantity, c.received_date, c.doctor_id,
+               p.title AS service_title, u.full_name AS doctor_name
+        FROM cases c
+        LEFT JOIN site_prices p ON c.service_id = p.id
+        LEFT JOIN users u ON c.doctor_id = u.id
+        WHERE c.designer_id = ?
+          AND c.designer_invoice_id IS NULL' . $payerCond . '
+        ORDER BY c.received_date DESC, c.id DESC
+        LIMIT 500
+    ');
+    $params = [$designerId];
+    if ($payerBranch !== null) $params[] = (int) $payerBranch;
+    $stmt->execute($params);
+    $cases = $stmt->fetchAll();
+    foreach ($cases as &$c) {
+        $c['unit_design_fee'] = getApplicableDesignFee($designerId, (int) ($c['service_id'] ?? 0));
+    }
+    return $cases;
+}
+
+/**
+ * افزودن چند کیس به یک فاکتور طراحی موجود: هر کیس به‌عنوان آیتم اضافه و به فاکتور
+ * نشان‌دار می‌شود و جمع کل فاکتور به‌روزرسانی می‌گردد. تعداد آیتم‌های اضافه‌شده را برمی‌گرداند.
+ */
+function addCasesToDesignerInvoice(int $invoiceId, array $caseIds): int {
+    $inv = getDesignerInvoice($invoiceId);
+    if (!$inv) return 0;
+    $designerId = (int) $inv['designer_id'];
+
+    $caseIds = array_values(array_unique(array_filter(array_map('intval', $caseIds), fn($v) => $v > 0)));
+    if (empty($caseIds)) return 0;
+
+    $ph = implode(',', array_fill(0, count($caseIds), '?'));
+    $st = db()->prepare("
+        SELECT c.*, p.title AS service_title, u.full_name AS doctor_name
+        FROM cases c
+        LEFT JOIN site_prices p ON c.service_id = p.id
+        LEFT JOIN users u ON c.doctor_id = u.id
+        WHERE c.id IN ($ph)
+          AND c.designer_id = ?
+          AND c.designer_invoice_id IS NULL
+    ");
+    $st->execute(array_merge($caseIds, [$designerId]));
+    $cases = $st->fetchAll();
+    if (empty($cases)) return 0;
+
+    $now = date('Y-m-d H:i:s');
+    $ins = db()->prepare('INSERT INTO designer_invoice_items (invoice_id, case_id, doctor_id, doctor_name, service_id, service_title, patient_name, quantity, unit_design_fee, total_amount, received_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $mark = db()->prepare('UPDATE cases SET designer_invoice_id = ? WHERE id = ?');
+
+    $added = 0;
+    $addedTotal = 0.0;
+    foreach ($cases as $c) {
+        $unitFee = getApplicableDesignFee($designerId, (int) ($c['service_id'] ?? 0));
+        if ($unitFee === null) $unitFee = 0.0;
+        $qty = (int) ($c['quantity'] ?? 1);
+        $amt = round($unitFee * $qty);
+        $ins->execute([
+            $invoiceId,
+            $c['id'],
+            $c['doctor_id'] ?? null,
+            $c['doctor_name'] ?? null,
+            $c['service_id'] ?? null,
+            $c['service_title'] ?? null,
+            $c['patient_name'] ?? null,
+            $qty,
+            $unitFee,
+            $amt,
+            $c['received_date'] ?? null,
+            $now,
+        ]);
+        $mark->execute([$invoiceId, $c['id']]);
+        $addedTotal += $amt;
+        $added++;
+    }
+
+    if ($added > 0) {
+        db()->prepare('UPDATE designer_invoices SET total_amount = total_amount + ? WHERE id = ?')->execute([round($addedTotal), $invoiceId]);
+    }
+    return $added;
+}
+
 // =====================================================
 // Clinic Invoice Helpers
 // =====================================================
@@ -1826,12 +2058,18 @@ function priceLinkOutsourceSqlExpr(string $labCol, string $svcCol, string $payer
 }
 
 /**
- * Get the outsourcing rate for a lab+service (what we pay the lab).
+ * Get the outsourcing rate for a lab+service (what the PAYER branch pays the lab).
  * Phase 3: when USE_PRICE_LINKS is on, price_links is authoritative first
  * (direct lab-provider link, then branch-provider link for the lab's own branch);
  * falls back to the legacy outsource_rates table.
+ *
+ * $receiverBranchId = the branch that PAYS (the case-owning branch).
+ * وقتی از دیدِ «شعبهٔ انجام‌دهنده» نگاه می‌کنیم (مثلاً شعبهٔ مرکزی که خودش
+ * لابراتوار است و کیسِ شعبهٔ دیگر به آن برون‌سپاری شده)، باید شعبهٔ مالکِ کیس
+ * پاس داده شود؛ وگرنه نرخ پیدا نمی‌شود و مبلغ صفر نمایش داده می‌شود.
+ * When null, the current user's branch is used (the payer's own perspective).
  */
-function getOutsourceRate(int $labId, int $serviceId): ?float {
+function getOutsourceRate(int $labId, int $serviceId, ?int $receiverBranchId = null): ?float {
     if (defined('USE_PRICE_LINKS') && USE_PRICE_LINKS && $serviceId > 0) {
         // 1) direct lab-provider link: گیرنده باید یک شعبه (پرداخت‌کننده) باشد
         $stmt = db()->prepare("SELECT price FROM price_links WHERE active = 1 AND price_type IN ('outsource','specific') AND provider_type = 'lab' AND provider_id = ? AND service_id = ? AND receiver_type = 'branch' ORDER BY id DESC LIMIT 1");
@@ -1840,12 +2078,12 @@ function getOutsourceRate(int $labId, int $serviceId): ?float {
         if ($val !== false && $val !== null) return (float) $val;
 
         // 2) branch-provider link: the lab's own branch provides the work;
-        //    receiver must be a branch (the payer). When scoped → the current branch.
+        //    receiver must be a branch (the payer). When scoped → the payer branch.
         $pb = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
         $pb->execute([$labId]);
         $labBranch = $pb->fetchColumn();
         if ($labBranch !== false && $labBranch !== null) {
-            $bid = currentBranchId();
+            $bid = $receiverBranchId ?? currentBranchId();
             if ($bid !== null) {
                 $stmt = db()->prepare("SELECT price FROM price_links WHERE active = 1 AND price_type IN ('outsource','specific') AND provider_type = 'branch' AND provider_id = ? AND service_id = ? AND receiver_type = 'branch' AND receiver_id = ? ORDER BY id DESC LIMIT 1");
                 $stmt->execute([(int) $labBranch, $serviceId, $bid]);
@@ -1858,7 +2096,7 @@ function getOutsourceRate(int $labId, int $serviceId): ?float {
         }
     }
 
-    $bid = currentBranchId();
+    $bid = $receiverBranchId ?? currentBranchId();
     if ($bid === null) {
         $stmt = db()->prepare('SELECT rate FROM outsource_rates WHERE lab_id = ? AND service_id = ?');
         $stmt->execute([$labId, $serviceId]);
@@ -2197,7 +2435,10 @@ function getInboundReceivableAmount(array $case): float {
     $qty = $isLabOut ? (int) ($case['quantity'] ?? 1) : (int) ($case['outsourced_qty'] ?? 0);
     $svcId = $isLabOut ? (int) ($case['service_id'] ?? 0) : (int) ($case['outsourced_service_id'] ?? 0);
     $labId = $isLabOut ? (int) ($case['lab_id'] ?? 0) : (int) ($case['outsourced_lab_id'] ?? 0);
-    $rate = $case['outsourced_rate'] !== null ? (float) $case['outsourced_rate'] : getOutsourceRate($labId, $svcId);
+    // پرداخت‌کننده = شعبهٔ مالکِ کیس (نه شعبهٔ بیننده). بدون این، وقتی بیننده خودِ
+    // شعبهٔ انجام‌دهنده (لابراتوار) باشد نرخ پیدا نمی‌شد و مبلغ صفر نمایش داده می‌شد.
+    $payerBranch = (int) ($case['branch_id'] ?? 0);
+    $rate = $case['outsourced_rate'] !== null ? (float) $case['outsourced_rate'] : getOutsourceRate($labId, $svcId, $payerBranch > 0 ? $payerBranch : null);
     if ($rate === null) $rate = 0.0;
     return round($rate * $qty);
 }
@@ -2235,7 +2476,9 @@ function getUninvoicedInboundPartnerCases(?int $partnerBranchId, string $startDa
         $svcId = $isLabOut ? (int) ($c['service_id'] ?? 0) : (int) ($c['outsourced_service_id'] ?? 0);
         $svcTitle = $isLabOut ? ($c['service_title'] ?? null) : ($c['outsourced_service_title'] ?? $c['service_title'] ?? null);
         $labId = $isLabOut ? (int) ($c['lab_id'] ?? 0) : (int) ($c['outsourced_lab_id'] ?? 0);
-        $rate = $c['outsourced_rate'] !== null ? (float) $c['outsourced_rate'] : getOutsourceRate($labId, $svcId);
+        // نرخ از دید شعبهٔ پرداخت‌کننده (= مالکِ کیس) محاسبه می‌شود.
+        $payerBranch = (int) ($c['branch_id'] ?? 0);
+        $rate = $c['outsourced_rate'] !== null ? (float) $c['outsourced_rate'] : getOutsourceRate($labId, $svcId, $payerBranch > 0 ? $payerBranch : null);
         $c['unit_rate'] = $rate;
         $c['_bill_qty'] = $qty;
         $c['_bill_service_id'] = $svcId;

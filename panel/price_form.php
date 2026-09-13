@@ -48,6 +48,13 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
             <label for="display_order">ترتیب نمایش (عدد کوچکتر یعنی جلوتر)</label>
             <input type="number" id="display_order" name="display_order" value="<?= isset($price['display_order']) ? (int)$price['display_order'] : 0 ?>">
         </div>
+        <div class="form-group">
+            <label for="hide_on_site">نمایش در سایت اصلی (لیست قیمت)</label>
+            <select id="hide_on_site" name="hide_on_site">
+                <option value="0" <?= empty($price['hide_on_site']) ? 'selected' : '' ?>>نمایش داده شود</option>
+                <option value="1" <?= !empty($price['hide_on_site']) ? 'selected' : '' ?>>نمایش داده نشود (فقط داخلی)</option>
+            </select>
+        </div>
         <button type="submit"><?= $editing ? 'بروزرسانی' : 'ذخیره' ?></button>
     </form>
 </div>

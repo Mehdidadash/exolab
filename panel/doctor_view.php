@@ -320,7 +320,7 @@ if ($canViewGallery):
                 <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
                         <strong><?= htmlspecialchars($comment['user_name'] ?? 'کاربر') ?></strong>
-                        <span style="font-size:0.8rem; color:#6b7280;"><?= toJalaliDateFormatted($comment['created_at']) ?></span>
+                        <span style="font-size:0.8rem; color:#6b7280;"><?= toJalaliDateTimeFormatted($comment['created_at']) ?></span>
                     </div>
                     <div style="white-space:pre-wrap; line-height:1.8;"><?= htmlspecialchars($comment['message']) ?></div>
                     <?php if ((int) $comment['user_id'] === (int) $user['id'] || has_role('admin')): ?>

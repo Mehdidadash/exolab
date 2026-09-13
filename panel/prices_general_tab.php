@@ -26,6 +26,7 @@ $prices = getAllPrices();
         <th class="th-price">قیمت (تومان)</th>
         <th class="th-narrow">ترتیب</th>
         <th class="th-narrow">فعال</th>
+        <th class="th-narrow" title="تیک = نمایش در سایت اصلی">سایت</th>
         <th class="th-narrow">عملیات</th>
     </tr>
     </thead>
@@ -38,6 +39,7 @@ $prices = getAllPrices();
             <td><input type="number" class="ed-price" value="<?= htmlspecialchars(formatTomanInput($price['price'])) ?>" min="0" step="1" style="width:170px; font-weight:bold;"></td>
             <td><input type="number" class="ed-order" value="<?= isset($price['display_order']) ? (int)$price['display_order'] : 0 ?>" min="0" step="1" style="width:56px;"></td>
             <td style="text-align:center;"><input type="checkbox" class="ed-active" <?= $price['active'] ? 'checked' : '' ?> style="width:auto;"></td>
+            <td style="text-align:center;"><input type="checkbox" class="ed-hideonsite" <?= empty($price['hide_on_site']) ? 'checked' : '' ?> style="width:auto;" title="تیک = در سایت اصلی نمایش داده شود"></td>
             <td class="actions" style="white-space:nowrap;">
                 <button type="button" class="btn save-price-row" style="background:#06B6D4; color:#fff; padding:3px 8px; font-size:0.85rem;">ذخیره</button>
                 <button type="button" class="btn delete-price-row" style="background:#fee2e2; color:#991b1b; padding:3px 8px; font-size:0.85rem;">حذف</button>
@@ -70,6 +72,8 @@ $prices = getAllPrices();
         data.set('price', tr.querySelector('.ed-price').value.trim());
         data.set('display_order', tr.querySelector('.ed-order').value.trim() || '0');
         data.set('active', tr.querySelector('.ed-active').checked ? '1' : '0');
+        var hs = tr.querySelector('.ed-hideonsite');
+        data.set('hide_on_site', (hs && hs.checked) ? '0' : '1');
         data.set('description', tr.querySelector('.ed-desc').value);
         data.set('_csrf_token', csrf);
         fetch('save_price.php', {

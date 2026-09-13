@@ -92,9 +92,16 @@ foreach ($caseIds as $cid) {
     }
 
     try {
+        $oldSt = db()->prepare('SELECT status_id FROM cases WHERE id = ?');
+        $oldSt->execute([$cid]);
+        $oldStatusId = (int) $oldSt->fetchColumn();
+
         $stmt = db()->prepare('UPDATE cases SET status_id = ?, updated_at = NOW() WHERE id = ?');
         $stmt->execute([$statusId, $cid]);
         $updated++;
+
+        // اعلان فقط برای وضعیت‌های «خارج از ترتیب» (sort_order > 30)
+        notifyCaseStatusChangeParticipants($cid, (int) $user['id'], $statusId, $oldStatusId ?: null);
     } catch (\Throwable $e) {
         $errors[] = "خطا در بروزرسانی کیس #{$cid}";
         error_log("batch_update_status: error updating case $cid: " . $e->getMessage());

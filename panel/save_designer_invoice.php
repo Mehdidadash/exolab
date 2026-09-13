@@ -38,5 +38,12 @@ foreach (($_POST['items'] ?? []) as $k => $r) {
 }
 
 saveDesignerInvoiceEdit($id, $invoiceDate, $periodLabel, $notes, $rows);
+
+// افزودن کیس‌های انتخاب‌شده به فاکتور (در صورت وجود)
+$addCaseIds = array_values(array_filter(array_map('intval', (array) ($_POST['add_case_ids'] ?? []))));
+if (!empty($addCaseIds)) {
+    addCasesToDesignerInvoice($id, $addCaseIds);
+}
+
 audit_log_save('designer_invoice', $id, 'فاکتور طراحی');
 header('Location: designer_invoice_form.php?id=' . $id . '&ok=1');

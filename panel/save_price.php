@@ -20,6 +20,8 @@ $description = trim($_POST['description'] ?? '');
 $price = trim($_POST['price'] ?? '');
 $category = trim($_POST['category'] ?? '');
 $active = isset($_POST['active']) && $_POST['active'] === '1' ? 1 : 0;
+$hideOnSiteProvided = array_key_exists('hide_on_site', $_POST);
+$hideOnSite = $hideOnSiteProvided ? ((isset($_POST['hide_on_site']) && $_POST['hide_on_site'] === '1') ? 1 : 0) : 0;
 $display_order = isset($_POST['display_order']) ? (int) $_POST['display_order'] : 0;
 
 if ($title === '' || $price === '') {
@@ -34,11 +36,11 @@ if ($title === '' || $price === '') {
 }
 
 if (!empty($_POST['id'])) {
-    $stmt = db()->prepare('UPDATE site_prices SET title = ?, description = ?, price = ?, category = ?, active = ?, display_order = ? WHERE id = ?');
-    $stmt->execute([$title, $description, $price, $category, $active, $display_order, (int) $_POST['id']]);
+    $stmt = db()->prepare('UPDATE site_prices SET title = ?, description = ?, price = ?, category = ?, active = ?, display_order = ?, hide_on_site = COALESCE(?, hide_on_site) WHERE id = ?');
+    $stmt->execute([$title, $description, $price, $category, $active, $display_order, ($hideOnSiteProvided ? $hideOnSite : null), (int) $_POST['id']]);
 } else {
-    $stmt = db()->prepare('INSERT INTO site_prices (title, description, price, category, active, display_order) VALUES (?, ?, ?, ?, ?, ?)');
-    $stmt->execute([$title, $description, $price, $category, $active, $display_order]);
+    $stmt = db()->prepare('INSERT INTO site_prices (title, description, price, category, active, display_order, hide_on_site) VALUES (?, ?, ?, ?, ?, ?, ?)');
+    $stmt->execute([$title, $description, $price, $category, $active, $display_order, $hideOnSite]);
 }
 
 $savedId = !empty($_POST['id']) ? (int) $_POST['id'] : (int) db()->lastInsertId();

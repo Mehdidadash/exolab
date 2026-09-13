@@ -320,6 +320,66 @@ function toJalaliDateFormatted($gregorianDate) {
 }
 
 /**
+ * تاریخ شمسی با ارقام لاتین و خط تیره برای نام فایل (مثلاً: 1405-06-20).
+ */
+function jalaliDateForFilename($gregorianDate): string {
+    if (empty($gregorianDate)) return '';
+    try {
+        $date = new DateTime($gregorianDate);
+        return \Morilog\Jalali\Jalalian::fromDateTime($date)->format('Y-m-d');
+    } catch (\Throwable $e) {
+        return (string) $gregorianDate;
+    }
+}
+
+/**
+ * رنگ‌های استاندارد سایه (VITA/Bleach). فقط همین‌ها در فرم کیس قابل انتخاب‌اند؛
+ * سایه‌های غیراستاندارد (مثل نوریتاکه NW0/NW0.5) باید در «توضیحات» نوشته شوند.
+ */
+function caseShadeOptions(): array {
+    return [
+        'A1'   => '#d7cdc1', 'A2'   => '#d5c8b8', 'A3'   => '#d1bea9',
+        'A3.5' => '#ccb499', 'A4'   => '#c7aa89',
+        'B1'   => '#dad4c3', 'B2'   => '#d8d1ba', 'B3'   => '#cec29c', 'B4' => '#cebf92',
+        'C1'   => '#cac5be', 'C2'   => '#c9c3ba', 'C3'   => '#b9afa2', 'C4' => '#b4a897',
+        'D2'   => '#d1c5bd', 'D3'   => '#c8b8ac', 'D4'   => '#cdbdb1',
+        '0M1'  => '#e8e6e3', '0M2'  => '#e1dfdb', '0M3'  => '#dbd8d1', '0M4' => '#d8d2ca',
+        'BL1'  => '#f0f0ef', 'BL2'  => '#eae9e6', 'BL3'  => '#e3e1de', 'BL4' => '#dddad5',
+    ];
+}
+
+/** رنگ مربوط به یک کد سایه (یا رشتهٔ خالی اگر استاندارد نباشد). */
+function caseShadeColor(?string $code): string {
+    if ($code === null || trim($code) === '') return '';
+    $opts = caseShadeOptions();
+    return $opts[strtoupper(trim($code))] ?? '';
+}
+
+/**
+ * گروه‌های رنگ سایه — هر گروه یک ردیف جداگانه در فرم (A / B / C / D / 0M / BL).
+ */
+function caseShadeGroups(): array {
+    $all = caseShadeOptions();
+    $order = [
+        'A'  => ['A1', 'A2', 'A3', 'A3.5', 'A4'],
+        'B'  => ['B1', 'B2', 'B3', 'B4'],
+        'C'  => ['C1', 'C2', 'C3', 'C4'],
+        'D'  => ['D2', 'D3', 'D4'],
+        '0M' => ['0M1', '0M2', '0M3', '0M4'],
+        'BL' => ['BL1', 'BL2', 'BL3', 'BL4'],
+    ];
+    $groups = [];
+    foreach ($order as $name => $codes) {
+        $row = [];
+        foreach ($codes as $c) {
+            if (isset($all[$c])) $row[$c] = $all[$c];
+        }
+        if ($row) $groups[$name] = $row;
+    }
+    return $groups;
+}
+
+/**
  * Human-readable file size (e.g. "۱.۲ مگابایت").
  */
 function formatFileSize($bytes): string {

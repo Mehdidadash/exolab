@@ -37,32 +37,7 @@ if ($itemsRowsHtml === '') {
 }
 
 // ---- تعداد هر خدمت به تفکیک (خلاصه زیر فاکتور) ----
-$serviceSummary = [];
-foreach ($items as $item) {
-    $svc = $item['service_title'] ?: '—';
-    $qty = (int) ($item['quantity'] ?? 0);
-    if (!isset($serviceSummary[$svc])) {
-        $serviceSummary[$svc] = ['title' => $svc, 'qty' => 0];
-    }
-    $serviceSummary[$svc]['qty'] += $qty;
-}
-usort($serviceSummary, function ($a, $b) { return $b['qty'] <=> $a['qty']; });
-
-$serviceSummaryHtml = '';
-if (!empty($serviceSummary)) {
-    $serviceSummaryHtml .= '<div class="section">'
-        . '<div class="section-title">تعداد خدمات به تفکیک</div>'
-        . '<table>'
-        . '<thead><tr><th>خدمت</th><th>تعداد</th></tr></thead>'
-        . '<tbody>';
-    foreach ($serviceSummary as $s) {
-        $serviceSummaryHtml .= '<tr>'
-            . '<td>' . htmlspecialchars($s['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>'
-            . '<td>' . toPersianDigits(number_format($s['qty'], 0)) . '</td>'
-            . '</tr>';
-    }
-    $serviceSummaryHtml .= '</tbody></table></div>';
-}
+$serviceSummaryHtml = invoiceServiceSummaryHtml($items);
 
 // ─── Header info ───
 $invoiceNumber = htmlspecialchars($invoice['invoice_number'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');

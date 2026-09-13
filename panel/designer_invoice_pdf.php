@@ -39,41 +39,15 @@ foreach ($items as $item) {
         '<td>' . htmlspecialchars($item['doctor_name'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($item['service_title'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . toPersianDigits((int) $item['quantity']) . '</td>' .
-        '<td>' . formatAmountToman((float) $item['unit_design_fee']) . '</td>' .
         '<td>' . formatAmountToman($amount) . '</td>' .
         '</tr>';
 }
 if ($itemsRowsHtml === '') {
-    $itemsRowsHtml = '<tr><td colspan="6">بدون آیتم</td></tr>';
+    $itemsRowsHtml = '<tr><td colspan="5">بدون آیتم</td></tr>';
 }
 
-// ---- تعداد هر خدمت به تفکیک (خلاصه زیر فاکتور) ----
-$serviceSummary = [];
-foreach ($items as $item) {
-    $svc = $item['service_title'] ?: '—';
-    $qty = (int) ($item['quantity'] ?? 0);
-    if (!isset($serviceSummary[$svc])) {
-        $serviceSummary[$svc] = ['title' => $svc, 'qty' => 0];
-    }
-    $serviceSummary[$svc]['qty'] += $qty;
-}
-usort($serviceSummary, function ($a, $b) { return $b['qty'] <=> $a['qty']; });
-
-$serviceSummaryHtml = '';
-if (!empty($serviceSummary)) {
-    $serviceSummaryHtml .= '<div class="section">'
-        . '<div class="section-title">تعداد خدمات به تفکیک</div>'
-        . '<table>'
-        . '<thead><tr><th>خدمت</th><th>تعداد</th></tr></thead>'
-        . '<tbody>';
-    foreach ($serviceSummary as $s) {
-        $serviceSummaryHtml .= '<tr>'
-            . '<td>' . htmlspecialchars($s['title'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>'
-            . '<td>' . toPersianDigits(number_format($s['qty'], 0)) . '</td>'
-            . '</tr>';
-    }
-    $serviceSummaryHtml .= '</tbody></table></div>';
-}
+// ---- تعداد هر خدمت به تفکیک (خلاصه زیر فاکتور) — تخفیف‌ها به‌صورت یک ردیفِ جمع ----
+$serviceSummaryHtml = invoiceServiceSummaryHtml($items);
 
 // ─── Header info ───
 $invoiceNumber = htmlspecialchars($invoice['invoice_number'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -183,14 +157,13 @@ $html = <<<HTML
                     <th>پزشک</th>
                     <th>خدمت</th>
                     <th>تعداد</th>
-                    <th>فی طراحی (تومان)</th>
                     <th>جمع (تومان)</th>
                 </tr>
             </thead>
             <tbody>
                 {$itemsRowsHtml}
                 <tr class="total-row">
-                    <td colspan="5">مبلغ کل</td>
+                    <td colspan="4">مبلغ کل</td>
                     <td>{$invoiceTotal} تومان</td>
                 </tr>
             </tbody>

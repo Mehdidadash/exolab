@@ -15,6 +15,12 @@ $invoiceDate = toJalaliDateFormatted($invoice['invoice_date'] ?? date('Y-m-d'));
 $periodLabel = (string) ($invoice['period_label'] ?? '');
 $notes = (string) ($invoice['notes'] ?? '');
 
+// کیس‌های بدون فاکتورِ این طراح که می‌توان به این فاکتور اضافه کرد.
+$designerId = (int) ($invoice['designer_id'] ?? 0);
+$payerBranch = currentBranchId();
+if ($payerBranch === null) $payerBranch = 1; // مدیر کل = شعبهٔ مرکزی
+$addableCases = getUninvoicedCasesForDesignerAll($designerId, $payerBranch);
+
 panel_layout_start('ویرایش فاکتور طراحی');
 ?>
 <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
@@ -91,6 +97,20 @@ panel_layout_start('ویرایش فاکتور طراحی');
             <?php endforeach; ?>
             </tbody>
         </table>
+        <?php endif; ?>
+
+        <h4 style="margin:22px 0 10px;">افزودن کیس به این فاکتور</h4>
+        <?php if (empty($addableCases)): ?>
+            <p class="empty">کیسِ بدون فاکتوری برای این طراح وجود ندارد.</p>
+        <?php else: ?>
+            <p style="color:#6b7280; font-size:0.85rem; margin:0 0 6px;">کیس‌های دارای طراحی و بدون فاکتور را انتخاب کن (با نگه‌داشتن Ctrl چندتا). با ذخیره، به همین فاکتور اضافه می‌شوند.</p>
+            <select name="add_case_ids[]" multiple size="8" style="width:100%; min-height:170px; padding:6px; border:1px solid #d1d5db; border-radius:6px;">
+                <?php foreach ($addableCases as $c): ?>
+                    <option value="<?= (int) $c['id'] ?>">
+                        #<?= (int) $c['id'] ?> — <?= htmlspecialchars($c['patient_name'] ?? '—') ?> — <?= htmlspecialchars($c['service_title'] ?? '—') ?> — پزشک: <?= htmlspecialchars($c['doctor_name'] ?? '—') ?> — تعداد <?= toPersianDigits((int) ($c['quantity'] ?? 1)) ?> — فی طراحی <?= formatAmountToman((float) ($c['unit_design_fee'] ?? 0)) ?> تومان
+                    </option>
+                <?php endforeach; ?>
+            </select>
         <?php endif; ?>
 
         <div style="margin-top:18px; display:flex; gap:12px; align-items:center;">

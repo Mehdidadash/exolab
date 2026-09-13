@@ -22,7 +22,7 @@ if (empty($caseIds)) {
 $ph = implode(',', array_fill(0, count($caseIds), '?'));
 // فقط فایل‌هایی که توسط طراحِ (فعلی) همان کیس آپلود شده‌اند
 $stmt = db()->prepare("
-    SELECT cf.case_id, cf.filename, cf.original_name
+    SELECT cf.case_id, cf.filename, cf.original_name, c.received_date, cf.created_at AS file_created
     FROM case_files cf
     JOIN cases c ON c.id = cf.case_id
     WHERE cf.case_id IN ($ph)
@@ -44,7 +44,7 @@ if (empty($rows)) {
     exit;
 }
 
-$zipName = 'designs_' . date('Ymd_His') . '.zip';
+$zipName = 'design_' . jalaliDateForFilename(date('Y-m-d')) . '.zip';
 $outPath = __DIR__ . '/../storage/' . $zipName;
 $zip = new ZipArchive();
 if ($zip->open($outPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
@@ -57,8 +57,10 @@ $used = [];
 foreach ($rows as $r) {
     $filePath = resolve_upload_path('cases/' . $r['case_id'] . '/' . $r['filename']);
     if (!file_exists($filePath)) continue;
-    // نام داخل زیپ: case_{id}/original_name (در صورت تکرار، _1، _2 و...)
-    $entryBase = 'case_' . $r['case_id'] . '/' . $r['original_name'];
+    // نام داخل زیپ: design_<تاریخ دریافت>.ext (در صورت تکرار: design_<تاریخ>_2.ext)
+    $dateStr = jalaliDateForFilename($r['received_date'] ?: ($r['file_created'] ?? date('Y-m-d')));
+    $fe = pathinfo($r['original_name'], PATHINFO_EXTENSION);
+    $entryBase = 'case_' . $r['case_id'] . '/design_' . $dateStr . ($fe !== '' ? '.' . $fe : '');
     $entry = $entryBase;
     $i = 1;
     while (isset($used[$entry])) {

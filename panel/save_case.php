@@ -137,11 +137,39 @@ if (!$editingCase && $currentUser['role'] === 'doctor') {
     }
 }
 
+// ─── اطلاعات کیسِ فعلی (برای ویرایش) ───
+// در ویرایش، بعضی مقادیر ممکن است در فرمِ ویرایش‌کننده قابل انتخاب نباشند (لیست پزشک،
+// لابراتوار و طراح بر اساس شعبه/فعال‌بودن فیلتر می‌شوند). برای اینکه داده‌ی کیس
+// ناخواسته پاک نشود، مقدار فعلیِ کیس را این‌جا داریم.
+$existingCaseRow = null;
+if ($id) {
+    $exRow = db()->prepare('SELECT doctor_id, service_id, lab_id, case_type, branch_id, source_branch_id FROM cases WHERE id = ?');
+    $exRow->execute([$id]);
+    $existingCaseRow = $exRow->fetch() ?: null;
+}
+
+// اگر فرم، لابراتوارِ کیس را همراه نداشت (گزینه در لیستِ فیلترشده نبود) ولی نوع کیس
+// هنوز لابراتواری است، لابراتوارِ قبلی حفظ می‌شود. (پاک شدن lab_id باعث می‌شد کیس از
+// لیست شعبهٔ شریک ناپدید شود — گزارش‌شده روی هاست.)
+if ($existingCaseRow
+    && empty($lab_id)
+    && !empty($existingCaseRow['lab_id'])
+    && in_array($case_type, ['lab_in', 'lab_out'], true)
+    && (string) ($existingCaseRow['case_type'] ?? '') === (string) $case_type) {
+    $lab_id = (int) $existingCaseRow['lab_id'];
+}
+
 // ─── Branch assignment ───
 // branch_id = the branch that OWNS the case (whose books it is in).
 // source_branch_id = the partner branch that sent us the work (lab_in) or
 //                    that we're outsourcing to (lab_out / side outsourcing).
-$branch_id = currentBranchId() ?? 1;   // root admin defaults to main branch (1)
+// در ویرایش، مالکِ کیس همان شعبه‌ای است که کیس به آن تعلق دارد (نه شعبهٔ ویرایش‌کننده).
+// بدون این، ویرایشِ کیسِ بین‌شعبه‌ای (مثلاً مدیر شعبهٔ مرکزی روی کیسِ قزوین) باعث
+// NULL شدنِ source_branch_id می‌شد و کیس از لیستِ شعبهٔ شریک ناپدید می‌گشت
+// (باگِ گزارش‌شده روی هاست، بدون هیچ خطا).
+$caseOwnerBranch = $existingCaseRow ? (int) ($existingCaseRow['branch_id'] ?? 0) : 0;
+$editorBranch = currentBranchId() ?? 1;   // root admin defaults to main branch (1)
+$branch_id = $caseOwnerBranch > 0 ? $caseOwnerBranch : $editorBranch;
 $source_branch_id = null;
 
 if ($lab_id) {
@@ -167,15 +195,24 @@ if ($lab_id) {
     }
 }
 
-// A branch-scoped user cannot create a case owned by another branch.
-if (is_branch_scoped() && $branch_id !== currentBranchId()) {
+// A branch-scoped user cannot CREATE a case owned by another branch.
+if (!$id && is_branch_scoped() && $branch_id !== currentBranchId()) {
     $branch_id = currentBranchId();
+}
+
+// ویرایشگرِ کیسِ بین‌شعبه‌ای مالکِ کیس نیست؛ اگر با محاسبهٔ بالا هم پیوندِ شعبهٔ همکار
+// به‌دست نیامد، مقدار ثبت‌شدهٔ قبلی حفظ می‌شود تا کیس از لیستِ شعبهٔ شریک حذف نشود.
+$isCrossBranchEdit = (bool) ($id && $caseOwnerBranch > 0 && $caseOwnerBranch !== $editorBranch);
+if ($isCrossBranchEdit && $source_branch_id === null && ($existingCaseRow['source_branch_id'] ?? null) !== null) {
+    $source_branch_id = (int) $existingCaseRow['source_branch_id'];
 }
 
 // ─── جلوگیری از برون‌سپاری به لابراتوارِ خودِ شعبه ───
 // (یک شعبه نه به خودش می‌تواند کار بدهد نه از خودش بگیرد)
-$effBranchGuard = currentBranchId();
-if ($effBranchGuard === null && function_exists('is_root_admin') && is_root_admin()) {
+// این قاعده مربوط به «شعبهٔ مالکِ کیس» است؛ ویرایشگرِ کیسِ بین‌شعبه‌ای (مثلاً
+// لابراتوارِ مقصد که مالک کیس نیست) نباید با این محدودیت متوقف شود.
+$effBranchGuard = $isCrossBranchEdit ? null : $editorBranch;
+if (!$isCrossBranchEdit && currentBranchId() === null && function_exists('is_root_admin') && is_root_admin()) {
     $effBranchGuard = 1; // مدیر کل = شعبهٔ مرکزی
 }
 if ($effBranchGuard !== null) {
@@ -206,6 +243,26 @@ if ($effBranchGuard !== null) {
     }
 }
 
+// ─── اعتبارسنجی کلیدهای خارجی (پزشک / خدمت) ───
+// ممکن است فرمِ ویرایش، پزشکِ کیس را در لیستِ خود نداشته باشد (لیست پزشکان بر اساس
+// شعبه و دسترسی فیلتر می‌شود و کیس‌های بین‌شعبه‌ای هم وجود دارند). در این حالت مقدار
+// خالی ارسال می‌شود و چون ستون NOT NULL است، MySQL مقدارِ ضمنی صفر را می‌گذارد و
+// ذخیره‌سازی با خطای نامفهومِ کلید خارجی شکست می‌خورد (1452 fk_cases_doctor).
+// راه‌حل: مقدار خالی/نامعتبر → حفظ مقدار قبلیِ همان کیس (در ویرایش).
+$idExistsIn = function (string $table, $value): bool {
+    if (empty($value)) return false;
+    $st = db()->prepare('SELECT 1 FROM ' . $table . ' WHERE id = ? LIMIT 1');
+    $st->execute([(int) $value]);
+    return (bool) $st->fetchColumn();
+};
+
+if (!$idExistsIn('users', $doctor_id)) {
+    $doctor_id = ($existingCaseRow && !empty($existingCaseRow['doctor_id'])) ? (int) $existingCaseRow['doctor_id'] : null;
+}
+if (!$idExistsIn('site_prices', $service_id)) {
+    $service_id = ($existingCaseRow && !empty($existingCaseRow['service_id'])) ? (int) $existingCaseRow['service_id'] : null;
+}
+
 if (empty($patient_name)) {
     http_response_code(400);
     header('Content-Type: application/json; charset=utf-8');
@@ -213,6 +270,28 @@ if (empty($patient_name)) {
         'success' => false,
         'error' => 'validation',
         'message' => 'نام بیمار الزامی است'
+    ]);
+    exit;
+}
+
+if ($doctor_id === null) {
+    http_response_code(400);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'success' => false,
+        'error' => 'validation',
+        'message' => 'انتخاب پزشک الزامی است.'
+    ]);
+    exit;
+}
+
+if ($service_id === null) {
+    http_response_code(400);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode([
+        'success' => false,
+        'error' => 'validation',
+        'message' => 'انتخاب خدمت الزامی است.'
     ]);
     exit;
 }

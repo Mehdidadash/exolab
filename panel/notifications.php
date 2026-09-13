@@ -44,7 +44,7 @@ panel_layout_start('نوتیفیکیشن‌ها');
                 <?php if ($n['message']): ?>
                     <p style="margin:4px 0 0; color:#555; font-size:0.9rem;"><?= htmlspecialchars($n['message']) ?></p>
                 <?php endif; ?>
-                <small style="color:#999;"><?= toJalaliDateFormatted($n['created_at']) ?></small>
+                <small style="color:#999;"><?= toJalaliDateTimeFormatted($n['created_at']) ?></small>
             </div>
             <div style="display:flex; gap:6px;">
                 <?php if ($n['case_id']): ?>

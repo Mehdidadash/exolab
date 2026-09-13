@@ -90,16 +90,45 @@ if ($id) {
     }
 }
 
-$statuses = db()->query('SELECT * FROM case_statuses ORDER BY name ASC')->fetchAll();
+$statuses = getAllCaseStatuses();
 $designers = getAllDesigners();
+// طراحِ همین کیس ممکن است غیرفعال یا از شعبه‌ای دیگر باشد و در لیستِ فرم نباشد؛
+// در آن صورت گزینه‌اش را اضافه می‌کنیم تا هنگام ویرایش، طراحِ کیس از دست نرود.
+$caseDesignerId = (int) ($case['designer_id'] ?? 0);
+$caseDesignerInList = false;
+foreach ($designers as $d) {
+    if ((int) $d['id'] === $caseDesignerId) { $caseDesignerInList = true; break; }
+}
+if ($caseDesignerId && !$caseDesignerInList) {
+    $ddStmt = db()->prepare('SELECT id, full_name, is_default_designer FROM users WHERE id = ? LIMIT 1');
+    $ddStmt->execute([$caseDesignerId]);
+    $ddRow = $ddStmt->fetch();
+    if ($ddRow) { array_unshift($designers, $ddRow); }
+}
 $labs = getAllLabs();
 // لیست لابراتوارهای «مقصدِ برون‌سپاری» بدون لابراتوارِ خودِ شعبه (مقصد برای کیسِ فعلی)
 $editLabs    = getOutsourceLabOptions((int) ($case['lab_id'] ?? 0));
 $editOutLabs = getOutsourceLabOptions((int) ($case['outsourced_lab_id'] ?? 0));
 $doctors = getAllDoctors();
+// پزشکِ همین کیس ممکن است در لیستِ فیلترشدهٔ شعبه نباشد (کیس‌های بین‌شعبه‌ای).
+// در آن صورت گزینه‌اش را به لیست اضافه می‌کنیم تا در فرم ویرایش انتخابی وجود داشته باشد
+// و doctor_id خالی/نامعتبر ارسال نشود.
+$caseDoctorId = (int) ($case['doctor_id'] ?? 0);
+$caseDoctorInList = false;
+foreach ($doctors as $d) {
+    if ((int) $d['id'] === $caseDoctorId) { $caseDoctorInList = true; break; }
+}
+if ($caseDoctorId && !$caseDoctorInList) {
+    $dStmt = db()->prepare('SELECT id, full_name AS name FROM users WHERE id = ? LIMIT 1');
+    $dStmt->execute([$caseDoctorId]);
+    $dRow = $dStmt->fetch();
+    if ($dRow) { array_unshift($doctors, $dRow); }
+}
 $prices = getAllPrices();
 // Whether the current user may edit this case (admin / staff / secretary …)
 $canEditCase = has_role('admin') || has_role('branch_admin') || has_permission('edit_cases');
+// چه کسی می‌تواند متن کامنت/توضیح فایل را به یادداشت پزشک اضافه کند
+$canAppendNote = is_admin() || in_array($user['role'] ?? '', ['designer', 'technician'], true);
 
 panel_layout_start('مشاهده کیس');
 ?>
@@ -142,6 +171,7 @@ panel_layout_start('مشاهده کیس');
         // it is work received from a partner branch ("کار از لابراتوار همکار")
         // or work we outsourced to a partner branch ("برون‌سپاری").
         $myBranchId = currentBranchId();
+        if ($myBranchId === null && is_root_admin()) $myBranchId = 1;   // مدیر کل = شعبهٔ مرکزی
         $caseBranchId   = !empty($case['branch_id']) ? (int) $case['branch_id'] : 0;
         $caseSrcBranchId = !empty($case['source_branch_id']) ? (int) $case['source_branch_id'] : 0;
         $inboundPartner = $myBranchId !== null && $caseSrcBranchId === $myBranchId && $caseBranchId !== $myBranchId;
@@ -160,12 +190,15 @@ panel_layout_start('مشاهده کیس');
             $branchBadge = '<span class="badge" style="background:#dcfce7; color:#166534;">کار از لابراتوار همکار</span>';
             $branchLabel = 'شعبه/لابراتوار مبدا';
         }
-        // Fetch the partner branch name for display
+        // Fetch the partner branch name for display (طرفِ مقابل = شعبهٔ مالکِ کیس برای گیرنده، وگرنه شعبهٔ مقصد)
         $partnerBranchName = '';
-        if (($inboundPartner || $isLabInCross || $outboundPartner) && !empty($case['source_branch_id'])) {
-            $pb = db()->prepare('SELECT name FROM branches WHERE id = ?');
-            $pb->execute([(int) $case['source_branch_id']]);
-            $partnerBranchName = (string) $pb->fetchColumn();
+        if ($inboundPartner || $isLabInCross || $outboundPartner) {
+            $partnerBranchId = $inboundPartner ? $caseBranchId : $caseSrcBranchId;
+            if ($partnerBranchId > 0) {
+                $pb = db()->prepare('SELECT name FROM branches WHERE id = ?');
+                $pb->execute([$partnerBranchId]);
+                $partnerBranchName = (string) $pb->fetchColumn();
+            }
         }
 
         // پزشک‌ها همیشه کیس خود را «کیس دکتر» می‌بینند — جزئیات برون‌سپاری/همکار برایشان
@@ -256,7 +289,14 @@ panel_layout_start('مشاهده کیس');
             <?php endif; ?>
             <tr>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>سایه:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['shade'] ?? '—') ?></td>
+                <?php
+                $shCode = trim((string) ($case['shade'] ?? ''));
+                $shHex  = caseShadeColor($shCode);
+                // رنگ زمینهٔ همین سلول = رنگ استاندارد سایه (مثل جدول کیس‌ها)
+                $shCellStyle = 'padding:6px 8px; border-bottom:1px solid #eee;'
+                    . ($shHex !== '' ? ' background:' . $shHex . '; color:#1f2937; font-weight:700; box-shadow: inset 0 0 0 1px rgba(15,23,42,0.08);' : '');
+                ?>
+                <td style="<?= $shCellStyle ?>"><?= $shCode === '' ? '—' : htmlspecialchars($shCode) ?></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>تعداد:</strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= toPersianDigits((int)($case['quantity'] ?? 1)) ?></td>
             </tr>
@@ -268,7 +308,7 @@ panel_layout_start('مشاهده کیس');
             </tr>
             <?php if (!$isRestricted && !$isDesigner): ?>
             <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>لابراتوار:</strong></td>
+                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong><?= ($case['case_type'] ?? '') === 'lab_in' ? 'کار از لابراتوار:' : (($case['case_type'] ?? '') === 'lab_out' ? 'برون‌سپاری به لابراتوار:' : 'لابراتوار:') ?></strong></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['lab_name'] ?? '—') ?></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
                 <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
@@ -466,28 +506,96 @@ panel_layout_start('مشاهده کیس');
             <?php $caseComments = getEntityComments('case', $case['id']); ?>
             <?php if (!empty($caseComments)): ?>
                 <div style="display:flex; flex-direction:column; gap:10px;">
-                    <?php foreach ($caseComments as $comment): ?>
+                    <?php foreach ($caseComments as $comment):
+                        $likeData = getCommentLikeData((int) $comment['id'], (int) $user['id']);
+                        $canDelete = ((int) $comment['user_id'] === (int) $user['id'] || has_role('admin'));
+                        ?>
                         <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px;">
                             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
                                 <strong><?= htmlspecialchars($comment['user_name'] ?? 'کاربر') ?></strong>
-                                <span style="font-size:0.8rem; color:#6b7280;"><?= toJalaliDateFormatted($comment['created_at']) ?></span>
+                                <span style="font-size:0.8rem; color:#6b7280;"><?= toJalaliDateTimeFormatted($comment['created_at']) ?></span>
                             </div>
                             <div style="white-space:pre-wrap; line-height:1.8;"><?= htmlspecialchars($comment['message']) ?></div>
-                            <?php if ((int) $comment['user_id'] === (int) $user['id'] || has_role('admin')): ?>
-                                <form method="post" action="save_comment.php" style="margin-top:8px;">
-                                    <?= csrf_field() ?>
-                                    <input type="hidden" name="action" value="delete">
-                                    <input type="hidden" name="comment_id" value="<?= (int) $comment['id'] ?>">
-                                    <button type="submit" class="btn" style="background:#fee2e2; color:#991b1b; padding:4px 10px; font-size:0.8rem;">حذف</button>
-                                </form>
-                            <?php endif; ?>
+                            <div style="margin-top:8px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                <button type="button" class="btn js-comment-like"
+                                        data-comment="<?= (int) $comment['id'] ?>"
+                                        data-liked="<?= $likeData['liked'] ? '1' : '0' ?>"
+                                        style="background:<?= $likeData['liked'] ? '#fee2e2' : '#f3f4f6' ?>; color:<?= $likeData['liked'] ? '#b91c1c' : '#374151' ?>; padding:3px 10px; font-size:0.82rem;"
+                                        title="<?= $likeData['names'] ? htmlspecialchars(implode('، ', $likeData['names'])) : 'هنوز کسی لایک نکرده' ?>">
+                                    ❤️ <span class="like-count"><?= toPersianDigits((string) $likeData['count']) ?></span>
+                                </button>
+                                <span class="like-names" style="font-size:0.78rem; color:#6b7280;"><?= $likeData['names'] ? '❤️ ' . htmlspecialchars(implode('، ', $likeData['names'])) : '' ?></span>
+                                <?php if ($canDelete): ?>
+                                    <form method="post" action="save_comment.php" style="margin:0;">
+                                        <?= csrf_field() ?>
+                                        <input type="hidden" name="action" value="delete">
+                                        <input type="hidden" name="comment_id" value="<?= (int) $comment['id'] ?>">
+                                        <button type="submit" class="btn" style="background:#fee2e2; color:#991b1b; padding:4px 10px; font-size:0.8rem;">حذف</button>
+                                    </form>
+                                <?php endif; ?>
+                                <?php if ($canAppendNote): ?>
+                                    <button type="button" class="btn js-append-note" data-text="<?= htmlspecialchars($comment['message']) ?>" style="background:#eef2ff; color:#3730a3; padding:3px 10px; font-size:0.8rem;" title="افزودن این کامنت به یادداشت پزشک">➕ به یادداشت پزشک</button>
+                                <?php endif; ?>
+                            </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
+                <script>
+                (function(){
+                    var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+                    document.addEventListener('click', function(e){
+                        var btn = e.target.closest && e.target.closest('.js-comment-like');
+                        if (!btn) return;
+                        e.preventDefault();
+                        var id = btn.getAttribute('data-comment');
+                        var fd = new FormData();
+                        fd.append('comment_id', id);
+                        fd.append('_csrf_token', csrf);
+                        fetch('toggle_comment_like.php', { method:'POST', headers:{ 'X-CSRF-Token': csrf }, body: fd })
+                            .then(function(r){ return r.json().catch(function(){ return {success:false}; }); })
+                            .then(function(res){
+                                if (!res || !res.success) return;
+                                var cnt = btn.querySelector('.like-count');
+                                if (cnt) cnt.textContent = toPersianDigitsJs(res.count);
+                                btn.setAttribute('data-liked', res.liked ? '1' : '0');
+                                btn.style.background = res.liked ? '#fee2e2' : '#f3f4f6';
+                                btn.style.color = res.liked ? '#b91c1c' : '#374151';
+                                btn.title = (res.names && res.names.length) ? res.names.join('، ') : 'هنوز کسی لایک نکرده';
+                                var nm = btn.parentNode ? btn.parentNode.querySelector('.like-names') : null;
+                                if (nm) nm.textContent = (res.names && res.names.length) ? ('❤️ ' + res.names.join('، ')) : '';
+                            });
+                    });
+                    function toPersianDigitsJs(n){
+                        return String(n).replace(/[0-9]/g, function(d){ return '۰۱۲۳۴۵۶۷۸۹'[d]; });
+                    }
+                })();
+                </script>
             <?php else: ?>
                 <p class="empty">هنوز پیامی ثبت نشده است.</p>
             <?php endif; ?>
         </div>
+
+        <script>
+        (function(){
+            var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+            document.addEventListener('click', function(e){
+                var b = e.target.closest && e.target.closest('.js-append-note');
+                if (!b) return;
+                e.preventDefault();
+                var text = b.getAttribute('data-text') || '';
+                if (!text) { alert('متنی برای افزودن وجود ندارد.'); return; }
+                if (!confirm('این متن به یادداشت پزشک این کیس اضافه شود؟')) return;
+                var fd = new FormData();
+                fd.append('case_id', '<?= (int) $case['id'] ?>');
+                fd.append('text', text);
+                fd.append('_csrf_token', csrf);
+                fetch('append_doctor_note.php', { method:'POST', headers:{ 'X-CSRF-Token': csrf }, body: fd })
+                    .then(function(r){ return r.json().catch(function(){ return {success:false}; }); })
+                    .then(function(res){ alert(res && res.success ? '✅ به یادداشت پزشک اضافه شد.' : '❌ خطا در افزودن.'); })
+                    .catch(function(){ alert('❌ خطا در ارتباط با سرور.'); });
+            });
+        })();
+        </script>
 
         <div class="form-card" style="margin-top:20px;">
             <details id="case-activity-history" style="--bg:#fff;">
@@ -518,7 +626,7 @@ panel_layout_start('مشاهده کیس');
                                 <div style="display:flex; align-items:center; gap:8px; font-size:0.85rem; padding:6px 8px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:6px; flex-wrap:wrap;">
                                     <span class="badge" style="background:<?= $act[1] ?>; color:<?= $act[2] ?>;"><?= htmlspecialchars($act[0]) ?></span>
                                     <span style="flex:1; min-width:120px;"><?= htmlspecialchars($log['user_name'] ?? 'سیستم') ?></span>
-                                    <span style="color:#6b7280; font-size:0.78rem;"><?= toJalaliDateFormatted($log['created_at']) ?></span>
+                                    <span style="color:#6b7280; font-size:0.78rem;">🕒 <?= toJalaliDateTimeFormatted($log['created_at']) ?></span>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -760,6 +868,9 @@ panel_layout_start('مشاهده کیس');
                         </div>
                         <?php if ($fileDesc !== ''): ?>
                             <div class="file-desc" style="font-size:0.8rem; color:#374151; background:#f3f4f6; border-radius:6px; padding:4px 6px; white-space:pre-wrap; line-height:1.6;"><?= htmlspecialchars($fileDesc) ?></div>
+                        <?php endif; ?>
+                        <?php if ($canAppendNote && $fileDesc !== ''): ?>
+                            <button class="btn js-append-note" data-text="<?= htmlspecialchars($fileDesc) ?>" style="background:#eef2ff; color:#3730a3; padding:4px 6px; font-size:0.78rem; align-self:flex-start;" title="افزودن این توضیح به یادداشت پزشک">📝 به یادداشت پزشک</button>
                         <?php endif; ?>
                         <div style="font-size:0.72rem; color:#6b7280; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                             <?php if (!empty($f['uploader_name'])): ?><span>👤 <?= htmlspecialchars($f['uploader_name']) ?></span><?php endif; ?>
@@ -1310,7 +1421,7 @@ panel_layout_start('مشاهده کیس');
                             <td><?= htmlspecialchars($sf['uploader_name'] ?? '—') ?></td>
                             <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($sf['description'] ?? '') ?: '—' ?></td>
                             <td><?= !empty($sf['size']) ? toPersianDigits(round((int) $sf['size'] / 1024)) . ' KB' : '—' ?></td>
-                            <td><?= toJalaliDateFormatted($sf['created_at']) ?></td>
+                            <td><?= toJalaliDateTimeFormatted($sf['created_at']) ?></td>
                             <td class="actions" style="white-space:nowrap;">
                                 <a class="btn" href="serve_user_upload.php?id=<?= (int) $sf['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:3px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
                                 <a class="btn" href="download_user_upload.php?id=<?= (int) $sf['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:3px 8px; text-decoration:none;">دانلود</a>
@@ -1366,8 +1477,9 @@ panel_layout_start('مشاهده کیس');
 
 <link rel="stylesheet" href="../assets/css/case-teeth-picker.css">
 <script src="../assets/js/case-teeth-picker.js"></script>
+<script src="../assets/js/shade-picker.js"></script>
 <div id="edit-case-modal" class="modal" style="display:none;">
-    <div class="modal-content form-card" style="width:820px; max-width:95%; padding:20px; box-sizing:border-box;">
+    <div class="modal-content form-card" style="width:1000px; max-width:95%; padding:20px; box-sizing:border-box;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
             <h3 style="margin:0;">✏️ ویرایش کیس #<?= (int) $case['id'] ?> - <?= htmlspecialchars($case['patient_name']) ?></h3>
             <button type="button" id="edit-case-close" class="btn" style="background:#E5E7EB; color:#0F172A; padding:4px 12px;">✕</button>
@@ -1375,7 +1487,7 @@ panel_layout_start('مشاهده کیس');
         <form id="edit-case-form">
             <input type="hidden" name="id" value="<?= (int) $case['id'] ?>">
             <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px;">
                 <div class="form-group">
                     <label>نوع کیس</label>
                     <select name="case_type" id="ec-case-type">
@@ -1438,14 +1550,28 @@ panel_layout_start('مشاهده کیس');
                         <option value="teeth" <?= ($case['location_type'] ?? '') === 'teeth' ? 'selected' : '' ?>>دندان</option>
                     </select>
                 </div>
+                <div class="form-group" style="grid-column:1/-1;">
+                    <label>سایه (رنگ استاندارد)</label>
+                    <div class="shade-picker" data-target="#ec-shade">
+                        <input type="hidden" id="ec-shade" name="shade" value="<?= htmlspecialchars($case['shade'] ?? '') ?>">
+                        <div class="shade-groups">
+                            <?php foreach (caseShadeGroups() as $shGroup => $shRow): ?>
+                                <div class="shade-group" aria-label="<?= htmlspecialchars($shGroup) ?>">
+                                    <?php foreach ($shRow as $shCode => $shHex): ?>
+                                        <button type="button" class="shade-swatch" data-shade="<?= htmlspecialchars($shCode) ?>" style="--sw:<?= $shHex ?>" title="<?= htmlspecialchars($shCode) ?>"><span class="shade-code"><?= htmlspecialchars($shCode) ?></span></button>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endforeach; ?>
+                            <div class="shade-group">
+                                <button type="button" class="shade-swatch shade-clear" data-shade="" title="بدون سایه"><span class="shade-code">—</span></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
                 <div class="form-group" style="grid-column:1 / -1;">
                     <label>دندان</label>
                     <div id="case-teeth-picker" class="case-teeth-picker" aria-label="انتخاب دندان‌ها"></div>
                     <input type="hidden" id="case-teeth" name="teeth" value="<?= htmlspecialchars($case['teeth'] ?? '') ?>">
-                </div>
-                <div class="form-group">
-                    <label>سایه</label>
-                    <input type="text" name="shade" value="<?= htmlspecialchars($case['shade'] ?? '') ?>">
                 </div>
                 <div class="form-group">
                     <label>تعداد <small style="color:#64748b; font-weight:400;">(خودکار)</small></label>
@@ -1532,6 +1658,14 @@ panel_layout_start('مشاهده کیس');
     var csrf = window.CSRF_TOKEN || '<?= htmlspecialchars($csrf_token) ?>';
     var dp = null;
     var originalTeeth = <?= json_encode($case['teeth'] ?? '') ?>;
+    var originalShade = <?= json_encode((string) ($case['shade'] ?? ''), JSON_UNESCAPED_UNICODE) ?>;
+    var shadeInput = document.getElementById('ec-shade');
+
+    // سایه را به مقدار اولیهٔ کیس برگردان (و رنگِ فعالِ سواچ‌ها را هم به‌روز کن)
+    function ecRestoreShade(){
+        if (shadeInput) shadeInput.value = originalShade;
+        if (window.ShadePickerSync) window.ShadePickerSync();
+    }
 
     // ── Teeth ↔ location ↔ quantity auto logic (edit modal) ──
     function ecCountTeeth(v){
@@ -1633,6 +1767,7 @@ panel_layout_start('مشاهده کیس');
         if (msgEl) msgEl.textContent = '';
         if (window.CaseTeethPicker) { CaseTeethPicker.setValue(originalTeeth); }
         toggleLabGroup();
+        ecRestoreShade();
         ecUpdateTeethForLocation();
         ecUpdateQuantity();
         if (typeof $.fn !== 'undefined' && $.fn.persianDatepicker) {
@@ -1656,7 +1791,12 @@ panel_layout_start('مشاهده کیس');
             } catch(e) {}
         }
     }
-    function closeModal(){ if (modal) modal.style.display = 'none'; if (window.CaseTeethPicker) { CaseTeethPicker.setValue(originalTeeth); } }
+    function closeModal(){
+        if (modal) modal.style.display = 'none';
+        if (window.CaseTeethPicker) { CaseTeethPicker.setValue(originalTeeth); }
+        // با بستن فرم، سایهٔ انتخاب‌شده (که ذخیره نشده) باید به مقدار اصلیِ کیس برگردد
+        ecRestoreShade();
+    }
 
     if (openBtn) openBtn.addEventListener('click', function(e){ e.preventDefault(); openModal(); });
     if (closeBtn) closeBtn.addEventListener('click', closeModal);

@@ -421,6 +421,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
                                 <a href="branches.php">شعبه‌ها</a>
                             <?php endif; ?>
                             <a href="network.php">شبکه همکاران</a>
+                            <a href="case_statuses.php">وضعیت‌های کیس</a>
                         </div>
                     </div>
 

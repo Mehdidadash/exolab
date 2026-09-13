@@ -89,6 +89,10 @@ if (!$check->fetch()) {
 }
 
 try {
+    $oldSt = db()->prepare('SELECT status_id FROM cases WHERE id = ?');
+    $oldSt->execute([$caseId]);
+    $oldStatusId = (int) $oldSt->fetchColumn();
+
     $stmt = db()->prepare('UPDATE cases SET status_id = ?, updated_at = NOW() WHERE id = ?');
     $stmt->execute([$statusId, $caseId]);
 
@@ -97,6 +101,9 @@ try {
     $statusName = db()->prepare('SELECT name FROM case_statuses WHERE id = ?');
     $statusName->execute([$statusId]);
     log_case_activity($caseId, 'status_change', 'تغییر وضعیت به: ' . ($statusName->fetchColumn() ?: '#' . $statusId));
+
+    // اعلان فقط برای وضعیت‌های «خارج از ترتیب» (sort_order > 30)
+    notifyCaseStatusChangeParticipants($caseId, (int) $user['id'], $statusId, $oldStatusId ?: null);
 
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => true, 'case_id' => $caseId, 'status_id' => $statusId], JSON_UNESCAPED_UNICODE);

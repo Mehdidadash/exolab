@@ -36,7 +36,7 @@ if ($user['role'] === 'designer') {
 
 $ph = implode(',', array_fill(0, count($caseIds), '?'));
 $stmt = db()->prepare("
-    SELECT cf.case_id, cf.filename, cf.original_name
+    SELECT cf.case_id, cf.filename, cf.original_name, c.received_date, cf.created_at AS file_created
     FROM case_files cf
     JOIN cases c ON c.id = cf.case_id
     WHERE cf.case_id IN ($ph) $scopeSql
@@ -56,7 +56,7 @@ if (empty($rows)) {
     exit;
 }
 
-$zipName = 'case_files_' . date('Ymd_His') . '.zip';
+$zipName = 'scan_' . jalaliDateForFilename(date('Y-m-d')) . '.zip';
 $outPath = __DIR__ . '/../storage/' . $zipName;
 $zip = new ZipArchive();
 if ($zip->open($outPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
@@ -69,7 +69,10 @@ $used = [];
 foreach ($rows as $r) {
     $filePath = resolve_upload_path('cases/' . $r['case_id'] . '/' . $r['filename']);
     if (!file_exists($filePath)) continue;
-    $entryBase = 'case_' . $r['case_id'] . '/' . $r['original_name'];
+    // نام داخل زیپ: scan_<تاریخ دریافت>.ext (در صورت تکرار: scan_<تاریخ>_2.ext)
+    $dateStr = jalaliDateForFilename($r['received_date'] ?: ($r['file_created'] ?? date('Y-m-d')));
+    $fe = pathinfo($r['original_name'], PATHINFO_EXTENSION);
+    $entryBase = 'case_' . $r['case_id'] . '/scan_' . $dateStr . ($fe !== '' ? '.' . $fe : '');
     $entry = $entryBase;
     $i = 1;
     while (isset($used[$entry])) {

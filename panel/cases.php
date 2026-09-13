@@ -16,8 +16,8 @@ $csrf_token = $_SESSION['_csrf_token'];
 session_write_close();
 
 $doctors = getAllDoctors(); // now returns from users table
-$statusesStmt = db()->query('SELECT * FROM case_statuses ORDER BY name ASC');
-$statuses = $statusesStmt->fetchAll();
+// وضعیت‌ها به ترتیبِ تعیین‌شده (sort_order) — در همهٔ منوها و فیلترها رعایت می‌شود.
+$statuses = getAllCaseStatuses();
 $allowedStatusIds = getAllowedStatusIdsForUser();
 $user = current_user();
 $isDoctor = ($user['role'] === 'doctor');
@@ -35,8 +35,8 @@ $prices = getAllPrices();
 // At the very top, after require_once
 date_default_timezone_set('Asia/Tehran');
 
-// Default: 30 days ago
-$defaultDateFromGregorian = date('Y-m-d', strtotime('-30 days'));
+// Default: 2 months ago
+$defaultDateFromGregorian = date('Y-m-d', strtotime('-2 months'));
 $defaultDateFromJalali = toJalaliDateFormatted($defaultDateFromGregorian);
 
 // Filters
@@ -111,6 +111,16 @@ panel_layout_start('مدیریت کیس‌ها');
             <?php if (has_permission('edit_cases') || has_role('admin') || has_role('designer') || in_array($user['role'] ?? '', ['outsource_lab','partner_lab','customer_lab','lab'])): ?>
             <button type="button" id="download-files-btn" class="btn" style="background: #0F172A; color: #fff;" onclick="downloadCaseFiles()" title="دانلود هم‌زمان فایل‌های خام (اسکن) کیس‌های انتخاب‌شده — فایل‌های طراحی از دکمه‌ی «دانلود طراحی‌ها» دانلود می‌شوند">⬇ دانلود فایل‌های خام</button>
             <?php endif; ?>
+            <button type="button" id="toggle-delivered-btn" class="btn" style="background:#64748b; color:#fff;" onclick="toggleDelivered()">🙈 نمایش تحویل‌شده‌ها</button>
+            <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; margin:0;">
+                نمایش وضعیت:
+                <select id="status-display-mode" style="padding:4px 6px; border:1px solid #d1d5db; border-radius:6px;">
+                    <option value="full">عدد + آیکون + متن</option>
+                    <option value="icon_text">آیکون + متن</option>
+                    <option value="icon">فقط آیکون</option>
+                    <option value="text">فقط متن</option>
+                </select>
+            </label>
         </div>
     </div>
     <div id="filters-area" style="display:none;">
@@ -161,13 +171,13 @@ panel_layout_start('مدیریت کیس‌ها');
 
 <!-- Modal for add/edit case (same as before) -->
 <div id="case-modal" class="modal" style="display:none;">
-    <div class="modal-content form-card" style="max-width:760px; margin:auto;">
+    <div class="modal-content form-card" style="max-width:1100px; margin:auto;">
         <h3 id="case-modal-title">افزودن کیس جدید</h3>
         <form id="case-form">
             <input type="hidden" name="id" id="case-id">
             <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
             <input type="hidden" name="parent_id" id="case-parent-id" value="">
-            <div class="grid" style="grid-template-columns: 1fr 1fr; gap:10px;">
+            <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap:10px;">
                 <?php if ($isDoctor): ?>
                 <input type="hidden" id="case-type" name="case_type" value="doctor">
                 <input type="hidden" id="case-doctor-id" name="doctor_id" value="<?= (int) $user['id'] ?>">
@@ -282,13 +292,27 @@ panel_layout_start('مدیریت کیس‌ها');
                     </select>
                 </div>
                 <div class="form-group" style="grid-column:1/-1;">
+                    <label>سایه (رنگ استاندارد)</label>
+                    <div class="shade-picker" data-target="#case-shade">
+                        <input type="hidden" id="case-shade" name="shade" value="">
+                        <div class="shade-groups">
+                            <?php foreach (caseShadeGroups() as $shGroup => $shRow): ?>
+                                <div class="shade-group" aria-label="<?= htmlspecialchars($shGroup) ?>">
+                                    <?php foreach ($shRow as $shCode => $shHex): ?>
+                                        <button type="button" class="shade-swatch" data-shade="<?= htmlspecialchars($shCode) ?>" style="--sw:<?= $shHex ?>" title="<?= htmlspecialchars($shCode) ?>"><span class="shade-code"><?= htmlspecialchars($shCode) ?></span></button>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endforeach; ?>
+                            <div class="shade-group">
+                                <button type="button" class="shade-swatch shade-clear" data-shade="" title="بدون سایه"><span class="shade-code">—</span></button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group" style="grid-column:1/-1;">
                     <label for="case-teeth-picker">دندان</label>
                     <div id="case-teeth-picker" class="case-teeth-picker" aria-label="انتخاب دندان‌ها"></div>
                     <input type="hidden" id="case-teeth" name="teeth" value="">
-                </div>
-                <div class="form-group">
-                    <label for="case-shade">سایه</label>
-                    <input id="case-shade" name="shade">
                 </div>
                 <div class="form-group">
                     <label for="case-quantity">تعداد <small style="color:#64748b; font-weight:400;">(خودکار)</small></label>
@@ -653,6 +677,13 @@ panel_layout_start('مدیریت کیس‌ها');
     .dt-search input {
         margin-right: 6px;
     }
+    /* حالت‌های نمایش ستون وضعیت: عدد / آیکون / متن */
+    .case-status-badge .st-num { font-size:0.78rem; opacity:0.9; }
+    html.status-mode-icon .case-status-badge .st-num,
+    html.status-mode-icon .case-status-badge .st-text { display:none; }
+    html.status-mode-text .case-status-badge .st-num,
+    html.status-mode-text .case-status-badge .st-icon { display:none; }
+    html.status-mode-icon_text .case-status-badge .st-num { display:none; }
     @media (max-width: 768px) {
         .dt-layout-row {
             flex-direction: column;
@@ -665,6 +696,7 @@ panel_layout_start('مدیریت کیس‌ها');
 </style>
 <script src="../assets/js/persian-date.min.js"></script>
 <script src="../assets/js/persian-datepicker.min.js"></script>
+<script src="../assets/js/shade-picker.js"></script>
 
 <script>
 // Lightweight searchable select for filter dropdowns
@@ -768,6 +800,33 @@ panel_layout_start('مدیریت کیس‌ها');
         var editReceivedJalali = '';   // تاریخ دریافتِ معتبر هنگام ویرایش (از دیتابیس)
         // برای نگه‌داشتن انتخابِ قبلیِ لابراتوار در حالت ویرایش (اگر در لیستِ مقصد نبود)
         window.__LAB_NAMES__ = <?= json_encode(array_column(getAllLabs(), 'full_name', 'id'), JSON_UNESCAPED_UNICODE) ?>;
+        // برای نگه‌داشتن پزشک/طراحِ کیس در حالت ویرایش (لیست‌های این فرم بر اساس شعبه و
+        // فعال‌بودن فیلتر می‌شوند و ممکن است کاربرِ داخل کیس در آن‌ها نباشد → قبلاً مقدار
+        // خالی ارسال می‌شد و ذخیره شکست می‌خورد یا مقادیر کیس از دست می‌رفت)
+        window.__USER_NAMES__ = <?= json_encode(
+            array_column($doctors, 'name', 'id')
+            + array_column(getAllBillingTargets(), 'name', 'id')
+            + array_column(array_map(function ($d) { return ['id' => $d['id'], 'name' => $d['full_name']]; }, $designers), 'name', 'id'),
+            JSON_UNESCAPED_UNICODE
+        ) ?>;
+
+        // اگر پزشکِ فعلیِ کیس در لیستِ فرم نبود، گزینه‌اش را اضافه کن تا هنگام ویرایش از بین نرود.
+        function keepDoctorOption(val){
+            if (!val) return;
+            var sel = '#case-doctor-id';
+            if (jQuery(sel + ' option[value="' + val + '"]').length) return;
+            var nm = (window.__USER_NAMES__ && window.__USER_NAMES__[val]) ? window.__USER_NAMES__[val] : ('پزشک #' + val);
+            jQuery(sel).append(new Option(nm, val));
+        }
+
+        // همان کار برای طراح (ممکن است طراح غیرفعال یا از شعبه‌ای دیگر باشد)
+        function keepDesignerOption(val){
+            if (!val) return;
+            var sel = '#case-designer-id';
+            if (jQuery(sel + ' option[value="' + val + '"]').length) return;
+            var nm = (window.__USER_NAMES__ && window.__USER_NAMES__[val]) ? window.__USER_NAMES__[val] : ('طراح #' + val);
+            jQuery(sel).append(new Option(nm, val));
+        }
 
         function getDatepickerPlugin() {
             if (window.jQuery && window.jQuery.fn && typeof window.jQuery.fn.persianDatepicker === 'function') {
@@ -892,11 +951,13 @@ panel_layout_start('مدیریت کیس‌ها');
                         // Server-side jalali date-range filter (converted in cases_data.php)
                         d.date_from = jQuery('#date_from').val() || '';
                         d.date_to = jQuery('#date_to').val() || '';
+                        // مخفی‌بودن کیس‌های «تحویل شد» به‌صورت پیش‌فرض (با دکمه قابل نمایش است)
+                        d.show_delivered = (localStorage.getItem('cases_show_delivered') === '1') ? 1 : 0;
                     }
                 },
                 order: [[10, 'desc']], // received_date column
                 responsive: true,
-                pageLength: 25,
+                pageLength: 50,
                 // Place the SearchPanes feature into the table layout (DataTables 2.x)
                 layout: {
                     top1: 'searchPanes'
@@ -916,11 +977,32 @@ panel_layout_start('مدیریت کیس‌ها');
                         td.title = String(cellData || '');
                     } },
                     // clean header for the plain-status pane (its <th> says "وضعیت (متن)")
-                    { targets: [16], searchPanes: { header: 'وضعیت' } }
+                    { targets: [16], searchPanes: { header: 'وضعیت' } },
+                    // ستون وضعیت (۹): متن طولانی در حداکثر دو ردیف؛ متن کامل در hover (title)
+                    { targets: [9], width: '150px', createdCell: function(td, cellData, rowData){
+                        td.style.whiteSpace = 'normal';
+                        td.style.wordBreak = 'break-word';
+                        td.title = String(rowData[15] || '');
+                    } },
+                    // ستون سایه (۷): رنگ زمینهٔ سلول = رنگ استاندارد سایه
+                    { targets: [7], createdCell: function(td){
+                        var el = td.querySelector('[data-shade-color]');
+                        var c = el ? (el.getAttribute('data-shade-color') || '') : '';
+                        if (c) { td.style.backgroundColor = c; td.style.color = '#1f2937'; td.style.fontWeight = '700'; td.style.boxShadow = 'inset 0 0 0 1px rgba(15,23,42,0.08)'; }
+                    } }
                 ],
                 columns: [
                     { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= $canSelectCases ? 'true' : 'false' ?> },
-                    { data: 0, render: function(data, type, row){ if (type === 'display' && row[14]) { return '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>'; } return data; } },
+                    { data: 0, render: function(data, type, row){
+                        var num = data;
+                        if (type === 'display' && row[14]) {
+                            num = '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>';
+                        }
+                        if (type === 'display' && row[19]) {
+                            num += ' <span style="background:#fee2e2; color:#b91c1c; border-radius:6px; padding:1px 6px; font-size:0.72rem; font-weight:bold;" title="کامنت یا فایل جدید از آخرین بازدید شما">💬 جدید</span>';
+                        }
+                        return num;
+                    } },
                     { data: 1 },
                     { data: 12, visible: <?= (!$isDesigner && canSeeDesignerInfo()) ? 'true' : 'false' ?> }, /* designer – internal only; designers only see their own case → no need */
                     { data: 2 },
@@ -931,7 +1013,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     { data: 7 },
                     { data: 8 },
                     { data: 9, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* invoice – hidden for designers */
-                    { data: 10, orderable: false, searchable: true, visible: <?= has_role('admin') ? 'true' : 'false' ?> },
+                    { data: 10, orderable: false, searchable: true, visible: <?= is_admin() ? 'true' : 'false' ?> },
                     { data: 13, orderable: false, searchable: false, render: function(data, type, row){
                         var html = String(data || 0);
                         var chips = [];
@@ -995,6 +1077,21 @@ panel_layout_start('مدیریت کیس‌ها');
                 // Ask SearchPanes to re-layout the panes after being shown/hidden
                 try { if (table && table.searchPanes) table.searchPanes.resize(); } catch(e){}
             };
+
+            // نمایش/مخفی کردن کیس‌های «تحویل شد» (پیش‌فرض مخفی)
+            window.updateDeliveredBtn = function(){
+                var b = document.getElementById('toggle-delivered-btn');
+                if (!b) return;
+                var on = localStorage.getItem('cases_show_delivered') === '1';
+                b.textContent = on ? '🙉 مخفی کردن تحویل‌شده‌ها' : '🙈 نمایش تحویل‌شده‌ها';
+            };
+            window.toggleDelivered = function(){
+                var on = localStorage.getItem('cases_show_delivered') === '1';
+                localStorage.setItem('cases_show_delivered', on ? '0' : '1');
+                window.updateDeliveredBtn();
+                try { table.ajax.reload(); } catch(e){}
+            };
+            if (typeof window.updateDeliveredBtn === 'function') window.updateDeliveredBtn();
 
             // Date-range filter (reload with the jalali range → server converts to gregorian)
             jQuery('#date-filter-form').on('submit', function(e){
@@ -1063,6 +1160,9 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-id').val('');
                 jQuery('#case-parent-id').val('');
                 if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
+                // سایه‌ی انتخاب‌شده در فرمِ قبلی نباید باقی بماند
+                jQuery('#case-shade').val('');
+                if (window.ShadePickerSync) window.ShadePickerSync();
                 // حالت پیش‌فرض «کیس دکتر» → لابراتوار مخفی است تا نوع کیس تغییر کند
                 jQuery('#case-type').val('doctor');
                 toggleCaseType('doctor');
@@ -1082,6 +1182,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 if (parentCase) {
                     jQuery('#case-type').val(parentCase.case_type || 'doctor');
                     toggleCaseType(jQuery('#case-type').val());
+                    keepDoctorOption(parentCase.doctor_id);
                     jQuery('#case-doctor-id').val(parentCase.doctor_id || '');
                     jQuery('#case-patient-name').val(parentCase.patient_name || '');
                     jQuery('#case-service-id').val(parentCase.service_id || '');
@@ -1147,6 +1248,9 @@ panel_layout_start('مدیریت کیس‌ها');
                     // طراح همیشه «طراح پیش‌فرض» است + گروه‌های فایل خالی
                     var did = Number('<?= (int) $defaultDesignerId ?>') || 0;
                     if (did) jQuery('#case-designer-id').val(did);
+                    // هنگام افزودن کیس، سایه‌ی انتخاب‌شده از قبل نباید باقی بماند
+                    jQuery('#case-shade').val('');
+                    if (window.ShadePickerSync) window.ShadePickerSync();
                     var pwEl = document.getElementById('case-files-progress');
                     if (pwEl) pwEl.style.display = 'none';
                     if (window.CaseFiles) window.CaseFiles.reset();
@@ -1168,6 +1272,10 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-modal').css({display: 'none'});
                 jQuery('#case-form')[0].reset();
                 if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
+                // رنگِ سایه‌ی انتخاب‌شده باید با بستن فرم پاک شود
+                // (reset فقط مقدار input مخفی را پاک می‌کند، نه کلاسِ فعالِ سواچ‌ها)
+                jQuery('#case-shade').val('');
+                if (window.ShadePickerSync) window.ShadePickerSync();
                 jQuery('#case-save').prop('disabled', false).text('ذخیره');
                 var progWrap = document.getElementById('case-files-progress');
                 if (progWrap) progWrap.style.display = 'none';
@@ -1236,6 +1344,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-parent-id').val(data.parent_id || '');
                 jQuery('#case-type').val(data.case_type || 'doctor');
                 toggleCaseType(jQuery('#case-type').val());
+                keepDoctorOption(data.doctor_id);
                 jQuery('#case-doctor-id').val(data.doctor_id || '');
                 jQuery('#case-patient-name').val(data.patient_name || '');
                 jQuery('#case-receipt-number').val(data.receipt_number || '');
@@ -1246,6 +1355,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 updateTeethForLocation();
                 updateCaseQuantity();
                 jQuery('#case-shade').val(data.shade || '');
+                if (window.ShadePickerSync) window.ShadePickerSync();
                 jQuery('#case-quantity').val(data.quantity || 1);
                 jQuery('#case-unit-price').val(data.unit_price || '');
                 jQuery('#case-design-fee').val(data.design_fee || 0);
@@ -1254,9 +1364,16 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-status-id').val(data.status_id || '');
                 var keepLabId = String(data.lab_id || '');
                 var keepOutLabId = String(data.outsourced_lab_id || '');
+                // ⚠️ اول گزینه‌ی لابراتوار اضافه می‌شود و بعد مقدار داده می‌شود؛ در غیر این صورت
+                // اگر لابراتوارِ کیس در لیستِ فیلترشدهٔ شعبه نباشد، .val() به انتخابِ خالی برمی‌گردد
+                // و با ذخیره، lab_id (و در نتیجه source_branch_id) کیس پاک می‌شود و کیس از لیست
+                // شعبهٔ شریک ناپدید می‌شود.
+                keepLabOption('#case-lab-id', keepLabId);
+                keepLabOption('#case-outsourced-lab', keepOutLabId);
                 jQuery('#case-lab-id').val(keepLabId);
-                jQuery('#case-designer-id').val(data.designer_id || '');
                 jQuery('#case-outsourced-lab').val(keepOutLabId);
+                keepDesignerOption(data.designer_id);
+                jQuery('#case-designer-id').val(data.designer_id || '');
                 // اگر لابراتوارِ انتخاب‌شده در لیستِ مقصد نیست (مثلاً لابراتوارِ خودِ شعبه در کیس‌های
                 // قدیمی)، گزینه‌اش را اضافه کن تا هنگام ویرایش انتخاب از بین نرود.
                 function keepLabOption(selId, val) {
@@ -1265,8 +1382,6 @@ panel_layout_start('مدیریت کیس‌ها');
                     var nm = (window.__LAB_NAMES__ && window.__LAB_NAMES__[val]) ? window.__LAB_NAMES__[val] : ('لابراتوار #' + val);
                     jQuery(selId).append(new Option(nm, val));
                 }
-                keepLabOption('#case-lab-id', keepLabId);
-                keepLabOption('#case-outsourced-lab', keepOutLabId);
                 jQuery('#case-outsourced-service').val(data.outsourced_service_id || '');
                 jQuery('#case-outsourced-qty').val(data.outsourced_qty || 0);
                 // Keep the saved per-case rate (do NOT overwrite with lookup on edit; user can re-pick to re-fetch)
@@ -1582,6 +1697,26 @@ panel_layout_start('مدیریت کیس‌ها');
         }
 
     })();
+</script>
+
+<script>
+// حالت نمایش ستون «وضعیت»: عدد + آیکون + متن / آیکون + متن / فقط آیکون / فقط متن
+(function(){
+    var modeSel = document.getElementById('status-display-mode');
+    function applyStatusMode(mode){
+        document.documentElement.classList.remove('status-mode-icon', 'status-mode-text', 'status-mode-icon_text');
+        if (mode && mode !== 'full') document.documentElement.classList.add('status-mode-' + mode);
+        if (modeSel) modeSel.value = mode || 'full';
+    }
+    var saved = localStorage.getItem('status_display_mode') || 'full';
+    applyStatusMode(saved);
+    if (modeSel) {
+        modeSel.addEventListener('change', function(){
+            localStorage.setItem('status_display_mode', modeSel.value);
+            applyStatusMode(modeSel.value);
+        });
+    }
+})();
 </script>
 
 <?php panel_layout_end(); ?>

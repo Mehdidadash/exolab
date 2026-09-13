@@ -91,6 +91,12 @@ if (!empty($_GET['status_id'])) {
     $whereClauses[] = 'c.status_id ' . ($statusNot ? '<>' : '=') . ' ?';
     $params[] = (int) $_GET['status_id'];
 }
+
+// کیس‌های «تحویل شد» (status 4) به‌صورت پیش‌فرض مخفی هستند؛ با ?show_delivered=1 یا
+// وقتی فیلتر وضعیت صریح انتخاب شده باشد، نمایش داده می‌شوند.
+if (empty($_GET['status_id']) && empty($_GET['show_delivered'])) {
+    $whereClauses[] = 'c.status_id <> 4';
+}
 // Filter by designer
 if (!empty($_GET['designer_id'])) {
     $whereClauses[] = 'c.designer_id = ?';
@@ -172,17 +178,23 @@ if ($clientAll) {
 }
 
 $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
-        di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, des.full_name AS designer_name,
+        cs.icon AS status_icon, cs.color AS status_color,
+        di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, olab.full_name AS outsourced_lab_name,
+        des.full_name AS designer_name,
         b.name AS branch_name, sb.name AS source_branch_name,
         (SELECT COUNT(*) FROM case_files cf WHERE cf.case_id = c.id) AS file_count,
         (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"design\"%') AS design_downloaded,
-        (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"raw\"%') AS raw_downloaded
+        (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"raw\"%') AS raw_downloaded,
+        (SELECT MAX(lv.created_at) FROM case_activity_log lv WHERE lv.case_id = c.id AND lv.user_id = " . (int) $user['id'] . " AND lv.action = 'view') AS my_last_view,
+        (SELECT MAX(ec.created_at) FROM entity_comments ec WHERE ec.entity_type = 'case' AND ec.entity_id = c.id) AS last_comment,
+        (SELECT MAX(cf2.created_at) FROM case_files cf2 WHERE cf2.case_id = c.id) AS last_file
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id
     LEFT JOIN site_prices p ON c.service_id = p.id
     LEFT JOIN case_statuses cs ON c.status_id = cs.id
     LEFT JOIN doctor_invoices di ON c.invoice_id = di.id
     LEFT JOIN users lab ON c.lab_id = lab.id
+    LEFT JOIN users olab ON c.outsourced_lab_id = olab.id
     LEFT JOIN users des ON c.designer_id = des.id
     LEFT JOIN branches b ON c.branch_id = b.id
     LEFT JOIN branches sb ON c.source_branch_id = sb.id
@@ -198,6 +210,20 @@ $stmt->execute($params);
 $rows = $stmt->fetchAll();
 
 $data = [];
+
+// نقشهٔ وضعیت‌ها برای نمایش (شماره‌ی مرحله + آیکون + رنگ) — به ترتیب تعیین‌شده.
+$statusMeta = [];
+$stOrdinal = 0;
+foreach (getAllCaseStatuses() as $st) {
+    $stOrdinal++;
+    $statusMeta[(int) $st['id']] = [
+        'name' => (string) $st['name'],
+        'icon' => (string) ($st['icon'] ?? ''),
+        'color' => (string) ($st['color'] ?? ''),
+        'num' => $stOrdinal,
+    ];
+}
+
 foreach ($rows as $r) {
     $received = toJalaliDateFormatted($r['received_date']);
     $price = formatAmountToman($r['total_price'] ?? $r['unit_price'] ?? 0);
@@ -264,24 +290,65 @@ foreach ($rows as $r) {
 
     $labHtml = '';
     if ($isAdmin) {
-        if ($inboundPartner) {
-            // We received this work from a partner branch → کار از لابراتوار همکار
-            $recvAmt = getInboundReceivableAmount($r);
-            $labHtml = '<span class="badge" style="background:#dcfce7; color:#166534;" title="این کیس توسط یک شعبه/لابراتوار همکار به ما ارسال شده است">کار از لابراتوار همکار</span>'
-                     . ($r['source_branch_name'] ? ' <small style="color:#166534;">(' . htmlspecialchars($r['source_branch_name']) . ')</small>' : '')
-                     . ' <div style="margin-top:4px; font-size:0.8rem; color:#166534;">طلب از شعبه مبدا: <b>' . formatAmountToman($recvAmt) . '</b></div>';
-        } elseif ($outboundPartner) {
-            // We outsourced this case to a partner branch
-            $ownAmt = getInboundReceivableAmount($r);
-            $labHtml = '<span class="badge" style="background:#fef3c7; color:#92400e;" title="بخشی از این کیس به شعبه/لابراتوار همکار برون‌سپاری شده است">برون‌سپاری</span>'
-                     . ($r['source_branch_name'] ? ' <small style="color:#92400e;">(' . htmlspecialchars($r['source_branch_name']) . ')</small>' : '')
-                     . ' <div style="margin-top:4px; font-size:0.8rem; color:#92400e;">بدهی به شعبه گیرنده: <b>' . formatAmountToman($ownAmt) . '</b></div>';
-        } elseif ($isLabInCase) {
-            // lab_in received from a partner lab (owned by us, originated there)
-            $labHtml = '<span class="badge" style="background:#dcfce7; color:#166534;">کار از لابراتوار همکار</span>'
-                     . ($r['source_branch_name'] ? ' <small style="color:#166534;">(' . htmlspecialchars($r['source_branch_name']) . ')</small>' : '');
-        } else {
-            $labHtml = !empty($r['lab_name']) ? htmlspecialchars($r['lab_name']) : '—';
+        $myBr = currentBranchId();
+        if ($myBr === null && is_root_admin()) $myBr = 1;   // مدیر کل = شعبهٔ مرکزی
+        $ownerBranchName = !empty($r['branch_name']) ? $r['branch_name'] : '';
+
+        $label = '';
+        $partnerName = '';
+        $isCross = ($caseSrcBranch !== 0 && $caseBranch !== 0 && $caseSrcBranch !== $caseBranch && $myBr !== null
+                    && ($myBr === $caseBranch || $myBr === $caseSrcBranch));
+        if ($isCross) {
+            if ($myBr === $caseBranch) {
+                // ما مالکیم و کار را به شعبهٔ دیگر داده‌ایم
+                $label = 'برون‌سپاری به';
+                $partnerName = $r['source_branch_name'] ?: ('شعبه #' . $caseSrcBranch);
+            } else {
+                // کار از شعبهٔ دیگر به ما رسیده — طرفِ مقابل = شعبهٔ مالکِ کیس
+                $label = 'کار از لابراتوار';
+                $partnerName = $ownerBranchName !== '' ? $ownerBranchName : ('شعبه #' . $caseBranch);
+            }
+        } elseif (!empty($r['lab_id']) && !empty($r['lab_name'])) {
+            $ct = $r['case_type'] ?? '';
+            $label = $ct === 'lab_in' ? 'کار از لابراتوار' : ($ct === 'lab_out' ? 'برون‌سپاری به' : '');
+            $partnerName = $r['lab_name'];
+        }
+
+        $lines = [];
+        if ($partnerName !== '') {
+            $lines[] = '<div>' . ($label !== '' ? htmlspecialchars($label) . ': ' : '') . htmlspecialchars($partnerName) . '</div>';
+        }
+        // برون‌سپاری جانبی (فقط اگر با طرف بالا یکی نباشد)
+        if (!empty($r['outsourced_lab_id']) && !empty($r['outsourced_lab_name']) && (int) $r['outsourced_lab_id'] !== (int) $r['lab_id']) {
+            $lines[] = '<div>جانبی به: ' . htmlspecialchars($r['outsourced_lab_name'])
+                . ((int) ($r['outsourced_qty'] ?? 0) > 0 ? ' (×' . toPersianDigits((int) $r['outsourced_qty']) . ')' : '') . '</div>';
+        }
+        $labHtml = $lines ? implode('', $lines) : '—';
+    }
+
+    // نمایش وضعیت: شماره‌ی مرحله + آیکون + متن (+ رنگ)
+    $stM = $statusMeta[(int) ($r['status_id'] ?? 0)] ?? ['name' => ($r['status_name'] ?: 'نامشخص'), 'icon' => '', 'color' => '', 'num' => 0];
+    $stStyle = $stM['color'] !== '' ? 'background:' . $stM['color'] . '; color:#fff;' : '';
+    $statusHtml = '<span class="case-status-badge" title="' . htmlspecialchars($stM['name'], ENT_QUOTES, 'UTF-8') . '" style="display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px; border-radius:6px; padding:2px 8px; font-weight:600; max-width:135px; overflow:hidden; max-height:2.9em; line-height:1.3; ' . $stStyle . '">'
+        . ($stM['num'] > 0 ? '<span class="st-num">' . toPersianDigits((string) $stM['num']) . '</span>' : '')
+        . ($stM['icon'] !== '' ? '<span class="st-icon">' . htmlspecialchars($stM['icon']) . '</span>' : '')
+        . '<span class="st-text">' . htmlspecialchars($stM['name']) . '</span>'
+        . '</span>';
+
+    // سایه: سلول با رنگ زمینهٔ همان سایه
+    $shadeCode = trim((string) ($r['shade'] ?? ''));
+    $shadeHex = caseShadeColor($shadeCode);
+    $shadeHtml = '—';
+    if ($shadeCode !== '') {
+        $shadeHtml = '<span data-shade-color="' . htmlspecialchars($shadeHex, ENT_QUOTES) . '">' . htmlspecialchars($shadeCode) . '</span>';
+    }
+
+    // نشانگر «کامنت/فایل جدید» از آخرین بازدید این کاربر از صفحهٔ کیس
+    $hasUpdates = 0;
+    $lv = $r['my_last_view'] ?? null;
+    if (!empty($lv)) {
+        if ((!empty($r['last_comment']) && $r['last_comment'] > $lv) || (!empty($r['last_file']) && $r['last_file'] > $lv)) {
+            $hasUpdates = 1;
         }
     }
 
@@ -291,9 +358,9 @@ foreach ($rows as $r) {
         $r['patient_name'] ?: '—',
         $r['service_title'] ?: '—',
         formatCaseLocation($r['location_type'], $r['teeth']),
-        $r['shade'] ?: '—',
+        $shadeHtml,
         $price,
-        '<span class="badge">' . htmlspecialchars($r['status_name'] ?: 'نامشخص') . '</span>',
+        $statusHtml,
         $received,
         $invoiceHtml,
         $labHtml,
@@ -304,7 +371,8 @@ foreach ($rows as $r) {
         $r['status_name'] ?: '—',
         $r['receipt_number'] ?: '',
         $r['raw_downloaded'] ? 1 : 0,
-        $r['design_downloaded'] ? 1 : 0
+        $r['design_downloaded'] ? 1 : 0,
+        $hasUpdates
     ];
 }
 

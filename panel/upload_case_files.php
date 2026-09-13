@@ -163,7 +163,10 @@ if ($compress && $fileCount > 1) {
         }
     }
     header('Content-Type: application/json; charset=utf-8');
-    if ($uploaded > 0) log_case_activity($caseId, 'file_upload', 'آپلود فایل ZIP: ' . $zipName . ' (نوع: ' . $fileType . ')');
+    if ($uploaded > 0) {
+        log_case_activity($caseId, 'file_upload', 'آپلود فایل ZIP: ' . $zipName . ' (نوع: ' . $fileType . ')');
+        notifyCaseFileParticipants($caseId, (int) ($user['id'] ?? 0), $uploaded);
+    }
     echo json_encode([
         'success' => empty($errors),
         'uploaded' => $uploaded,
@@ -217,7 +220,10 @@ foreach ($files['error'] as $idx => $err) {
 }
 
 header('Content-Type: application/json; charset=utf-8');
-if ($uploaded > 0) log_case_activity($caseId, 'file_upload', 'آپلود ' . $uploaded . ' فایل (نوع: ' . $fileType . ')');
+if ($uploaded > 0) {
+    log_case_activity($caseId, 'file_upload', 'آپلود ' . $uploaded . ' فایل (نوع: ' . $fileType . ')');
+    notifyCaseFileParticipants($caseId, (int) ($user['id'] ?? 0), $uploaded);
+}
 echo json_encode([
     'success' => empty($errors),
     'uploaded' => $uploaded,
