@@ -14,7 +14,7 @@ $prices = getAllPrices();
 ?>
 <div style="margin-bottom: 18px; display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
     <a class="btn" href="price_form.php">افزودن قیمت جدید</a>
-    <small style="color:#525252;">قیمت‌های عمومی همان پیش‌فرض همه‌ی شعب و پزشک‌ها هستند. برای ویرایش، مقدار را در همان جدول تغییر دهید و روی «ذخیره» بزنید.</small>
+    <small style="color:#525252;">قیمت‌های عمومی همان پیش‌فرض همه‌ی شعب و پزشک‌ها هستند. برای ویرایش، مقدار را در همان جدول تغییر دهید و روی «ذخیره» بزنید. «نام اختصاری» در جدول کیس‌ها و چاپ برچسب جای عنوان کامل می‌آید (خالی بگذارید تا عنوان کامل نمایش داده شود). «تعداد دستی» برای خدماتی مثل الاینر است و «هر واحد اضافه» برای قیمت پله‌ای (مثل سرجیکال گاید: پایه ۱ دندان + هر دندان اضافه).</small>
 </div>
 <div class="table-scroll">
 <table>
@@ -22,8 +22,12 @@ $prices = getAllPrices();
     <tr>
         <th class="th-narrow">ردیف</th>
         <th>عنوان</th>
+        <th title="نام کوتاه خدمت — در جدول کیس‌ها و چاپ برچسب استفاده می‌شود. مثال: ML یا IM_ML">نام اختصاری</th>
         <th>دسته</th>
         <th class="th-price">قیمت (تومان)</th>
+        <th class="th-narrow" title="تیک = تعداد این خدمت در فرم کیس دستی قابل تغییر است (مثل الاینر)">تعداد دستی</th>
+        <th class="th-narrow" title="تعداد واحدهایی که «قیمت» پوشش می‌دهد (معمولاً ۱)">واحد پایه</th>
+        <th title="قیمت هر واحد اضافه — مبلغ کل = قیمت پایه + (تعداد − واحد پایه) × این مبلغ. خالی = همان قیمت هر واحد">هر واحد اضافه</th>
         <th class="th-narrow">ترتیب</th>
         <th class="th-narrow">فعال</th>
         <th class="th-narrow" title="تیک = نمایش در سایت اصلی">سایت</th>
@@ -35,8 +39,12 @@ $prices = getAllPrices();
         <tr draggable="true" data-id="<?= (int) $price['id'] ?>">
             <td class="price-index"><?= $index + 1 ?></td>
             <td><input type="text" class="ed-title" value="<?= htmlspecialchars($price['title']) ?>" style="width:96%; min-width:160px;"></td>
+            <td><input type="text" class="ed-short" value="<?= htmlspecialchars((string) ($price['short_name'] ?? '')) ?>" maxlength="24" placeholder="ML" style="width:110px; font-family:monospace; direction:ltr; text-align:center; font-weight:bold;" title="نام اختصاری (خالی = نمایش عنوان کامل)"></td>
             <td><input type="text" class="ed-category" value="<?= htmlspecialchars($price['category']) ?>" style="width:96%; min-width:100px;"></td>
             <td><input type="number" class="ed-price" value="<?= htmlspecialchars(formatTomanInput($price['price'])) ?>" min="0" step="1" style="width:170px; font-weight:bold;"></td>
+            <td style="text-align:center;"><input type="checkbox" class="ed-qtymanual" <?= !empty($price['qty_manual']) ? 'checked' : '' ?> style="width:auto;" title="تعداد در فرم کیس دستی قابل تغییر باشد"></td>
+            <td style="text-align:center;"><input type="number" class="ed-baseunits" value="<?= max(1, (int) ($price['base_units'] ?? 1)) ?>" min="1" step="1" style="width:64px;"></td>
+            <td><input type="number" class="ed-extra" value="<?= ($price['extra_unit_price'] === null || $price['extra_unit_price'] === '') ? '' : htmlspecialchars(formatTomanInput($price['extra_unit_price'])) ?>" min="0" step="1" placeholder="= فی" style="width:130px;"></td>
             <td><input type="number" class="ed-order" value="<?= isset($price['display_order']) ? (int)$price['display_order'] : 0 ?>" min="0" step="1" style="width:56px;"></td>
             <td style="text-align:center;"><input type="checkbox" class="ed-active" <?= $price['active'] ? 'checked' : '' ?> style="width:auto;"></td>
             <td style="text-align:center;"><input type="checkbox" class="ed-hideonsite" <?= empty($price['hide_on_site']) ? 'checked' : '' ?> style="width:auto;" title="تیک = در سایت اصلی نمایش داده شود"></td>
@@ -68,8 +76,16 @@ $prices = getAllPrices();
         var data = new URLSearchParams();
         data.set('id', tr.getAttribute('data-id'));
         data.set('title', tr.querySelector('.ed-title').value.trim());
+        var shortEl = tr.querySelector('.ed-short');
+        data.set('short_name', shortEl ? shortEl.value.trim() : '');
         data.set('category', tr.querySelector('.ed-category').value.trim());
         data.set('price', tr.querySelector('.ed-price').value.trim());
+        var qm = tr.querySelector('.ed-qtymanual');
+        data.set('qty_manual', (qm && qm.checked) ? '1' : '0');
+        var bu = tr.querySelector('.ed-baseunits');
+        data.set('base_units', bu ? (bu.value.trim() || '1') : '1');
+        var ex = tr.querySelector('.ed-extra');
+        data.set('extra_unit_price', ex ? ex.value.trim() : '');
         data.set('display_order', tr.querySelector('.ed-order').value.trim() || '0');
         data.set('active', tr.querySelector('.ed-active').checked ? '1' : '0');
         var hs = tr.querySelector('.ed-hideonsite');

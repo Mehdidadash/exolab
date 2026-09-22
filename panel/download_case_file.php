@@ -14,7 +14,7 @@ if (!$fileId) {
 $user = current_user();
 
 // Fetch file record
-$stmt = db()->prepare('SELECT cf.*, c.doctor_id, c.lab_id, c.designer_id FROM case_files cf JOIN cases c ON cf.case_id = c.id WHERE cf.id = ?');
+$stmt = db()->prepare('SELECT cf.*, c.doctor_id, c.lab_id, c.outsourced_lab_id, c.designer_id FROM case_files cf JOIN cases c ON cf.case_id = c.id WHERE cf.id = ?');
 $stmt->execute([$fileId]);
 $file = $stmt->fetch();
 
@@ -31,20 +31,30 @@ if ($user['role'] === 'doctor' || $user['role'] === 'clinic') {
 
 // Check specific permissions for other roles
 $isAdmin = has_permission('view_all_cases');
-$isLab = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab']);
-$isDesigner = ($user['role'] === 'designer');
+$isLabRole = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
+$isDesignerRole = is_designer_user($user);  // نقشِ designer یا کاربری که تیکِ «طراح» دارد
+$uid = (int) $user['id'];
 
+$allowed = true;
 if (!$isAdmin) {
-    if ($isLab && $file['lab_id'] != $user['id']) {
-        http_response_code(403);
-        die('دسترسی غیرمجاز');
-    } elseif ($isDesigner && $file['designer_id'] != $user['id']) {
-        http_response_code(403);
-        die('دسترسی غیرمجاز');
-    } elseif (!$isDesigner && !has_permission('view_case_files')) {
-        http_response_code(403);
-        die('دسترسی غیرمجاز');
+    if ($isLabRole || $isDesignerRole) {
+        // نقش‌های رابطه‌محور: دسترسی فقط با «رابطه» — لابراتوارِ کیس/برون‌سپاری یا طراحِ کیس
+        // (یک کاربر می‌تواند هم‌زمان هر دو باشد؛ کافی است یکی برقرار باشد)
+        $relatedAsLab = ((int) $file['lab_id'] === $uid)
+            || ((int) ($file['outsourced_lab_id'] ?? 0) === $uid);
+        $relatedAsDesigner = ((int) $file['designer_id'] === $uid);
+        $allowed = $relatedAsLab || $relatedAsDesigner;
+    } elseif (!has_permission('view_case_files')) {
+        $allowed = false;
     }
+}
+// «فایل مرتبط»: اگر فایل به کیسی که کاربر می‌بیند وصل شده باشد، دانلود مجاز است
+if (!$allowed && caseFileAccessibleViaLinks($fileId, $user)) {
+    $allowed = true;
+}
+if (!$allowed) {
+    http_response_code(403);
+    die('دسترسی غیرمجاز');
 }
 
 $caseId = $file['case_id'];

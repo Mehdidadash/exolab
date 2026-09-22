@@ -161,6 +161,31 @@ $graphJson = [
     <div id="pm-margin" class="pm-margin" style="display:none;"></div>
 </div>
 
+<?php
+// ── پیام نتیجهٔ افزودن/ویرایش رابطه (save_price_link.php بعد از ذخیره اینجا برمی‌گردد) ──
+$pmErrorMap = [
+    'price'          => 'قیمت معتبر وارد نشده است.',
+    'provider'       => 'ارائه‌دهنده (انجام‌دهندهٔ کار) انتخاب نشده است.',
+    'receiver'       => 'دریافت‌کننده (پرداخت‌کننده) انتخاب نشده است.',
+    'service'        => 'خدمت انتخاب نشده است.',
+    'same_party'     => 'ارائه‌دهنده و دریافت‌کننده یکسان هستند.',
+    'branch_default' => 'برای «پیش‌فرض شعبه»، ارائه‌دهنده باید یک شعبه باشد.',
+    'invalid'        => 'اطلاعات رابطهٔ قیمتی کامل نیست.',
+];
+$pmError = (string) ($_GET['pm_error'] ?? '');
+$pmSaved = !empty($_GET['pm_saved']);
+?>
+<?php if ($pmError !== ''): ?>
+    <div style="margin:10px 0; padding:10px 14px; border-radius:8px; background:#fef2f2; border:1px solid #fca5a5; color:#991b1b; font-weight:600;">
+        ⚠️ رابطهٔ قیمتی ذخیره نشد: <?= htmlspecialchars($pmErrorMap[$pmError] ?? $pmErrorMap['invalid']) ?>
+        <span style="font-weight:400; color:#7f1d1d;">(کد: <?= htmlspecialchars($pmError) ?>)</span>
+    </div>
+<?php elseif ($pmSaved): ?>
+    <div style="margin:10px 0; padding:10px 14px; border-radius:8px; background:#f0fdf4; border:1px solid #bbf7d0; color:#166534; font-weight:600;">
+        ✅ رابطهٔ قیمتی ذخیره شد.
+    </div>
+<?php endif; ?>
+
 <div style="display:flex; justify-content:space-between; align-items:center; margin:22px 0 10px; flex-wrap:wrap; gap:8px;">
     <h3 style="margin:0;">روابط قیمتی</h3>
     <button type="button" class="btn" id="pm-add-btn" style="background:#0F172A; color:#fff;">+ افزودن رابطه قیمتی</button>

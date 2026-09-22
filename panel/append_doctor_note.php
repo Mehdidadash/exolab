@@ -24,7 +24,7 @@ if ($token === '' || empty($sessionToken) || !hash_equals($sessionToken, $token)
 
 $user = current_user();
 $role = $user['role'] ?? '';
-$allowed = is_admin() || in_array($role, ['designer', 'technician'], true);
+$allowed = is_admin() || is_designer_user() || in_array($role, ['technician'], true);
 if (!$allowed) {
     http_response_code(403);
     header('Content-Type: application/json; charset=utf-8');

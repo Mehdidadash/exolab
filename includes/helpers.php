@@ -391,6 +391,60 @@ function formatFileSize($bytes): string {
 }
 
 /**
+ * محدودیت‌های آپلود بر اساس تنظیمات PHP (به بایت / تعداد).
+ * برای نمایش به کاربر و بررسی قبل از ارسال استفاده می‌شود.
+ */
+function uploadLimits(): array {
+    $toBytes = function ($v): int {
+        $v = trim((string) $v);
+        if ($v === '' || $v === '-1') return 0;   // ۰ = بدون محدودیت
+        $unit = strtolower(substr($v, -1));
+        $num = (float) $v;
+        if ($unit === 'g') $num *= 1073741824;
+        elseif ($unit === 'm') $num *= 1048576;
+        elseif ($unit === 'k') $num *= 1024;
+        return (int) $num;
+    };
+    return [
+        'max_file'  => $toBytes(ini_get('upload_max_filesize')),
+        'post_max'  => $toBytes(ini_get('post_max_size')),
+        'max_files' => (int) (ini_get('max_file_uploads') ?: 20),
+    ];
+}
+
+/**
+ * پیام فارسیِ قابل‌فهم برای کدهای خطای آپلود (فایل‌های کیس / آپلودهای کاربر).
+ * کدها در upload_case_files.php ساخته می‌شوند: upload_error_{idx}_{phpCode} و …
+ */
+function uploadErrorLabel(string $code): string {
+    if (preg_match('/^upload_error_(\d+)_(\d+)$/', $code, $m)) {
+        $which = 'فایل شماره ' . toPersianDigits((string) ((int) $m[1] + 1)) . ': ';
+        $label = match ((int) $m[2]) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'حجم فایل از محدودیت سرور بیشتر است.',
+            UPLOAD_ERR_PARTIAL => 'فایل کامل ارسال نشد (اتصال قطع شد یا حجم/زمان زیاد بود). دوباره تلاش کنید؛ برای چند فایل، گزینهٔ ZIP را فعال کنید.',
+            UPLOAD_ERR_NO_FILE => 'فایلی انتخاب نشده بود.',
+            UPLOAD_ERR_NO_TMP_DIR => 'پوشهٔ موقتِ سرور در دسترس نیست (با پشتیبانی هاست تماس بگیرید).',
+            UPLOAD_ERR_CANT_WRITE => 'نوشتن فایل روی سرور ناموفق بود.',
+            UPLOAD_ERR_EXTENSION => 'آپلود توسط یکی از افزونه‌های سرور متوقف شد.',
+            default => 'خطای نامشخص در آپلود (کد ' . toPersianDigits((string) (int) $m[2]) . ').',
+        };
+        return $which . $label;
+    }
+    if (preg_match('/^ext_not_allowed_(.+)$/', $code, $m)) {
+        return 'پسوند «' . $m[1] . '» مجاز نیست.';
+    }
+    if (str_starts_with($code, 'move_failed')) {
+        return 'انتقال فایل روی سرور ناموفق بود (دسترسی پوشه را بررسی کنید).';
+    }
+    return match ($code) {
+        'db_insert_error'   => 'فایل روی سرور ذخیره شد اما ثبت آن در دیتابیس ناموفق بود.',
+        'cannot_create_dir' => 'ساخت پوشهٔ آپلود ناموفق بود (دسترسی پوشه را بررسی کنید).',
+        'zip_open_failed'   => 'ساخت فایل ZIP ناموفق بود؛ بدون ZIP دوباره تلاش کنید.',
+        default             => 'خطا: ' . $code,
+    };
+}
+
+/**
  * Config for the «نوع فایل» selector on uploads (options + badge colors).
  */
 function caseFileTypeConfig(): array {
@@ -684,4 +738,35 @@ function getCaseActivityLog(int $caseId): array
     $stmt = db()->prepare('SELECT l.*, u.full_name AS user_name FROM case_activity_log l LEFT JOIN users u ON u.id = l.user_id WHERE l.case_id = ? ORDER BY l.id DESC LIMIT 500');
     $stmt->execute([$caseId]);
     return $stmt->fetchAll();
+}
+
+/**
+ * آدرس پایهٔ عمومیِ برنامه (بدون اسلش انتهایی) — برای ساخت لینک‌های مطلق مثل QR روی برچسب.
+ *   لوکال (XAMPP):  http://localhost/exolab
+ *   روی هاست:        https://exolab.ir
+ * ترتیب تشخیص: مقدار APP_URL در .env (اگر کامل داده شده باشد) → تشخیص خودکار از
+ * هدرهای درخواست + محلِ همین فایلِ اجراشده (پوشهٔ panel چسبیده به ریشهٔ برنامه).
+ */
+function appBaseUrl(): string
+{
+    if (class_exists('EnvLoader')) {
+        EnvLoader::load();
+        $configured = trim((string) EnvLoader::get('APP_URL', ''));
+        if ($configured !== '') return rtrim($configured, '/');
+    }
+
+    $https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+        || strtolower((string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https'
+        || (string) ($_SERVER['SERVER_PORT'] ?? '') === '443';
+    $scheme = $https ? 'https' : 'http';
+
+    $host = trim((string) ($_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? ''));
+    if ($host === '') $host = 'localhost';
+
+    // مسیر برنامه: از محل اسکریپت جاری محاسبه می‌شود تا هم /exolab (لوکال) و هم / (هاست) درست باشد.
+    $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+    $root = $script !== '' ? dirname(dirname($script)) : '';
+    if ($root === '/' || $root === '.' || $root === '\\') $root = '';
+
+    return $scheme . '://' . $host . $root;
 }

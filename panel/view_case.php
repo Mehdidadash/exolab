@@ -16,7 +16,6 @@ $files = [];
 $user = current_user();
 $isDoctor = ($user['role'] === 'doctor');
 $isDesigner = ($user['role'] === 'designer');
-$doctorId = $isDoctor ? $user['id'] : null;
 
 if ($id) {
     $sql = 'SELECT c.*, u.full_name AS doctor_name, u.notes AS doctor_notes, p.title AS service_title, d.full_name AS designer_name,
@@ -31,29 +30,19 @@ if ($id) {
             LEFT JOIN users olab ON c.outsourced_lab_id = olab.id
             LEFT JOIN site_prices os ON c.outsourced_service_id = os.id
             WHERE c.id = ?';
-    $params = [$id];
-    if ($isDoctor) {
-        $sql .= ' AND c.doctor_id = ?';
-        $params[] = $doctorId;
-    } elseif ($isDesigner) {
-        $sql .= ' AND c.designer_id = ?';
-        $params[] = $user['id'];
-    } elseif (!has_permission('view_all_cases')) {
-        die('دسترسی غیرمجاز');
-    }
-    // Branch scoping: any branch-scoped user (including branch_admin) may only
-    // access cases of their own branch or where their branch is the partner.
-    // مدیر کل (نقش admin) نیز به‌عنوان شعبهٔ مرکزی (۱) رفتار می‌کند.
-    if (is_branch_scoped() || is_root_admin()) {
-        $scopeBranch = currentBranchId();
-        if ($scopeBranch === null) $scopeBranch = 1;
-        $bScope = branchCaseScope('c', $scopeBranch);
-        $sql .= ' AND ' . $bScope['sql'];
-        $params = array_merge($params, $bScope['params']);
-    }
     $stmt = db()->prepare($sql);
-    $stmt->execute($params);
-    $case = $stmt->fetch();
+    $stmt->execute([$id]);
+    $case = $stmt->fetch() ?: null;
+
+    // ---- کنترل دسترسی -------------------------------------------------------
+    // ملاک، «رابطهٔ کاربر با کیس» است، نه فقط نامِ نقش: پزشکِ کیس، طراحِ کیس،
+    // لابراتوارِ کیس، لابراتوارِ برون‌سپاری، پزشکانِ زیرمجموعهٔ کلینیک، و در نهایت
+    // کارکنان با مجوزِ view_all_cases در محدودهٔ شعبه (منطق در userCanViewCase()).
+    // بنابراین کاربری که هم‌زمان «لابراتوار برون‌سپاری» و «طراح» است، اگر هر کدام
+    // از این دو رابطه برقرار باشد، اجازهٔ دیدن دارد.
+    if ($case && !userCanViewCase((int) $id, $user, $case)) {
+        die('دسترسی غیرمجاز — این کیس به حساب کاربری شما مرتبط نیست (کیس #' . (int) $id . ').');
+    }
 
     if ($case) {
         $fstmt = db()->prepare('SELECT cf.*, u.full_name AS uploader_name FROM case_files cf LEFT JOIN users u ON u.id = cf.uploader_id WHERE cf.case_id = ? ORDER BY cf.id ASC');
@@ -92,6 +81,9 @@ if ($id) {
 
 $statuses = getAllCaseStatuses();
 $designers = getAllDesigners();
+// طراح پیش‌فرض (برای کیس‌هایی که خدمتشان طراحی لازم دارد)
+$defaultDesignerForForm = getDefaultDesigner();
+$defaultDesignerId = $defaultDesignerForForm ? (int) $defaultDesignerForForm['id'] : 0;
 // طراحِ همین کیس ممکن است غیرفعال یا از شعبه‌ای دیگر باشد و در لیستِ فرم نباشد؛
 // در آن صورت گزینه‌اش را اضافه می‌کنیم تا هنگام ویرایش، طراحِ کیس از دست نرود.
 $caseDesignerId = (int) ($case['designer_id'] ?? 0);
@@ -128,7 +120,13 @@ $prices = getAllPrices();
 // Whether the current user may edit this case (admin / staff / secretary …)
 $canEditCase = has_role('admin') || has_role('branch_admin') || has_permission('edit_cases');
 // چه کسی می‌تواند متن کامنت/توضیح فایل را به یادداشت پزشک اضافه کند
-$canAppendNote = is_admin() || in_array($user['role'] ?? '', ['designer', 'technician'], true);
+// (طراح = نقشِ designer یا کاربری که تیکِ «طراح» دارد)
+$canAppendNote = is_admin() || is_designer_user($user) || in_array($user['role'] ?? '', ['technician'], true);
+// آیا کاربر می‌تواند فایل‌ها را بین کیس‌ها وصل/جدا کند؟
+// (هم‌ارزِ گیتِ permission در link_case_file_to_case.php و unlink_case_file_from_case.php)
+$canLinkFiles = is_admin()
+    || has_permission('upload_files') || has_permission('upload_design_files') || has_permission('edit_cases')
+    || is_designer_user($user) || in_array($user['role'] ?? '', ['doctor'], true);
 
 panel_layout_start('مشاهده کیس');
 ?>
@@ -153,7 +151,7 @@ panel_layout_start('مشاهده کیس');
         if (!empty($case['doctor_id'])) {
             $did = (int) $case['doctor_id'];
             $canViewDoctorProfile = has_role('admin')
-                || ($isDesigner && designerCanAccessUser($did))
+                || (is_designer_user($user) && designerCanAccessUser($did))
                 || (has_role('doctor') && $did === (int) $user['id'])
                 || (has_role('clinic') && canAccessDoctor($did));
         }
@@ -240,150 +238,160 @@ panel_layout_start('مشاهده کیس');
         }
         ?>
 
-        <table class="case-info-table" style="width:100%; border-collapse:collapse; margin:12px 0;">
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>نوع کیس:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;">
-                    <?= htmlspecialchars($caseTypeLabel) ?>
-                    <?php if ($branchBadge): ?> <?= $branchBadge ?><?php endif; ?>
-                </td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>پزشک:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?php if ($canViewDoctorProfile): ?><a href="doctor_view.php?id=<?= (int) $case['doctor_id'] ?>"><?= htmlspecialchars($case['doctor_name'] ?? '—') ?></a><?php else: ?><?= htmlspecialchars($case['doctor_name'] ?? '—') ?><?php endif; ?></td>
-            </tr>
-            <?php if ($branchBadge && $partnerBranchName): ?>
-            <tr style="background:#f8fafc;">
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong><?= htmlspecialchars($branchLabel) ?>:</strong></td>
-                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($partnerBranchName) ?></td>
-            </tr>
-            <?php endif; ?>
-            <?php if (!$hideFinancial && ($inboundPartner || $outboundPartner)): $crossAmt = getInboundReceivableAmount($case); ?>
-            <tr style="background:<?= $inboundPartner ? '#f0fdf4' : '#fffbeb' ?>;">
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong><?= $inboundPartner ? 'طلب ما از شعبه مبدا' : 'بدهی ما به شعبه گیرنده' ?>:</strong></td>
-                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee; color:<?= $inboundPartner ? '#166534' : '#92400e' ?>; font-weight:bold;">
-                    <?= formatAmountToman($crossAmt) ?> تومان
-                    <small style="font-weight:normal; color:#525252; display:block; margin-top:2px;">
-                        <?= $inboundPartner ? 'این مبلغ همان هزینه برون‌سپاری است که شعبه مبدا برای این کیس به ما پرداخت می‌کند.' : 'این مبلغ همان هزینه برون‌سپاری است که ما برای این کیس به شعبه گیرنده می‌پردازیم.' ?>
-                    </small>
-                </td>
-            </tr>
-            <?php endif; ?>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>شماره قبض:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['receipt_number'] ?? '—') ?></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>خدمت:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['service_title'] ?? '—') ?></td>
-            </tr>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>تاریخ دریافت:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars(toJalaliDateFormatted($case['received_date'])) ?></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>مکان / دندان:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars(formatCaseLocation($case['location_type'], $case['teeth'])) ?></td>
-            </tr>
-            <?php if (($case['location_type'] ?? '') === 'teeth' && !empty($case['teeth'])): ?>
-            <tr>
-                <td colspan="4" style="padding:6px 8px; border-bottom:1px solid #eee;">
-                    <strong>دندان‌های انتخاب‌شده:</strong>
-                    <div style="margin-top:8px;"><?= renderTeethChart($case['teeth']) ?></div>
-                </td>
-            </tr>
-            <?php endif; ?>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>سایه:</strong></td>
-                <?php
-                $shCode = trim((string) ($case['shade'] ?? ''));
-                $shHex  = caseShadeColor($shCode);
-                // رنگ زمینهٔ همین سلول = رنگ استاندارد سایه (مثل جدول کیس‌ها)
-                $shCellStyle = 'padding:6px 8px; border-bottom:1px solid #eee;'
-                    . ($shHex !== '' ? ' background:' . $shHex . '; color:#1f2937; font-weight:700; box-shadow: inset 0 0 0 1px rgba(15,23,42,0.08);' : '');
-                ?>
-                <td style="<?= $shCellStyle ?>"><?= $shCode === '' ? '—' : htmlspecialchars($shCode) ?></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>تعداد:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= toPersianDigits((int)($case['quantity'] ?? 1)) ?></td>
-            </tr>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>وضعیت:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><span class="badge"><?= htmlspecialchars($case['status_name'] ?? '—') ?></span></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-            </tr>
-            <?php if (!$isRestricted && !$isDesigner): ?>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong><?= ($case['case_type'] ?? '') === 'lab_in' ? 'کار از لابراتوار:' : (($case['case_type'] ?? '') === 'lab_out' ? 'برون‌سپاری به لابراتوار:' : 'لابراتوار:') ?></strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['lab_name'] ?? '—') ?></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-            </tr>
-            <?php endif; ?>
-            <?php if (canSeeDesignerInfo()): ?>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>طراح:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['designer_name'] ?? '—') ?></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-            </tr>
-            <?php endif; ?>
-            <?php if (!$isRestricted && !empty($case['outsourced_lab_name']) && !empty($case['outsourced_qty'])): ?>
-            <tr style="background:#f0fdf4;">
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>برون‌سپاری جانبی:</strong></td>
-                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee;">
-                    <?= htmlspecialchars($case['outsourced_lab_name']) ?>
-                    — <?= htmlspecialchars($case['outsourced_service_title'] ?? 'خدمت') ?>
-                    (تعداد: <?= toPersianDigits((int) $case['outsourced_qty']) ?>)
-                    <?php if (isset($case['outsourced_rate']) && $case['outsourced_rate'] !== null): ?>
-                        — نرخ: <?= toPersianDigits(number_format((float) $case['outsourced_rate'])) ?> تومان
-                    <?php endif; ?>
-                </td>
-            </tr>
-            <?php endif; ?>
-            <?php if (!$hideFinancial): ?>
-            <?php if ($viewerProviderFee !== null): ?>
-            <tr style="background:#f0fdf4;">
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>سهم لابراتوار (برون‌سپاری):</strong></td>
-                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee; color:#166534; font-weight:bold;">
-                    <?= formatAmountToman($viewerProviderFee) ?> تومان
-                    <small style="font-weight:normal; color:#525252; display:block; margin-top:2px;">مبلغ قابل دریافت بابت انجام این کیس (نرخ برون‌سپاری × تعداد).</small>
-                </td>
-            </tr>
-            <?php else: ?>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>فی (تومان):</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= $case['unit_price'] ? formatAmountToman($case['unit_price']) : '—' ?></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>هزینه طراحی:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= !empty($case['design_fee']) ? formatAmountToman($case['design_fee']) : '—' ?></td>
-            </tr>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>جمع کل:</strong></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><?= $case['total_price'] ? formatAmountToman($case['total_price']) : '—' ?></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"></td>
-            </tr>
-            <?php endif; ?>
-            <?php endif; ?>
-            <?php if (!empty($case['doctor_notes'])): ?>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>توضیحات پزشک:</strong></td>
-                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee;"><div style="white-space:pre-wrap; direction:rtl; text-align:right; unicode-bidi:plaintext; line-height:1.9;"><?= nl2br(htmlspecialchars($case['doctor_notes'])) ?></div></td>
-            </tr>
-            <?php endif; ?>
-            <?php if (!empty($case['description'])): ?>
-            <tr>
-                <td style="padding:6px 8px; border-bottom:1px solid #eee;"><strong>توضیحات:</strong></td>
-                <td colspan="3" style="padding:6px 8px; border-bottom:1px solid #eee;"><?= htmlspecialchars($case['description']) ?></td>
-            </tr>
-            <?php endif; ?>
-        </table>
+        <?php
+        // ─── اطلاعات کیس: هر آیتم یک جفتِ «برچسب/مقدار» است. روی مانیتورهای بزرگ در
+        // گریدِ ۴ستونه (= ۸ ستونِ برچسب/مقدار) چیده می‌شود و روی موبایل به یک ستون
+        // می‌رسد؛ آیتم‌های بلند (دندان‌ها، توضیحات، مبالغ بین‌شعبه‌ای) تمام‌عرض‌اند.
+        $infoItems = [];
+
+        $infoItems[] = [
+            'label' => 'نوع کیس',
+            'value' => htmlspecialchars($caseTypeLabel) . ($branchBadge ? ' ' . $branchBadge : ''),
+        ];
+        $infoItems[] = [
+            'label' => 'پزشک',
+            'value' => $canViewDoctorProfile
+                ? '<a href="doctor_view.php?id=' . (int) $case['doctor_id'] . '">' . htmlspecialchars($case['doctor_name'] ?? '—') . '</a>'
+                : htmlspecialchars($case['doctor_name'] ?? '—'),
+        ];
+
+        if ($branchBadge && $partnerBranchName) {
+            $infoItems[] = ['label' => $branchLabel, 'value' => htmlspecialchars($partnerBranchName), 'wide' => true, 'style' => 'background:#f8fafc;'];
+        }
+
+        if (!$hideFinancial && ($inboundPartner || $outboundPartner)) {
+            $crossAmt = getInboundReceivableAmount($case);
+            $crossNote = $inboundPartner
+                ? 'این مبلغ همان هزینه برون‌سپاری است که شعبه مبدا برای این کیس به ما پرداخت می‌کند.'
+                : 'این مبلغ همان هزینه برون‌سپاری است که ما برای این کیس به شعبه گیرنده می‌پردازیم.';
+            $infoItems[] = [
+                'label' => $inboundPartner ? 'طلب ما از شعبه مبدا' : 'بدهی ما به شعبه گیرنده',
+                'value' => formatAmountToman($crossAmt) . ' تومان'
+                    . '<small style="display:block; font-weight:400; color:#525252; margin-top:2px;">' . $crossNote . '</small>',
+                'wide' => true,
+                'style' => 'background:' . ($inboundPartner ? '#f0fdf4' : '#fffbeb') . ';',
+                'valueStyle' => 'color:' . ($inboundPartner ? '#166534' : '#92400e') . '; font-weight:700;',
+            ];
+        }
+
+        $infoItems[] = ['label' => 'شماره قبض', 'value' => htmlspecialchars($case['receipt_number'] ?? '—')];
+        $infoItems[] = ['label' => 'خدمت', 'value' => htmlspecialchars($case['service_title'] ?? '—')];
+        $infoItems[] = ['label' => 'تاریخ دریافت', 'value' => htmlspecialchars(toJalaliDateFormatted($case['received_date']))];
+        $infoItems[] = ['label' => 'مکان / دندان', 'value' => htmlspecialchars(formatCaseLocation($case['location_type'], $case['teeth']))];
+
+        if (($case['location_type'] ?? '') === 'teeth' && !empty($case['teeth'])) {
+            $infoItems[] = [
+                'label' => 'دندان‌های انتخاب‌شده',
+                'value' => '<div style="margin-top:8px;">' . renderTeethChart($case['teeth']) . '</div>',
+                'wide' => true,
+                'stack' => true,
+            ];
+        }
+
+        $shCode = trim((string) ($case['shade'] ?? ''));
+        $shHex  = caseShadeColor($shCode);
+        $infoItems[] = [
+            'label' => 'سایه',
+            'value' => $shCode === '' ? '—' : htmlspecialchars($shCode),
+            'style' => $shHex !== '' ? 'background:' . $shHex . ';' : '',
+            'valueStyle' => $shHex !== '' ? 'font-weight:700; color:#1f2937;' : '',
+        ];
+        $infoItems[] = ['label' => 'تعداد', 'value' => toPersianDigits((int) ($case['quantity'] ?? 1))];
+        $infoItems[] = ['label' => 'وضعیت', 'value' => '<span class="badge">' . htmlspecialchars($case['status_name'] ?? '—') . '</span>'];
+
+        if (!$isRestricted && !$isDesigner) {
+            $labInfoLabel = ($case['case_type'] ?? '') === 'lab_in' ? 'کار از لابراتوار'
+                : ((($case['case_type'] ?? '') === 'lab_out') ? 'برون‌سپاری به لابراتوار' : 'لابراتوار');
+            $infoItems[] = ['label' => $labInfoLabel, 'value' => htmlspecialchars($case['lab_name'] ?? '—')];
+        }
+        if (canSeeDesignerInfo()) {
+            $infoItems[] = ['label' => 'طراح', 'value' => htmlspecialchars($case['designer_name'] ?? '—')];
+        }
+        if (!$isRestricted && !empty($case['outsourced_lab_name']) && !empty($case['outsourced_qty'])) {
+            $outsourcedTxt = htmlspecialchars($case['outsourced_lab_name'])
+                . ' — ' . htmlspecialchars($case['outsourced_service_title'] ?? 'خدمت')
+                . ' (تعداد: ' . toPersianDigits((int) $case['outsourced_qty']) . ')';
+            if (isset($case['outsourced_rate']) && $case['outsourced_rate'] !== null) {
+                $outsourcedTxt .= ' — نرخ: ' . toPersianDigits(number_format((float) $case['outsourced_rate'])) . ' تومان';
+            }
+            $infoItems[] = ['label' => 'برون‌سپاری جانبی', 'value' => $outsourcedTxt, 'wide' => true, 'style' => 'background:#f0fdf4;'];
+        }
+        if (!$hideFinancial) {
+            if ($viewerProviderFee !== null) {
+                $infoItems[] = [
+                    'label' => 'سهم لابراتوار (برون‌سپاری)',
+                    'value' => formatAmountToman($viewerProviderFee) . ' تومان'
+                        . '<small style="display:block; font-weight:400; color:#525252; margin-top:2px;">مبلغ قابل دریافت بابت انجام این کیس (نرخ برون‌سپاری × تعداد).</small>',
+                    'wide' => true,
+                    'style' => 'background:#f0fdf4;',
+                    'valueStyle' => 'color:#166534; font-weight:700;',
+                ];
+            } else {
+                $infoItems[] = ['label' => 'فی (تومان)', 'value' => $case['unit_price'] ? formatAmountToman($case['unit_price']) : '—'];
+                $infoItems[] = ['label' => 'هزینه طراحی', 'value' => !empty($case['design_fee']) ? formatAmountToman($case['design_fee']) : '—'];
+                $infoItems[] = ['label' => 'جمع کل', 'value' => $case['total_price'] ? formatAmountToman($case['total_price']) : '—', 'valueStyle' => 'font-weight:700;'];
+            }
+        }
+        if (!empty($case['doctor_notes'])) {
+            $infoItems[] = [
+                'label' => 'توضیحات پزشک',
+                'value' => '<div style="white-space:pre-wrap; direction:rtl; text-align:right; unicode-bidi:plaintext; line-height:1.9;">' . nl2br(htmlspecialchars($case['doctor_notes'])) . '</div>',
+                'wide' => true,
+            ];
+        }
+        if (!empty($case['description'])) {
+            $infoItems[] = [
+                'label' => 'توضیحات',
+                'value' => '<div style="white-space:pre-wrap; line-height:1.9;">' . nl2br(htmlspecialchars($case['description'])) . '</div>',
+                'wide' => true,
+            ];
+        }
+        ?>
+        <style>
+            /* اطلاعات کیس: ۴ جفت (۸ ستون) روی مانیتور بزرگ، ۳/۲/۱ ستون روی صفحه‌های کوچک‌تر */
+            .case-info-grid{ display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; background:#fff; margin:12px 0; }
+            .case-info-grid .ci-item{ display:flex; align-items:flex-start; gap:6px; padding:8px 10px; min-width:0; border-bottom:1px solid #eef2f7; border-left:1px solid #eef2f7; }
+            .case-info-grid .ci-item.ci-wide{ grid-column:1 / -1; }
+            .case-info-grid .ci-item.ci-stack{ flex-direction:column; gap:2px; }
+            .case-info-grid .ci-label{ color:#475569; font-weight:700; white-space:nowrap; }
+            .case-info-grid .ci-value{ min-width:0; overflow-wrap:anywhere; }
+            @media (max-width:1300px){ .case-info-grid{ grid-template-columns:repeat(3, minmax(0, 1fr)); } }
+            @media (max-width:1000px){ .case-info-grid{ grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+            @media (max-width:560px){ .case-info-grid{ grid-template-columns:1fr; } }
+        </style>
+        <div class="case-info-grid">
+            <?php foreach ($infoItems as $it): ?>
+                <div class="ci-item<?= !empty($it['wide']) ? ' ci-wide' : '' ?><?= !empty($it['stack']) ? ' ci-stack' : '' ?>"<?= !empty($it['style']) ? ' style="' . htmlspecialchars($it['style'], ENT_QUOTES) . '"' : '' ?>>
+                    <span class="ci-label"><?= htmlspecialchars($it['label']) ?>:</span>
+                    <span class="ci-value"<?= !empty($it['valueStyle']) ? ' style="' . htmlspecialchars($it['valueStyle'], ENT_QUOTES) . '"' : '' ?>><?= $it['value'] ?></span>
+                </div>
+            <?php endforeach; ?>
+        </div>
 
         <?php
         $allowedStatusIds = getAllowedStatusIdsForUser();
         $canChangeStatus = has_role('admin') || has_permission('edit_case_status') || has_permission('update_case_status');
-        if ($canChangeStatus):
+        $canChangeDesigner = canSeeDesignerInfo() && (has_role('admin') || has_permission('edit_cases'));
         ?>
-        <div class="form-card" style="margin-top:20px;">
-            <h4>تغییر وضعیت کیس</h4>
-            <form id="case-status-form" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+        <?php if ($canChangeStatus || $canChangeDesigner): ?>
+        <style>
+            /* تغییر وضعیت و تغییر طراح در یک ردیف؛ فیلد و دکمه کنار هم می‌مانند */
+            .vc-actions-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:20px; }
+            .vc-actions-row .form-card{ margin-top:0 !important; }
+            .vc-actions-row h4{ margin:0 0 6px; }
+            .vc-action-form{ display:flex; gap:8px; align-items:center; flex-wrap:nowrap; margin-top:8px; }
+            .vc-action-form select{ flex:1 1 auto; min-width:0; }
+            .vc-action-form .btn{ flex:0 0 auto; white-space:nowrap; }
+            @media (max-width:900px){ .vc-actions-row{ grid-template-columns:1fr; } }
+        </style>
+        <div class="vc-actions-row">
+            <?php if ($canChangeStatus): ?>
+            <div class="form-card">
+                <h4>تغییر وضعیت کیس</h4>
+                <form id="case-status-form" class="vc-action-form">
                 <input type="hidden" name="case_id" value="<?= (int) $case['id'] ?>">
                 <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                <select id="case-status-change" name="status_id" style="min-width:220px;">
+                <select id="case-status-change" name="status_id">
                     <option value="">انتخاب وضعیت...</option>
                     <?php foreach ($statuses as $s):
                         if (!empty($allowedStatusIds) && !in_array((int)$s['id'], $allowedStatusIds, true)) continue;
@@ -433,15 +441,15 @@ panel_layout_start('مشاهده کیس');
         </script>
         <?php endif; ?>
 
-        <?php if (canSeeDesignerInfo() && (has_role('admin') || has_permission('edit_cases'))): ?>
-        <div class="form-card" style="margin-top:20px;">
-            <h4>تغییر طراح کیس</h4>
+            <?php if ($canChangeDesigner): ?>
+            <div class="form-card">
+                <h4>تغییر طراح کیس</h4>
             <?php if (!empty($case['designer_invoice_id'])): ?>
                 <p style="color:#b91c1c;">این کیس قبلاً در فاکتور طراحی ثبت شده و نمی‌توان طراح آن را تغییر داد.</p>
             <?php else: ?>
-            <form id="case-change-designer-form" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+            <form id="case-change-designer-form" class="vc-action-form">
                 <input type="hidden" name="case_id" value="<?= (int) $case['id'] ?>">
-                <select id="case-change-designer-select" style="min-width:220px;">
+                <select id="case-change-designer-select">
                     <option value="">بدون طراح (حذف طراح)</option>
                     <?php foreach ($designers as $des): ?>
                         <option value="<?= $des['id'] ?>" <?= (int)($case['designer_id'] ?? 0) === (int) $des['id'] ? 'selected' : '' ?>>
@@ -488,10 +496,57 @@ panel_layout_start('مشاهده کیس');
         })();
         </script>
         <?php endif; ?>
+        </div>
+        <?php endif; ?>
 
         <?php if ($parentCase): ?>
             <p><strong>کیس اصلی:</strong> <a href="view_case.php?id=<?= $parentCase['id'] ?>">#<?= $parentCase['id'] ?> - <?= htmlspecialchars($parentCase['patient_name']) ?> (<?= htmlspecialchars($parentCase['service_title']) ?>)</a></p>
         <?php endif; ?>
+
+        <?php
+        // ── نوبت‌های اسکن این کیس (نوبت‌دهی اسکن) ──
+        $caseAppts      = getCaseScanAppointments((int) $case['id']);
+        $saTypes        = scanAppointmentTypes();
+        $saStatuses     = scanAppointmentStatuses();
+        $canManageAppts = canManageScanAppointments();
+        ?>
+        <div class="form-card" style="margin-top:20px;">
+            <h4 style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 8px;">
+                <span>🗓 نوبت‌های اسکن این کیس</span>
+                <span style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                    <?php if (count($caseAppts)): ?>
+                        <span class="badge" style="background:#e0f2fe; color:#0369a1;"><?= toPersianDigits((string) count($caseAppts)) ?> نوبت</span>
+                    <?php endif; ?>
+                    <?php if ($canManageAppts): ?>
+                        <a class="btn" href="scan_appointments.php?case_id=<?= (int) $case['id'] ?>&new=1" style="background:#0F172A; color:#fff; padding:5px 12px;">➕ ثبت نوبت اسکن</a>
+                    <?php endif; ?>
+                    <a class="btn" href="scan_appointments.php" style="background:#E5E7EB; color:#0F172A; padding:5px 12px;">تقویم نوبت‌ها</a>
+                </span>
+            </h4>
+            <?php if (empty($caseAppts)): ?>
+                <p class="empty" style="margin:0;">برای این کیس نوبتی ثبت نشده است.</p>
+            <?php else: ?>
+                <div style="display:grid; gap:8px;">
+                    <?php foreach ($caseAppts as $ap):
+                        $tMeta = $saTypes[(string) $ap['appt_type']] ?? ['label' => '—', 'icon' => '📌', 'color' => '#64748b'];
+                        $sMeta = $saStatuses[(string) $ap['status']] ?? ['label' => '—', 'color' => '#64748b'];
+                    ?>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:8px 10px;">
+                            <span style="background:<?= htmlspecialchars($tMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 8px; font-size:.78rem;"><?= $tMeta['icon'] ?> <?= htmlspecialchars($tMeta['label']) ?></span>
+                            <strong><?= toJalaliDateFormatted((string) $ap['appt_date']) ?></strong>
+                            <span><?= toPersianDigits(substr((string) $ap['start_time'], 0, 5)) ?><?= !empty($ap['end_time']) ? ' تا ' . toPersianDigits(substr((string) $ap['end_time'], 0, 5)) : '' ?></span>
+                            <?php if (!empty($ap['needs_scan_body'])): ?>
+                                <span style="background:#fef3c7; color:#92400e; border-radius:6px; padding:2px 8px; font-size:.78rem; font-weight:700;">🧩 اسکن‌بادی</span>
+                            <?php endif; ?>
+                            <span style="background:<?= htmlspecialchars($sMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 8px; font-size:.78rem;"><?= htmlspecialchars($sMeta['label']) ?></span>
+                            <?php if (!empty($ap['doctor_name'])): ?><span style="color:#475569; font-size:.85rem;">👨‍⚕️ <?= htmlspecialchars((string) $ap['doctor_name']) ?></span><?php endif; ?>
+                            <?php if (!empty($ap['address'])): ?><span style="color:#64748b; font-size:.82rem;">📍 <?= htmlspecialchars((string) $ap['address']) ?></span><?php endif; ?>
+                            <?php if (!empty($ap['notes'])): ?><span style="color:#64748b; font-size:.82rem; white-space:pre-wrap;">📝 <?= htmlspecialchars((string) $ap['notes']) ?></span><?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
 
         <div class="form-card" style="margin-top:20px;">
             <h4>پیام‌ها و کامنت‌ها</h4>
@@ -504,13 +559,19 @@ panel_layout_start('مشاهده کیس');
             </form>
 
             <?php $caseComments = getEntityComments('case', $case['id']); ?>
+            <style>
+                /* پیام‌ها و کامنت‌ها: دو ستونه در دسکتاپ، یک ستونه در موبایل */
+                .vc-comments-grid{ display:grid; gap:10px; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); align-items:start; }
+                @media (max-width:700px){ .vc-comments-grid{ grid-template-columns:1fr; } }
+                .vc-comment{ background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px; }
+            </style>
             <?php if (!empty($caseComments)): ?>
-                <div style="display:flex; flex-direction:column; gap:10px;">
+                <div class="vc-comments-grid">
                     <?php foreach ($caseComments as $comment):
                         $likeData = getCommentLikeData((int) $comment['id'], (int) $user['id']);
                         $canDelete = ((int) $comment['user_id'] === (int) $user['id'] || has_role('admin'));
                         ?>
-                        <div style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px 12px;">
+                        <div class="vc-comment">
                             <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap;">
                                 <strong><?= htmlspecialchars($comment['user_name'] ?? 'کاربر') ?></strong>
                                 <span style="font-size:0.8rem; color:#6b7280;"><?= toJalaliDateTimeFormatted($comment['created_at']) ?></span>
@@ -736,6 +797,12 @@ panel_layout_start('مشاهده کیس');
                     <input type="checkbox" id="case-upload-compress" style="width:auto;"> همه فایل‌ها را یکجا به‌صورت ZIP ذخیره کن
                 </label>
                 <textarea id="case-upload-description" name="description" rows="2" style="width:100%; margin-top:6px;" placeholder="توضیحات (اختیاری) – مثلاً: اصلاح طراحی، نوع پرسلن، ..."></textarea>
+                <?php $uplLimits = uploadLimits(); ?>
+                <small style="width:100%; margin-top:6px; color:#6b7280;">
+                    محدودیت سرور: حداکثر حجم هر فایل <strong><?= $uplLimits['max_file'] ? formatFileSize($uplLimits['max_file']) : 'نامحدود' ?></strong>
+                    · مجموع هر ارسال <strong><?= $uplLimits['post_max'] ? formatFileSize($uplLimits['post_max']) : 'نامحدود' ?></strong>
+                    · حداکثر <strong><?= toPersianDigits((string) $uplLimits['max_files']) ?></strong> فایل در هر ارسال
+                </small>
             </form>
             <div id="case-upload-msg" style="margin-top:6px; font-weight:bold;"></div>
             <div id="case-upload-progress" style="display:none; margin-top:8px;">
@@ -750,6 +817,22 @@ panel_layout_start('مشاهده کیس');
             var form = document.getElementById('case-upload-form');
             if (!form) return;
             var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+            var UPLOAD_LIMITS = <?= json_encode(uploadLimits()) ?>;
+            // بررسی حجم قبل از ارسال (خطای رایج هاست: err=3 = فایل ناقص/حجیم)
+            function checkUploadSizes(files) {
+                var maxFile = Number(UPLOAD_LIMITS.max_file) || 0;
+                var postMax = Number(UPLOAD_LIMITS.post_max) || 0;
+                var maxFiles = Number(UPLOAD_LIMITS.max_files) || 20;
+                var total = 0, tooBig = [];
+                for (var i = 0; i < files.length; i++) {
+                    total += files[i].size;
+                    if (maxFile > 0 && files[i].size > maxFile) tooBig.push(files[i].name);
+                }
+                if (files.length > maxFiles) return 'تعداد فایل‌ها (' + files.length + ') از حد مجاز (' + maxFiles + ') بیشتر است.';
+                if (tooBig.length) return 'این فایل‌ها از حد مجاز هر فایل بزرگ‌ترند: ' + tooBig.join('، ');
+                if (postMax > 0 && total > postMax) return 'مجموع حجم انتخابی از حد مجاز این ارسال بیشتر است؛ فایل‌ها را دسته‌دسته آپلود کنید.';
+                return '';
+            }
 
             // ── Selection bar: show file count + total size on selection ──
             var uploadInput = document.getElementById('case-upload-input');
@@ -787,6 +870,8 @@ panel_layout_start('مشاهده کیس');
                 var bar = document.getElementById('case-upload-bar');
                 var pct = document.getElementById('case-upload-percent');
                 if (!input || !input.files.length) { if (msgEl) { msgEl.textContent = 'فایلی انتخاب نشده است.'; msgEl.style.color = '#b91c1c'; } return; }
+                var sizeErr = checkUploadSizes(input.files);
+                if (sizeErr) { if (msgEl) { msgEl.textContent = '⚠️ ' + sizeErr; msgEl.style.color = '#b91c1c'; } return; }
                 var fd = new FormData();
                 fd.append('case_id', '<?= (int) $case['id'] ?>');
                 for (var i = 0; i < input.files.length; i++) fd.append('case_files[]', input.files[i]);
@@ -819,9 +904,18 @@ panel_layout_start('مشاهده کیس');
                         if (pct) pct.textContent = '100%';
                         if (msgEl) { msgEl.textContent = ((resp.uploaded || 0) + ' فایل با موفقیت آپلود شد.'); msgEl.style.color = '#166534'; }
                         setTimeout(function(){ location.reload(); }, 800);
+                    } else if (resp && resp.partial) {
+                        // بعضی فایل‌ها ذخیره شده‌اند → پیام واضح بده و لیست را به‌روز کن
+                        if (progressWrap) progressWrap.style.display = 'none';
+                        var pm = (resp.error_messages && resp.error_messages.length) ? resp.error_messages.join(' | ') : 'برخی فایل‌ها آپلود نشدند.';
+                        if (msgEl) { msgEl.textContent = '⚠️ ' + (resp.uploaded || 0) + ' فایل ذخیره شد اما: ' + pm; msgEl.style.color = '#b45309'; }
+                        setTimeout(function(){ location.reload(); }, 2500);
                     } else {
                         if (progressWrap) progressWrap.style.display = 'none';
-                        if (msgEl) { msgEl.textContent = 'خطا در آپلود: ' + ((resp && resp.errors && resp.errors.length) ? resp.errors.join(', ') : 'نامشخص'); msgEl.style.color = '#b91c1c'; }
+                        var list = (resp && resp.error_messages && resp.error_messages.length)
+                            ? resp.error_messages.join(' | ')
+                            : ((resp && resp.errors && resp.errors.length) ? resp.errors.join(' | ') : 'نامشخص');
+                        if (msgEl) { msgEl.textContent = 'خطا در آپلود: ' + list; msgEl.style.color = '#b91c1c'; }
                     }
                 };
                 xhr.onerror = function(){ if (progressWrap) progressWrap.style.display = 'none'; if (msgEl) { msgEl.textContent = 'خطا در اتصال به سرور.'; msgEl.style.color = '#b91c1c'; } };
@@ -877,6 +971,19 @@ panel_layout_start('مشاهده کیس');
                             <?php if (!empty($f['size'])): ?><span>💾 <?= formatFileSize($f['size']) ?></span><?php endif; ?>
                             <span><?= $typeBadge ?></span>
                         </div>
+                        <?php $chipLinks = caseFileLinkTargets((int) $f['id']); ?>
+                        <?php if (!empty($chipLinks)): ?>
+                            <div class="file-links" style="font-size:0.72rem; color:#5b21b6; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                                <?php foreach ($chipLinks as $lt): ?>
+                                    <span style="background:#ede9fe; border-radius:999px; padding:2px 8px; display:inline-flex; gap:4px; align-items:center;">
+                                        🔗 <a href="view_case.php?id=<?= (int) $lt['case_id'] ?>" style="color:#5b21b6; text-decoration:none;" title="<?= htmlspecialchars($lt['patient_name'] ?? '') ?>">کیس #<?= (int) $lt['case_id'] ?></a>
+                                        <?php if ($canLinkFiles): ?>
+                                            <button type="button" class="btn js-vc-unlink-file" data-file="<?= (int) $f['id'] ?>" data-case="<?= (int) $lt['case_id'] ?>" style="background:transparent; color:#991b1b; padding:0 3px; font-size:0.75rem; line-height:1;" title="حذف اتصال این فایل از کیس #<?= (int) $lt['case_id'] ?>">✕</button>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endforeach; ?>
+                            </div>
+                        <?php endif; ?>
                         <?php if (!empty($f['created_at'])): ?>
                             <div style="font-size:0.72rem; color:#6b7280;">📅 <?= toJalaliDateTimeFormatted($f['created_at']) ?> — <?= htmlspecialchars(formatElapsedTime($f['created_at'])) ?></div>
                         <?php endif; ?>
@@ -1369,12 +1476,251 @@ panel_layout_start('مشاهده کیس');
         <?php endif; ?>
 
         <?php
+        // ── فایل‌های مرتبط: فایل‌هایی از کیس‌های دیگر که به این کیس وصل شده‌اند ──
+        // فایل اصلی در کیسِ خودش می‌ماند و این‌جا فقط «نمایش داده» می‌شود.
+        $caseLinkedFiles = getLinkedCaseFilesForCase((int) $case['id']);
+        ?>
+        <div class="form-card" style="margin-top:20px;">
+            <h4 style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 6px;">
+                <span>🔗 فایل‌های مرتبط از کیس‌های دیگر</span>
+                <span style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                    <?php if (count($caseLinkedFiles)): ?>
+                        <span class="badge" style="background:#ede9fe; color:#5b21b6;"><?= toPersianDigits((string) count($caseLinkedFiles)) ?> فایل</span>
+                    <?php endif; ?>
+                    <?php if ($canLinkFiles): ?>
+                        <button type="button" id="vc-link-open" class="btn" style="background:#0F172A; color:#fff; padding:5px 12px;">➕ افزودن فایل از کیس دیگر</button>
+                    <?php endif; ?>
+                </span>
+            </h4>
+            <p style="margin:0 0 8px; color:#525252; font-size:0.85rem;">
+                فایل‌های کیس‌های دیگر (اسکن/طراحی/…) که به این کیس هم وصل شده‌اند. فایل روی کیسِ اصلی خودش باقی می‌ماند.
+            </p>
+            <?php if (empty($caseLinkedFiles)): ?>
+                <p class="empty" style="margin:0;">فایل مرتبطی به این کیس وصل نشده است.</p>
+            <?php else: ?>
+                <table class="datatable display" style="width:100%; font-size:0.9rem;">
+                    <thead>
+                    <tr>
+                        <th>فایل</th>
+                        <th>کیس مبدأ</th>
+                        <th>بیمار</th>
+                        <th>نوع</th>
+                        <th>اندازه</th>
+                        <th>زمان اتصال</th>
+                        <th>عملیات</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($caseLinkedFiles as $lf):
+                        $lfExt = strtolower(pathinfo((string) $lf['original_name'], PATHINFO_EXTENSION));
+                        $lfDesc = trim((string) ($lf['description'] ?? ''));
+                        // فقط سازندهٔ اتصال، آپلودکنندهٔ فایل یا مدیر می‌تواند اتصال را بردارد
+                        $canUnlinkThis = $canLinkFiles && (is_admin() || has_permission('edit_cases')
+                            || (int) ($lf['link_created_by'] ?? 0) === (int) $user['id']
+                            || (int) ($lf['uploader_id'] ?? 0) === (int) $user['id']);
+                    ?>
+                        <tr>
+                            <td>
+                                <a href="serve_case_file.php?id=<?= (int) $lf['id'] ?>&n=<?= rawurlencode((string) $lf['original_name']) ?>" target="_blank"><?= htmlspecialchars($lf['original_name']) ?></a>
+                                <?php if ($lfDesc !== ''): ?>
+                                    <div style="font-size:0.78rem; color:#6b7280; white-space:pre-wrap;"><?= htmlspecialchars($lfDesc) ?></div>
+                                <?php endif; ?>
+                            </td>
+                            <td><a href="view_case.php?id=<?= (int) $lf['src_case_id'] ?>">#<?= (int) $lf['src_case_id'] ?></a></td>
+                            <td><?= htmlspecialchars($lf['src_patient_name'] ?? '—') ?></td>
+                            <td><?= caseFileBadge($lf['file_type'] ?? null, $lfExt) ?></td>
+                            <td><?= !empty($lf['size']) ? formatFileSize($lf['size']) : '—' ?></td>
+                            <td style="font-size:0.78rem; color:#6b7280;">
+                                <?= !empty($lf['linked_at']) ? toJalaliDateTimeFormatted($lf['linked_at']) : '—' ?>
+                                <?= !empty($lf['linker_name']) ? '<br>' . htmlspecialchars($lf['linker_name']) : '' ?>
+                            </td>
+                            <td style="white-space:nowrap;">
+                                <a class="btn" href="serve_case_file.php?id=<?= (int) $lf['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:3px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
+                                <?php if (!in_array($user['role'] ?? '', ['doctor', 'clinic'], true)): ?>
+                                    <a class="btn" href="download_case_file.php?id=<?= (int) $lf['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:3px 8px; text-decoration:none;">دانلود</a>
+                                <?php endif; ?>
+                                <?php if ($canUnlinkThis): ?>
+                                    <button type="button" class="btn js-vc-unlink-file" data-file="<?= (int) $lf['id'] ?>" style="background:#fee2e2; color:#991b1b; padding:3px 8px;" title="حذف اتصال این فایل از این کیس">✕</button>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            <?php endif; ?>
+        </div>
+
+        <?php if ($canLinkFiles): ?>
+        <style>
+            .vc-modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.45); z-index:9999; }
+            .vc-modal .vc-modal-box{ background:#fff; border-radius:10px; max-height:92vh; overflow:auto; width:920px; max-width:96%; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,0.25); }
+            #vc-link-results tr.vc-hit{ cursor:pointer; }
+            #vc-link-results tr.vc-hit:hover{ background:#f1f5f9; }
+        </style>
+        <div id="vc-link-modal" class="vc-modal">
+            <div class="vc-modal-box">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                    <h4 style="margin:0;">➕ افزودن فایل از کیس‌های دیگر</h4>
+                    <button type="button" id="vc-link-close" class="btn" style="background:#E5E7EB; color:#0F172A; padding:4px 12px;">✕</button>
+                </div>
+                <div style="display:flex; gap:8px; margin:12px 0; flex-wrap:wrap; align-items:center;">
+                    <input type="text" id="vc-link-search" placeholder="جست‌وجو: نام فایل، نام بیمار یا شمارهٔ کیس…" style="flex:1; min-width:220px; padding:8px 10px; border:1px solid #d1d5db; border-radius:6px;">
+                    <button type="button" id="vc-link-search-btn" class="btn" style="background:#0F172A; color:#fff;">جست‌وجو</button>
+                    <button type="button" id="vc-link-attach-btn" class="btn" style="background:#16A34A; color:#fff;">اتصال انتخاب‌شده‌ها</button>
+                </div>
+                <div id="vc-link-msg" style="font-weight:bold; margin-bottom:6px;"></div>
+                <div style="max-height:52vh; overflow:auto; border:1px solid #e5e7eb; border-radius:8px;">
+                    <table style="width:100%; font-size:0.88rem; border-collapse:collapse;">
+                        <thead>
+                        <tr style="background:#f8fafc;">
+                            <th style="padding:6px; width:34px;"><input type="checkbox" id="vc-link-all"></th>
+                            <th style="padding:6px; text-align:right;">فایل</th>
+                            <th style="padding:6px; text-align:right;">کیس</th>
+                            <th style="padding:6px; text-align:right;">بیمار</th>
+                            <th style="padding:6px; text-align:right;">نوع</th>
+                            <th style="padding:6px; text-align:right;">اندازه</th>
+                            <th style="padding:6px; text-align:right;">تاریخ</th>
+                        </tr>
+                        </thead>
+                        <tbody id="vc-link-results">
+                        <tr><td colspan="7" style="padding:12px; color:#6b7280;">برای دیدن فایل‌ها، حداقل ۲ حرف از نام فایل/بیمار یا شمارهٔ کیس را بنویسید.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <script>
+        (function(){
+            var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+            var caseId = '<?= (int) $case['id'] ?>';
+            var modal = document.getElementById('vc-link-modal');
+            var input = document.getElementById('vc-link-search');
+            var results = document.getElementById('vc-link-results');
+            var msgEl = document.getElementById('vc-link-msg');
+            function setMsg(text, color){ if (msgEl){ msgEl.textContent = text || ''; msgEl.style.color = color || '#334155'; } }
+            function esc(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+
+            function openModal(){ if (!modal) return; modal.style.display = 'flex'; setMsg(''); input.focus(); }
+            function closeModal(){ if (modal) modal.style.display = 'none'; }
+            var openBtn = document.getElementById('vc-link-open');
+            if (openBtn) openBtn.addEventListener('click', openModal);
+            var closeBtn = document.getElementById('vc-link-close');
+            if (closeBtn) closeBtn.addEventListener('click', closeModal);
+            if (modal) modal.addEventListener('click', function(e){ if (e.target === modal) closeModal(); });
+            document.addEventListener('keydown', function(e){ if ((e.key === 'Escape' || e.key === 'Esc') && modal && modal.style.display === 'flex') closeModal(); });
+
+            function render(rows){
+                if (!results) return;
+                if (!rows.length){
+                    results.innerHTML = '<tr><td colspan="7" style="padding:12px; color:#6b7280;">فایلی یافت نشد (یا قبلاً به این کیس وصل شده است).</td></tr>';
+                    return;
+                }
+                var html = '';
+                rows.forEach(function(r){
+                    html += '<tr class="vc-hit">' +
+                        '<td style="padding:6px;"><input type="checkbox" class="vc-link-cb" value="' + r.file_id + '"></td>' +
+                        '<td style="padding:6px;">' + esc(r.name) + (r.description ? '<div style="color:#6b7280; font-size:0.78rem; white-space:pre-wrap;">' + esc(r.description) + '</div>' : '') + '</td>' +
+                        '<td style="padding:6px;"><a href="view_case.php?id=' + r.case_id + '" target="_blank">#' + r.case_id + '</a></td>' +
+                        '<td style="padding:6px;">' + esc(r.patient_name || '—') + '</td>' +
+                        '<td style="padding:6px;">' + esc(r.type_label || '') + '</td>' +
+                        '<td style="padding:6px;">' + esc(r.size || '') + '</td>' +
+                        '<td style="padding:6px; font-size:0.78rem; color:#6b7280;">' + esc(r.created || '') + '</td>' +
+                    '</tr>';
+                });
+                results.innerHTML = html;
+            }
+
+            function doSearch(){
+                var q = (input && input.value ? input.value : '').trim();
+                if (q.length < 2){ setMsg('حداقل ۲ حرف وارد کنید.', '#b45309'); return; }
+                setMsg('در حال جست‌وجو...', '#334155');
+                fetch('search_case_files.php?q=' + encodeURIComponent(q) + '&exclude_case_id=' + encodeURIComponent(caseId), { headers: { 'Accept': 'application/json' } })
+                    .then(function(r){ return r.json(); })
+                    .then(function(res){
+                        if (!res || !res.success){ setMsg((res && res.message) || 'خطا در جست‌وجو.', '#b91c1c'); return; }
+                        setMsg((res.count || 0) + ' فایل پیدا شد.', '#334155');
+                        render(res.results || []);
+                    })
+                    .catch(function(){ setMsg('خطا در ارتباط با سرور.', '#b91c1c'); });
+            }
+            var searchBtn = document.getElementById('vc-link-search-btn');
+            if (searchBtn) searchBtn.addEventListener('click', doSearch);
+            if (input) input.addEventListener('keydown', function(e){ if (e.key === 'Enter'){ e.preventDefault(); doSearch(); } });
+
+            var allCb = document.getElementById('vc-link-all');
+            if (allCb) allCb.addEventListener('change', function(){
+                document.querySelectorAll('.vc-link-cb').forEach(function(cb){ cb.checked = allCb.checked; });
+            });
+            // کلیک روی ردیف = تیک/برداشتن تیک
+            if (results) results.addEventListener('click', function(e){
+                if (e.target && e.target.classList && e.target.classList.contains('vc-link-cb')) return;
+                var tr = e.target.closest ? e.target.closest('tr.vc-hit') : null;
+                if (!tr) return;
+                var cb = tr.querySelector('.vc-link-cb');
+                if (cb) cb.checked = !cb.checked;
+            });
+
+            var attachBtn = document.getElementById('vc-link-attach-btn');
+            if (attachBtn) attachBtn.addEventListener('click', function(){
+                var ids = [];
+                document.querySelectorAll('.vc-link-cb:checked').forEach(function(cb){ ids.push(cb.value); });
+                if (!ids.length){ setMsg('هیچ فایلی انتخاب نشده است.', '#b45309'); return; }
+                var fd = new FormData();
+                fd.append('case_id', caseId);
+                ids.forEach(function(id){ fd.append('file_ids[]', id); });
+                fd.append('_csrf_token', csrf);
+                setMsg('در حال اتصال...', '#334155');
+                fetch('link_case_file_to_case.php', { method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: fd })
+                    .then(function(r){ return r.json().catch(function(){ return { success:false, message:'پاسخ نامعتبر سرور' }; }); })
+                    .then(function(res){
+                        if (res && res.success){
+                            setMsg('✅ ' + (res.linked || 0) + ' فایل وصل شد. در حال بازنشانی...', '#166534');
+                            setTimeout(function(){ location.reload(); }, 700);
+                        } else {
+                            var extra = (res && res.errors && res.errors.length) ? ' — ' + res.errors.join('؛ ') : '';
+                            setMsg('❌ ' + ((res && res.message) || 'اتصال انجام نشد.') + extra, '#b91c1c');
+                        }
+                    })
+                    .catch(function(){ setMsg('خطا در ارتباط با سرور.', '#b91c1c'); });
+            });
+
+            // حذف اتصال فایل از این کیس
+            document.addEventListener('click', function(e){
+                var btn = e.target.closest && e.target.closest('.js-vc-unlink-file');
+                if (!btn) return;
+                e.preventDefault();
+                if (!confirm('اتصال این فایل از این کیس حذف شود؟ (فایل در کیسِ اصلی خودش می‌ماند)')) return;
+                var fd = new FormData();
+                fd.append('case_id', btn.getAttribute('data-case') || caseId);
+                fd.append('file_id', btn.getAttribute('data-file'));
+                fd.append('_csrf_token', csrf);
+                fetch('unlink_case_file_from_case.php', { method: 'POST', headers: { 'X-CSRF-Token': csrf }, body: fd })
+                    .then(function(r){ return r.json().catch(function(){ return { success:false }; }); })
+                    .then(function(res){
+                        if (res && res.success) location.reload();
+                        else alert((res && res.message) || 'حذف اتصال انجام نشد.');
+                    })
+                    .catch(function(){ alert('خطا در ارتباط با سرور.'); });
+            });
+        })();
+        </script>
+        <?php endif; ?>
+
+        <?php
         // ── فایل‌های مشترک/کتابخانه: فایل‌هایی که در «آپلود فایل» گذاشته شده و به این کیس
         //    وصل شده‌اند (هر فایل می‌تواند به چند کیس وصل باشد و در همه دیده شود).
         $caseSharedFiles = getUserUploadsForCase((int) $case['id']);
+        // استخرِ فایل‌های کتابخانه برای اتصال: مدیر همهٔ فایل‌ها، کاربران دیگر فقط فایل‌های خودشان
         $attachPool = [];
+        $pool = [];
         if (is_admin()) {
-            $pool = db()->query('SELECT u.id, u.original_name, u.created_at, uu.full_name AS uploader_name FROM user_uploads u LEFT JOIN users uu ON uu.id = u.user_id ORDER BY u.created_at DESC')->fetchAll();
+            $pool = db()->query('SELECT u.id, u.original_name, u.created_at, u.user_id, uu.full_name AS uploader_name FROM user_uploads u LEFT JOIN users uu ON uu.id = u.user_id ORDER BY u.created_at DESC')->fetchAll();
+        } elseif ($canLinkFiles) {
+            $stPool = db()->prepare('SELECT u.id, u.original_name, u.created_at, u.user_id, uu.full_name AS uploader_name FROM user_uploads u LEFT JOIN users uu ON uu.id = u.user_id WHERE u.user_id = ? ORDER BY u.created_at DESC');
+            $stPool->execute([(int) $user['id']]);
+            $pool = $stPool->fetchAll();
+        }
+        if (!empty($pool)) {
             $linkedIds = array_map('intval', array_column($caseSharedFiles, 'id'));
             $attachPool = array_values(array_filter($pool, fn($f) => !in_array((int) $f['id'], $linkedIds, true)));
         }
@@ -1387,7 +1733,7 @@ panel_layout_start('مشاهده کیس');
                     <span class="badge" style="background:#ede9fe; color:#5b21b6;"><?= count($caseSharedFiles) ?> فایل</span>
                 <?php endif; ?>
             </h4>
-            <?php if (is_admin() && !empty($attachPool)): ?>
+            <?php if (!empty($attachPool)): ?>
                 <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:#f5f3ff; border:1px dashed #c4b5fd; border-radius:8px; padding:8px 10px; margin-bottom:10px;">
                     <span style="font-weight:600; font-size:0.9rem;">اتصال فایل از کتابخانه به این کیس:</span>
                     <select id="vc-attach-pool" style="flex:1; min-width:220px; padding:6px 8px; border:1px solid #d1d5db; border-radius:6px;">
@@ -1403,7 +1749,7 @@ panel_layout_start('مشاهده کیس');
             <?php if (empty($caseSharedFiles)): ?>
                 <p class="empty">فایل مشترکی به این کیس وصل نشده است.</p>
             <?php else: ?>
-                <table class="display" style="width:100%; font-size:0.9rem;">
+                <table class="datatable display" style="width:100%; font-size:0.9rem;">
                     <thead>
                     <tr>
                         <th style="text-align:right;">فایل</th>
@@ -1421,11 +1767,11 @@ panel_layout_start('مشاهده کیس');
                             <td><?= htmlspecialchars($sf['uploader_name'] ?? '—') ?></td>
                             <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($sf['description'] ?? '') ?: '—' ?></td>
                             <td><?= !empty($sf['size']) ? toPersianDigits(round((int) $sf['size'] / 1024)) . ' KB' : '—' ?></td>
-                            <td><?= toJalaliDateTimeFormatted($sf['created_at']) ?></td>
+                            <td data-order="<?= !empty($sf['created_at']) ? htmlspecialchars((string) $sf['created_at']) : '' ?>"><?= toJalaliDateTimeFormatted($sf['created_at']) ?></td>
                             <td class="actions" style="white-space:nowrap;">
                                 <a class="btn" href="serve_user_upload.php?id=<?= (int) $sf['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:3px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
                                 <a class="btn" href="download_user_upload.php?id=<?= (int) $sf['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:3px 8px; text-decoration:none;">دانلود</a>
-                                <?php if (is_admin()): ?>
+                                <?php if (is_admin() || (int) ($sf['user_id'] ?? 0) === (int) $user['id']): ?>
                                     <button type="button" class="btn js-vc-unlink" data-upload="<?= (int) $sf['id'] ?>" style="background:#fee2e2; color:#991b1b; padding:3px 8px;" title="حذف اتصال این فایل از این کیس">✕</button>
                                 <?php endif; ?>
                             </td>
@@ -1516,12 +1862,13 @@ panel_layout_start('مشاهده کیس');
                 </div>
                 <div class="form-group">
                     <label>طراح</label>
-                    <select name="designer_id">
+                    <select name="designer_id" id="ec-designer-id">
                         <option value="">بدون طراح</option>
                         <?php foreach ($designers as $des): ?>
                             <option value="<?= (int) $des['id'] ?>" <?= (int) ($case['designer_id'] ?? 0) === (int) $des['id'] ? 'selected' : '' ?>><?= htmlspecialchars($des['full_name']) ?></option>
                         <?php endforeach; ?>
                     </select>
+                    <small id="ec-design-note" style="display:none; color:#0369a1; background:#e0f2fe; border-radius:6px; padding:4px 8px; margin-top:6px;"></small>
                 </div>
                 <div class="form-group">
                     <label>نام بیمار *</label>
@@ -1583,7 +1930,8 @@ panel_layout_start('مشاهده کیس');
                 </div>
                 <div class="form-group">
                     <label>هزینه طراحی (تومان)</label>
-                    <input type="number" name="design_fee" min="0" step="1" value="<?= (int) ($case['design_fee'] ?? 0) ?>">
+                    <input type="number" name="design_fee" id="ec-design-fee" min="0" step="1" value="<?= (int) ($case['design_fee'] ?? 0) ?>">
+                    <small id="ec-design-fee-note" style="display:none; color:#b45309; background:#fffbeb; border-radius:6px; padding:4px 8px; margin-top:6px;"></small>
                 </div>
                 <div class="form-group">
                     <label>تاریخ دریافت</label>
@@ -1666,6 +2014,69 @@ panel_layout_start('مشاهده کیس');
         if (shadeInput) shadeInput.value = originalShade;
         if (window.ShadePickerSync) window.ShadePickerSync();
     }
+
+    // ── پیش‌فرضِ طراح و هزینهٔ طراحی بر اساس خدمت ──
+    // خدمات بدون طراحی (design_required = 0) مثل پست NPG / پرینت کست / الاینر شفاف:
+    // کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.
+    var SVC_DESIGN_REQUIRED = <?= json_encode(
+        array_map(function ($p) { return (int) ($p['design_required'] ?? 1); }, array_column($prices, null, 'id')),
+        JSON_UNESCAPED_UNICODE
+    ) ?>;
+    var DEFAULT_DESIGNER_ID = <?= (int) $defaultDesignerId ?>;
+    var ecDesignerEl = document.getElementById('ec-designer-id');
+    var ecDesignFeeEl = document.getElementById('ec-design-fee');
+    var ecDesignNoteEl = document.getElementById('ec-design-note');
+    var ecDesignFeeNoteEl = document.getElementById('ec-design-fee-note');
+
+    function ecServiceEl(){ return document.querySelector('#edit-case-form [name="service_id"]'); }
+    function ecServiceRequiresDesign(){
+        var el = ecServiceEl();
+        var v = el ? el.value : '';
+        if (!v) return true;
+        return (SVC_DESIGN_REQUIRED[v] === undefined) ? true : !!SVC_DESIGN_REQUIRED[v];
+    }
+    function ecSetNote(el, text){
+        if (!el) return;
+        el.textContent = text || '';
+        el.style.display = text ? 'block' : 'none';
+    }
+    function ecApplyServiceDesignDefault(serviceChanged){
+        if (!ecServiceRequiresDesign()) {
+            if (serviceChanged && ecDesignerEl) ecDesignerEl.value = '';
+            ecSetNote(ecDesignNoteEl, 'برای این خدمت طراحی لازم نیست؛ کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.');
+        } else {
+            ecSetNote(ecDesignNoteEl, '');
+            if (serviceChanged && ecDesignerEl && !ecDesignerEl.value && DEFAULT_DESIGNER_ID) {
+                ecDesignerEl.value = String(DEFAULT_DESIGNER_ID);
+            }
+        }
+    }
+    function ecReloadDesignFee(){
+        if (!ecDesignFeeEl) return;
+        if (!ecServiceRequiresDesign()) { ecDesignFeeEl.value = 0; ecSetNote(ecDesignFeeNoteEl, ''); return; }
+        var designerId = ecDesignerEl ? ecDesignerEl.value : '';
+        var svcEl = ecServiceEl();
+        var serviceId = svcEl ? svcEl.value : '';
+        if (!designerId) { ecDesignFeeEl.value = 0; ecSetNote(ecDesignFeeNoteEl, ''); return; }
+        if (!serviceId) { ecSetNote(ecDesignFeeNoteEl, ''); return; }
+        fetch('get_price.php?doctor_id=' + encodeURIComponent(designerId) + '&service_id=' + encodeURIComponent(serviceId) + '&price_type=design_fee', { headers: { 'Accept': 'application/json' } })
+            .then(function(r){ return r.json(); })
+            .then(function(resp){
+                if (!resp || resp.price === null) {
+                    ecSetNote(ecDesignFeeNoteEl, '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ هزینهٔ طراحی ۰ می‌ماند. مبلغ درست را دستی وارد یا در «نقشه قیمت‌گذاری» ثبت کنید.');
+                    return;
+                }
+                var qtyEl = document.querySelector('#edit-case-form [name="quantity"]');
+                var qty = parseInt(qtyEl ? qtyEl.value : '1', 10) || 1;
+                ecDesignFeeEl.value = Math.round(parseFloat(resp.price) * qty);
+                ecSetNote(ecDesignFeeNoteEl, '');
+            })
+            .catch(function(){});
+    }
+    var ecServiceField = ecServiceEl();
+    if (ecServiceField) ecServiceField.addEventListener('change', function(){ ecApplyServiceDesignDefault(true); ecReloadDesignFee(); });
+    if (ecDesignerEl) ecDesignerEl.addEventListener('change', ecReloadDesignFee);
+    ecApplyServiceDesignDefault(false);
 
     // ── Teeth ↔ location ↔ quantity auto logic (edit modal) ──
     function ecCountTeeth(v){
@@ -1837,7 +2248,12 @@ panel_layout_start('مشاهده کیس');
                 var errMsg = 'خطا در ذخیره تغییرات.';
                 if (resp && resp.message) errMsg = resp.message;
                 else if (resp && resp.error) errMsg = 'خطا: ' + resp.error;
-                if (msgEl) { msgEl.textContent = errMsg; msgEl.style.color = '#b91c1c'; }
+                if (resp && Array.isArray(resp.errors) && resp.errors.length) errMsg += ' — ' + resp.errors.join('؛ ');
+                if (resp && Array.isArray(resp.upload_errors) && resp.upload_errors.length) errMsg += ' — ' + resp.upload_errors.join('؛ ');
+                if (msgEl) {
+                    msgEl.innerHTML = '❌ ' + String(errMsg).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; });
+                    msgEl.style.color = '#b91c1c';
+                }
                 if (saveBtn) saveBtn.disabled = false;
             }
         };

@@ -89,8 +89,22 @@ panel_layout_start('مدیریت کیس‌ها');
     </div>
 </div>
 
-<div class="form-card" style="margin-bottom: 20px;">
-    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+<!--
+  نوار ابزار جدول کیس‌ها:
+  این نوار با JS به داخلِ کانتینر DataTables منتقل می‌شود؛ دقیقاً بعد از کادر جست‌وجو
+  و بلافاصله قبل از جدول. پنل‌های SearchPanes هم در #searchpanes-host (بالای دکمه‌ها)
+  ظاهر/ناپدید می‌شوند. نتیجه: برای فیلتر/پرینت/دانلود نیازی به بالا و پایین رفتن نیست.
+-->
+<div id="cases-action-bar" class="form-card" style="margin:0 0 10px;">
+    <style>
+        #searchpanes-host{ display:none; }
+        #searchpanes-host.is-open:not(:empty){ display:block; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid #e5e7eb; }
+        #cases-action-bar .dtsp-panesContainer{ margin-bottom:0; }
+    </style>
+    <!-- پنل‌های SearchPanes اینجا (بالای ردیف دکمه‌ها) ظاهر و ناپدید می‌شوند -->
+    <div id="searchpanes-host"></div>
+
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
         <div style="display: flex; gap: 10px; flex-wrap: wrap;">
             <button type="button" id="toggle-filters-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="toggleFilters()">🔍 فیلترها</button>
             <?php if (has_permission('batch_print_labels')): ?>
@@ -124,7 +138,7 @@ panel_layout_start('مدیریت کیس‌ها');
         </div>
     </div>
     <div id="filters-area" style="display:none;">
-        <form id="date-filter-form" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; border-top:1px solid #e5e7eb; padding-top:12px;">
+        <form id="date-filter-form" style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; border-top:1px solid #e5e7eb; padding-top:12px; margin-top:10px;">
             <div class="form-group" style="margin:0; min-width:150px;">
                 <label for="date_from">از تاریخ دریافت</label>
                 <input type="text" id="date_from" name="date_from" value="<?= htmlspecialchars($filterDateFrom ? toJalaliDateFormatted($filterDateFrom) : '') ?>" placeholder="۱۴۰۳/۰۱/۰۱" style="cursor:pointer;">
@@ -136,18 +150,37 @@ panel_layout_start('مدیریت کیس‌ها');
             <button type="submit" class="btn" style="background:#0F172A; color:#fff;">اعمال بازه تاریخ</button>
             <button type="button" id="clear-date-filter" class="btn" style="background:#E5E7EB; color:#0F172A;">پاک کردن بازه</button>
         </form>
-        <div id="searchpanes-host" style="border-top:1px solid #e5e7eb; margin-top:12px; padding-top:8px;"></div>
+    </div>
+
+    <div style="margin-top:10px;">
+        <p style="margin:0 0 4px; font-weight: 700;">تعداد کیس‌ها: <span id="cases-count">—</span></p>
+        <p style="margin:0 0 2px; font-size: 12px; color: #166534;">🟩 شماره کیس سبز = برچسب این کیس قبلاً چاپ شده است.</p>
+        <p style="margin:0; font-size: 12px; color: #525252;">🟦 «خام» و 🟪 «طراحی» در ستون فایل‌ها = فایل(های) خام یا طراحی این کیس قبلاً دانلود شده‌اند.</p>
     </div>
 </div>
 
-<p style="margin-bottom: 16px; font-weight: 700;">تعداد کیس‌ها: <span id="cases-count">—</span></p>
-<p style="margin-bottom: 4px; font-size: 12px; color: #166534;">🟩 شماره کیس سبز = برچسب این کیس قبلاً چاپ شده است.</p>
-<p style="margin-bottom: 16px; font-size: 12px; color: #525252;">🟦 «خام» و 🟪 «طراحی» در ستون فایل‌ها = فایل(های) خام یا طراحی این کیس قبلاً دانلود شده‌اند.</p>
+<style>
+    /* ── سلول انتخاب (چک‌باکس) کیس‌ها ──
+       کل سلول یک <label> است، پس کلیک/لمس هر جای سلول ⇢ انتخاب می‌شود
+       (قبلاً باید دقیقاً روی خودِ مربع کوچک کلیک می‌شد). */
+    #cases-table .case-cb-col,
+    #cases-table .case-cb-cell{ text-align:center; padding:0 !important; }
+    #cases-table .case-cb-col{ width:48px; }
+    .case-cb-wrap{ display:flex; align-items:center; justify-content:center; width:100%; min-width:48px; min-height:40px; margin:0; cursor:pointer; user-select:none; -webkit-tap-highlight-color:transparent; }
+    .case-cb-wrap input[type="checkbox"]{ width:20px; height:20px; margin:0; cursor:pointer; accent-color:#0F172A; }
+    /* ناحیهٔ لمسی بزرگ‌تر روی صفحه‌های لمسی/موبایل */
+    @media (max-width:900px), (pointer:coarse){
+        .case-cb-wrap{ min-height:48px; min-width:54px; }
+        .case-cb-wrap input[type="checkbox"]{ width:25px; height:25px; }
+    }
+    /* ردیف انتخاب‌شده مشخص‌تر دیده شود */
+    #cases-table tbody tr:has(.case-select-cb:checked) td{ background:#eff6ff; }
+</style>
 
 <table id="cases-table" class="display" style="width:100%">
     <thead>
     <tr>
-        <th><input type="checkbox" id="select-all-cases" onchange="toggleAllCases(this.checked)"></th>
+        <th class="case-cb-col"><label class="case-cb-wrap" title="انتخاب/لغو انتخاب همهٔ ردیف‌های این صفحه"><input type="checkbox" id="select-all-cases" onchange="toggleAllCases(this.checked)"></label></th>
         <th>Case ID</th>
         <th>پزشک</th>
         <th>طراح</th>
@@ -174,6 +207,13 @@ panel_layout_start('مدیریت کیس‌ها');
     <div class="modal-content form-card" style="max-width:1100px; margin:auto;">
         <h3 id="case-modal-title">افزودن کیس جدید</h3>
         <form id="case-form">
+            <style>
+                /* جعبهٔ پیام/خطای ذخیرهٔ کیس — خطاهای سرور باید واضح و کپی‌پذیر دیده شوند */
+                #case-form-error{ display:none; margin:0 0 12px; padding:10px 12px; border:1px solid #fca5a5; background:#fef2f2; color:#991b1b; border-radius:8px; font-size:0.9rem; line-height:1.9; }
+                #case-form-error ul{ margin:6px 0 0; padding-inline-start:18px; }
+                #case-form-error li{ margin:2px 0; }
+            </style>
+            <div id="case-form-error" role="alert" aria-live="polite"></div>
             <input type="hidden" name="id" id="case-id">
             <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
             <input type="hidden" name="parent_id" id="case-parent-id" value="">
@@ -221,6 +261,7 @@ panel_layout_start('مدیریت کیس‌ها');
                         <option value="<?= $des['id'] ?>" <?= (int) $des['id'] === $defaultDesignerId ? 'selected' : '' ?>><?= htmlspecialchars($des['full_name']) ?><?= !empty($des['is_default_designer']) ? ' (پیش‌فرض)' : '' ?></option>
                         <?php endforeach; ?>
                     </select>
+                    <small id="case-design-note" style="display:none; color:#0369a1; background:#e0f2fe; border-radius:6px; padding:4px 8px; margin-top:6px;"></small>
                 </div>
                 <?php if (!$isDoctor): ?>
                 <div class="form-group" id="side-outsource-group" style="grid-column:1/-1; border:1px solid #bbf7d0; border-radius:8px; overflow:hidden; padding:0;">
@@ -315,7 +356,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     <input type="hidden" id="case-teeth" name="teeth" value="">
                 </div>
                 <div class="form-group">
-                    <label for="case-quantity">تعداد <small style="color:#64748b; font-weight:400;">(خودکار)</small></label>
+                    <label for="case-quantity">تعداد <small id="case-qty-hint" style="color:#64748b; font-weight:400;">(خودکار)</small></label>
                     <input type="number" id="case-quantity" name="quantity" value="1" readonly style="background:#f3f4f6; cursor:not-allowed;">
                 </div>
                 <?php if ($isDoctor): ?>
@@ -324,10 +365,12 @@ panel_layout_start('مدیریت کیس‌ها');
                 <div class="form-group">
                     <label for="case-unit-price">فی (تومان)</label>
                     <input type="number" id="case-unit-price" name="unit_price" step="1">
+                    <small id="case-price-note" style="display:none; color:#0369a1; background:#e0f2fe; border-radius:6px; padding:4px 8px; margin-top:6px; line-height:1.9;"></small>
                 </div>
                 <div class="form-group">
                     <label for="case-design-fee">هزینه طراحی (تومان)</label>
                     <input type="number" id="case-design-fee" name="design_fee" step="1" min="0" value="0">
+                    <small id="case-design-fee-note" style="display:none; color:#b45309; background:#fffbeb; border-radius:6px; padding:4px 8px; margin-top:6px;"></small>
                 </div>
                 <?php endif; ?>
                 <?php if ($isDoctor): ?>
@@ -537,6 +580,11 @@ panel_layout_start('مدیریت کیس‌ها');
                 if (d) fd.set('description', d);
                 if (g._zip.checked) fd.set('compress', '1');
                 g._files.forEach(function (f) { fd.append('case_files[]', f); });
+                // بررسی حجم/تعداد قبل از ارسال (خطای رایج هاست: فایل ناقص = err 3)
+                if (window.checkUploadSizes) {
+                    var sizeErr = window.checkUploadSizes(g._files);
+                    if (sizeErr) { alert('⚠️ ' + sizeErr); done += g._files.length; startGroup(); return; }
+                }
                 var xhr = new XMLHttpRequest();
                 xhr.open('POST', 'upload_case_files.php?case_id=' + encodeURIComponent(caseId), true);
                 xhr.setRequestHeader('X-CSRF-Token', csrf);
@@ -550,7 +598,16 @@ panel_layout_start('مدیریت کیس‌ها');
                 };
                 xhr.onload = function () {
                     var ok = true, msgs = [];
-                    try { var r = JSON.parse(xhr.responseText); if (!r.success) { ok = false; msgs = r.errors || ['خطای سرور']; } } catch (e) { ok = false; msgs = ['پاسخ نامعتبر سرور']; }
+                    try {
+                        var r = JSON.parse(xhr.responseText);
+                        if (r && r.partial) {
+                            msgs = (r.error_messages && r.error_messages.length) ? r.error_messages : (r.errors || []);
+                            alert('⚠️ ' + (r.uploaded || 0) + ' فایل ذخیره شد اما:\n' + msgs.join('\n'));
+                        } else if (!r.success) {
+                            ok = false;
+                            msgs = (r.error_messages && r.error_messages.length) ? r.error_messages : (r.errors || ['خطای سرور']);
+                        }
+                    } catch (e) { ok = false; msgs = ['پاسخ نامعتبر سرور']; }
                     if (!ok) alert('آپلود گروه ناموفق بود:\n' + msgs.join('\n'));
                     done += g._files.length;
                     if (bar) bar.style.width = Math.round(done / total * 100) + '%';
@@ -810,6 +867,49 @@ panel_layout_start('مدیریت کیس‌ها');
             JSON_UNESCAPED_UNICODE
         ) ?>;
 
+        // خدمات بدون طراحی (design_required = 0): مثلاً پست NPG، پرینت کست، الاینر شفاف.
+        // برای این خدمات کیس به‌صورت پیش‌فرض «بدون طراح» و با هزینهٔ طراحیِ ۰ ثبت می‌شود.
+        window.__SVC_DESIGN_REQUIRED__ = <?= json_encode(
+            array_map(function ($p) { return (int) ($p['design_required'] ?? 1); }, array_column($prices, null, 'id')),
+            JSON_UNESCAPED_UNICODE
+        ) ?>;
+        window.__DEFAULT_DESIGNER_ID__ = <?= (int) $defaultDesignerId ?>;
+        // قواعد قیمت‌گذاری هر خدمت:
+        //   qty_manual       = ۱ → کاربر می‌تواند تعداد را دستی تغییر دهد (مثل الاینر)
+        //   base_units       = تعداد واحدهایی که قیمت پایه پوشش می‌دهد
+        //   extra_unit_price = قیمت هر واحد اضافه (قیمت پله‌ای)
+        window.__SVC_PRICING__ = <?= json_encode(
+            array_reduce($prices, function ($acc, $p) {
+                $acc[(int) $p['id']] = [
+                    'qty_manual'       => (int) ($p['qty_manual'] ?? 0),
+                    'base_units'       => max(1, (int) ($p['base_units'] ?? 1)),
+                    'extra_unit_price' => ($p['extra_unit_price'] !== null && $p['extra_unit_price'] !== '') ? (float) $p['extra_unit_price'] : null,
+                    'price'            => (float) $p['price'],
+                ];
+                return $acc;
+            }, []),
+            JSON_UNESCAPED_UNICODE
+        ) ?>;
+        // محدودیت‌های آپلود سرور (برای بررسی قبل از ارسال و پیام واضح)
+        window.__UPLOAD_LIMITS__ = <?= json_encode(uploadLimits()) ?>;
+        window.checkUploadSizes = function (files) {
+            var L = window.__UPLOAD_LIMITS__ || {};
+            var maxFile = Number(L.max_file) || 0;
+            var postMax = Number(L.post_max) || 0;
+            var maxFiles = Number(L.max_files) || 20;
+            var total = 0, tooBig = [];
+            for (var i = 0; i < files.length; i++) {
+                total += files[i].size;
+                if (maxFile > 0 && files[i].size > maxFile) tooBig.push(files[i].name);
+            }
+            if (files.length > maxFiles) return 'تعداد فایل‌ها (' + files.length + ') از حد مجاز (' + maxFiles + ') بیشتر است.';
+            if (tooBig.length) return 'این فایل‌ها از حد مجاز هر فایل بزرگ‌ترند: ' + tooBig.join('، ');
+            if (postMax > 0 && total > postMax) return 'مجموع حجم انتخابی از حد مجاز این ارسال بیشتر است؛ فایل‌ها را دسته‌دسته آپلود کنید.';
+            return '';
+        };
+        // نام وضعیت‌ها برای ساختنِ گزینهٔ «وضعیتِ فعلی» در صورت فیلتر بودن لیست
+        window.__STATUS_LABELS__ = <?= json_encode(array_column($statuses, 'name', 'id'), JSON_UNESCAPED_UNICODE) ?>;
+
         // اگر پزشکِ فعلیِ کیس در لیستِ فرم نبود، گزینه‌اش را اضافه کن تا هنگام ویرایش از بین نرود.
         function keepDoctorOption(val){
             if (!val) return;
@@ -825,6 +925,17 @@ panel_layout_start('مدیریت کیس‌ها');
             var sel = '#case-designer-id';
             if (jQuery(sel + ' option[value="' + val + '"]').length) return;
             var nm = (window.__USER_NAMES__ && window.__USER_NAMES__[val]) ? window.__USER_NAMES__[val] : ('طراح #' + val);
+            jQuery(sel).append(new Option(nm, val));
+        }
+
+        // وضعیت: اگر وضعیتِ فعلیِ کیس در لیستِ مجازِ کاربر نباشد، گزینه‌اش اضافه می‌شود تا
+        // هنگام ذخیره مقدار خالی ارسال نشود (باعث خطای NOT NULL می‌شد).
+        function keepStatusOption(val){
+            if (!val) return;
+            var sel = '#case-status-id';
+            if (!jQuery(sel).is('select')) return;
+            if (jQuery(sel + ' option[value="' + val + '"]').length) return;
+            var nm = (window.__STATUS_LABELS__ && window.__STATUS_LABELS__[val]) ? window.__STATUS_LABELS__[val] : ('وضعیت #' + val);
             jQuery(sel).append(new Option(nm, val));
         }
 
@@ -984,6 +1095,8 @@ panel_layout_start('مدیریت کیس‌ها');
                         td.style.wordBreak = 'break-word';
                         td.title = String(rowData[15] || '');
                     } },
+                    // ستون انتخاب (۰): کل سلول label است ⇢ انتخاب با یک کلیک/لمس هر جای سلول
+                    { targets: [0], className: 'case-cb-cell', orderable: false, responsivePriority: 1 },
                     // ستون سایه (۷): رنگ زمینهٔ سلول = رنگ استاندارد سایه
                     { targets: [7], createdCell: function(td){
                         var el = td.querySelector('[data-shade-color]');
@@ -992,7 +1105,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     } }
                 ],
                 columns: [
-                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<input type="checkbox" class="case-select-cb" value="' + data + '">'; }, visible: <?= $canSelectCases ? 'true' : 'false' ?> },
+                    { data: 0, orderable: false, searchable: false, render: function(data){ return '<label class="case-cb-wrap" title="انتخاب این کیس"><input type="checkbox" class="case-select-cb" value="' + data + '"></label>'; }, visible: <?= $canSelectCases ? 'true' : 'false' ?> },
                     { data: 0, render: function(data, type, row){
                         var num = data;
                         if (type === 'display' && row[14]) {
@@ -1006,7 +1119,14 @@ panel_layout_start('مدیریت کیس‌ها');
                     { data: 1 },
                     { data: 12, visible: <?= (!$isDesigner && canSeeDesignerInfo()) ? 'true' : 'false' ?> }, /* designer – internal only; designers only see their own case → no need */
                     { data: 2 },
-                    { data: 3 },
+                    { data: 3, render: function(data, type, row){
+                        // نام اختصاری خدمت (اگر در صفحهٔ قیمت‌ها تعریف شده باشد) با نام کامل در tooltip
+                        if (type !== 'display') return data;
+                        var short = row[20] ? String(row[20]).trim() : '';
+                        var full = data ? String(data) : '—';
+                        if (!short) return full;
+                        return '<span title="' + full.replace(/"/g, '&quot;') + '" style="border-bottom:1px dotted #94a3b8; cursor:help;">' + short + '</span>';
+                    } },
                     { data: 4, render: function(data, type){ if (type !== 'display') return data; return '<div class="case-teeth-cell" title="' + (data ? String(data).replace(/"/g, '&quot;') : '') + '">' + (data || '') + '</div>'; } },
                     { data: 5 },
                     { data: 6, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* price – hidden for designers */
@@ -1052,31 +1172,64 @@ panel_layout_start('مدیریت کیس‌ها');
             table.on('draw', function(){
                 var info = table.page.info();
                 jQuery('#cases-count').text(info.recordsDisplay);
+                placeCasesToolbar();
             });
 
-            // Move the SearchPanes container into the collapsible filters area.
-            // DataTables renders panes into a .dtsp-panesContainer node above the table.
-            table.on('init', function(){
+            // ── جای نوار ابزار و پنل‌های فیلتر ──
+            // DataTables کادر جست‌وجو/تعداد را داخلِ کانتینر خودش و بالای جدول می‌سازد، ولی
+            // نوار دکمه‌ها را باید خودمان داخل همان کانتینر و بلافاصله قبل از جدول بگذاریم
+            // تا ترتیب از بالا به پایین این باشد:
+            //    جست‌وجو  →  پنل‌های SearchPanes  →  ردیف دکمه‌ها  →  جدول
+            // نتیجه: برای پرینت/دانلود/تغییر فیلتر لازم نیست کلی بالا و پایین برویم.
+            function placeCasesToolbar(){
+                var container = table.table().container();
+                var bar = document.getElementById('cases-action-bar');
+                if (container && bar && bar.parentNode !== container) {
+                    // از خود جدول بالا می‌رویم تا به فرزندِ مستقیمِ کانتینر برسیم
+                    var anchor = table.table().node();
+                    while (anchor && anchor.parentNode && anchor.parentNode !== container) {
+                        anchor = anchor.parentNode;
+                    }
+                    if (anchor && anchor.parentNode === container) {
+                        container.insertBefore(bar, anchor);
+                    }
+                }
+                // کانتینر پنل‌های SearchPanes را داخل هاستِ خودمان (بالای دکمه‌ها) می‌بریم
                 var host = document.getElementById('searchpanes-host');
-                if (!host) return;
-                var wrapper = table.table().container();
-                var panes = wrapper ? wrapper.querySelector('.dtsp-panesContainer') : null;
-                if (panes && panes.parentNode && panes.parentNode !== host) {
+                var panes = container ? container.querySelector('.dtsp-panesContainer') : null;
+                if (host && panes && panes.parentNode !== host) {
                     host.appendChild(panes);
                 }
-            });
+            }
+            placeCasesToolbar();
+            // اگر SearchPanes کمی دیرتر ساخته شد، در init هم دوباره تلاش می‌کنیم
+            table.on('init', placeCasesToolbar);
 
+            // نمایش/مخفی کردن ناحیهٔ فیلترها (تاریخ + پنل‌های SearchPanes) — وضعیت در حافظهٔ مرورگر می‌ماند
+            function applyFiltersVisibility(open, btn){
+                var area = document.getElementById('filters-area');
+                var host = document.getElementById('searchpanes-host');
+                if (area) area.style.display = open ? 'block' : 'none';
+                if (host) host.classList.toggle('is-open', !!open);
+                if (btn) btn.textContent = open ? '🙈 مخفی کردن فیلترها' : '🔍 فیلترها';
+            }
             // Toggle the filters (date range + SearchPanes) visibility
             window.toggleFilters = function(){
                 var area = document.getElementById('filters-area');
                 var btn = document.getElementById('toggle-filters-btn');
                 if (!area) return;
-                var hidden = (area.style.display === 'none' || area.style.display === '');
-                area.style.display = hidden ? 'block' : 'none';
-                if (btn) btn.textContent = hidden ? '🙈 مخفی کردن فیلترها' : '🔍 فیلترها';
+                var open = !(area.style.display === 'none' || area.style.display === '');
+                applyFiltersVisibility(!open, btn);
+                try { localStorage.setItem('cases_filters_open', open ? '0' : '1'); } catch(e){}
                 // Ask SearchPanes to re-layout the panes after being shown/hidden
                 try { if (table && table.searchPanes) table.searchPanes.resize(); } catch(e){}
             };
+            // وضعیت باز/بستهٔ فیلترها را از دفعهٔ قبل یادمان بماند
+            try {
+                if (localStorage.getItem('cases_filters_open') === '1') {
+                    applyFiltersVisibility(true, document.getElementById('toggle-filters-btn'));
+                }
+            } catch(e){}
 
             // نمایش/مخفی کردن کیس‌های «تحویل شد» (پیش‌فرض مخفی)
             window.updateDeliveredBtn = function(){
@@ -1241,7 +1394,62 @@ panel_layout_start('مدیریت کیس‌ها');
                 deleteId = null;
             });
 
+            // ─── نمایش واضح خطاهای ذخیرهٔ کیس (به‌جای «خطا در سرور» یا فقط دیدن در تب Network) ───
+            function caseEscHtml(s){ return String(s == null ? '' : s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; }); }
+            function showCaseFormMsg(kind, text, details){
+                var box = document.getElementById('case-form-error');
+                if (!box) { alert(text || 'خطا'); return; }
+                var isOk = (kind === 'ok');
+                var html = '<strong>' + (isOk ? '⚠️' : '❌') + ' ' + caseEscHtml(text || (isOk ? 'هشدار' : 'ذخیره انجام نشد.')) + '</strong>';
+                if (details && details.length) {
+                    html += '<ul>';
+                    details.forEach(function(d){ html += '<li>' + caseEscHtml(d) + '</li>'; });
+                    html += '</ul>';
+                }
+                box.innerHTML = html;
+                box.style.background = isOk ? '#fffbeb' : '#fef2f2';
+                box.style.borderColor = isOk ? '#fcd34d' : '#fca5a5';
+                box.style.color = isOk ? '#92400e' : '#991b1b';
+                box.style.display = 'block';
+                try { box.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch(e){}
+            }
+            function clearCaseFormMsg(){
+                var box = document.getElementById('case-form-error');
+                if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+            }
+            /** کدهای خطای آپلود را به متن فارسی تبدیل می‌کند */
+            function caseUploadErrText(code){
+                var s = String(code || '');
+                var m = s.match(/^upload_error_\d+_(\d+)$/);
+                if (m) {
+                    var map = {
+                        1: 'حجم فایل از حد مجاز سرور بیشتر است (upload_max_filesize)',
+                        2: 'حجم فایل از حد مجاز فرم بیشتر است',
+                        3: 'آپلود فایل ناقص ماند — دوباره تلاش کنید',
+                        4: 'فایلی انتخاب نشده بود',
+                        6: 'پوشهٔ موقت روی سرور موجود نیست',
+                        7: 'نوشتن فایل روی سرور ممکن نشد (دسترسی پوشهٔ uploads)',
+                        8: 'آپلود به دلیل تنظیمات سرور متوقف شد'
+                    };
+                    return map[parseInt(m[1], 10)] || ('خطای آپلود شماره ' + m[1]);
+                }
+                var e = s.match(/^ext_not_allowed_(.+)$/);
+                if (e) return 'پسوند «.' + e[1] + '» مجاز نیست.';
+                if (s === 'db_insert_error') return 'ثبت فایل در دیتابیس انجام نشد.';
+                if (s.indexOf('move_failed') === 0) return 'ذخیرهٔ فایل روی سرور انجام نشد (دسترسی پوشهٔ uploads).';
+                if (s === 'cannot_create_dir') return 'ساخت پوشهٔ فایل‌های کیس ممکن نشد.';
+                return s;
+            }
+            /** خطاهای سرور را از پاسخ (حتی پاسخ با کد خطا) بیرون می‌کشد */
+            function caseErrDetails(j){
+                if (!j) return [];
+                if (Array.isArray(j.errors) && j.errors.length) return j.errors.map(String);
+                if (Array.isArray(j.upload_errors) && j.upload_errors.length) return j.upload_errors.map(caseUploadErrText);
+                return [];
+            }
+
             function openCaseModal(title, isAdd){
+                clearCaseFormMsg();
                 jQuery('#case-modal-title').text(title || 'افزودن کیس جدید');
                 jQuery('#case-modal').css({display: 'flex'});
                 if (isAdd) {
@@ -1271,6 +1479,7 @@ panel_layout_start('مدیریت کیس‌ها');
             function closeCaseModal(){
                 jQuery('#case-modal').css({display: 'none'});
                 jQuery('#case-form')[0].reset();
+                clearCaseFormMsg();
                 if (window.CaseTeethPicker) { CaseTeethPicker.reset(); }
                 // رنگِ سایه‌ی انتخاب‌شده باید با بستن فرم پاک شود
                 // (reset فقط مقدار input مخفی را پاک می‌کند، نه کلاسِ فعالِ سواچ‌ها)
@@ -1358,9 +1567,16 @@ panel_layout_start('مدیریت کیس‌ها');
                 if (window.ShadePickerSync) window.ShadePickerSync();
                 jQuery('#case-quantity').val(data.quantity || 1);
                 jQuery('#case-unit-price').val(data.unit_price || '');
+                // پس از پرکردن فرمِ ویرایش، حالت تعداد و یادداشت مبلغ به‌روز شود
+                applyQtyMode();
+                applyServicePricingNote();
                 jQuery('#case-design-fee').val(data.design_fee || 0);
+                // راهنمای «طراحی لازم نیست» / «نرخ نامشخص» را برای حالت فعلی به‌روز کن
+                syncDesignerWithService('init');
                 jQuery('#case-received-date').val(data.received_date || ''); // sets correct date
                 editReceivedJalali = data.received_date || '';
+                // ⚠️ مثل پزشک/لابراتوار: اول گزینه را اضافه کن، بعد مقدار بده
+                keepStatusOption(data.status_id);
                 jQuery('#case-status-id').val(data.status_id || '');
                 var keepLabId = String(data.lab_id || '');
                 var keepOutLabId = String(data.outsourced_lab_id || '');
@@ -1409,6 +1625,7 @@ panel_layout_start('مدیریت کیس‌ها');
                         'X-CSRF-Token': csrf
                     },
                     beforeSend: function() {
+                        clearCaseFormMsg();
                         jQuery('#case-save').prop('disabled', true).text('در حال ذخیره...');
                     },
                     success: function(resp){
@@ -1418,19 +1635,34 @@ panel_layout_start('مدیریت کیس‌ها');
                                 closeCaseModal();
                                 table.ajax.reload(null, false);
                             };
-                            if (window.CaseFiles && window.CaseFiles.countFiles() > 0) {
+                            if (Array.isArray(j.upload_errors) && j.upload_errors.length) {
+                                // کیس ذخیره شده ولی بعضی فایل‌ها آپلود نشدند → مودال باز می‌ماند تا کاربر ببیند
+                                jQuery('#case-save').prop('disabled', false).text('ذخیره');
+                                showCaseFormMsg('ok', j.message || 'کیس ذخیره شد اما برخی فایل‌ها آپلود نشدند.', j.upload_errors.map(caseUploadErrText));
+                                table.ajax.reload(null, false);
+                            } else if (window.CaseFiles && window.CaseFiles.countFiles() > 0) {
                                 // آپلود گروه‌های فایل (هر گروه با نوع/توضیح/زیپ خودش)؛ مودال باز می‌ماند تا پایان
                                 window.CaseFiles.uploadAll(j.id, csrf, finish);
                             } else {
                                 finish();
                             }
                         } else {
-                            alert('ذخیره انجام نشد: ' + (j.message || ''));
+                            jQuery('#case-save').prop('disabled', false).text('ذخیره');
+                            showCaseFormMsg('error', j.message || 'ذخیره انجام نشد.', caseErrDetails(j));
                         }
                     },
-                    error: function(){
+                    error: function(xhr){
                         jQuery('#case-save').prop('disabled', false).text('ذخیره');
-                        alert('خطا در سرور');
+                        // پاسخ‌های 400/403/500 هم پیام فارسی و قابل‌فهم دارند؛ همان را نشان بده
+                        var j = null;
+                        try { j = JSON.parse(xhr && xhr.responseText ? xhr.responseText : ''); } catch(e){ j = null; }
+                        if (j && (j.message || j.error)) {
+                            showCaseFormMsg('error', j.message || ('کد خطا: ' + j.error), caseErrDetails(j));
+                        } else if (xhr && xhr.status === 0) {
+                            showCaseFormMsg('error', 'ارتباط با سرور برقرار نشد. اتصال اینترنت/سرور را بررسی کنید.');
+                        } else {
+                            showCaseFormMsg('error', 'خطای سرور (کد ' + ((xhr && xhr.status) || '?') + '). اگر تکرار شد، همین پیام را برای پشتیبانی بفرستید.');
+                        }
                     }
                 });
             });
@@ -1449,6 +1681,7 @@ panel_layout_start('مدیریت کیس‌ها');
                         dataType: 'json',
                         success: function(resp) {
                             jQuery('#case-unit-price').val(resp.price !== null ? resp.price : '');
+                            applyServicePricingNote();
                         }
                     });
                 } else if (doctorId) {
@@ -1462,6 +1695,7 @@ panel_layout_start('مدیریت کیس‌ها');
                             } else {
                                 jQuery('#case-unit-price').val('');
                             }
+                            applyServicePricingNote();
                         }
                     });
                 }
@@ -1469,17 +1703,64 @@ panel_layout_start('مدیریت کیس‌ها');
 
             var currentDesignUnitFee = null;
 
+            // آیا خدمتِ انتخابی طراحی لازم دارد؟ (design_required در site_prices)
+            function serviceRequiresDesign(serviceId) {
+                var m = window.__SVC_DESIGN_REQUIRED__ || {};
+                if (!serviceId) return true;
+                return (m[serviceId] === undefined) ? true : !!m[serviceId];
+            }
+
+            function setDesignFeeNote(text) {
+                var el = document.getElementById('case-design-fee-note');
+                if (!el) return;
+                el.textContent = text || '';
+                el.style.display = text ? 'block' : 'none';
+            }
+
+            // پیش‌فرضِ طراح بر اساس خدمت:
+            //  - خدمت بدون طراحی (پست NPG، پرینت کست، الاینر) → «بدون طراح»
+            //  - بقیهٔ خدمات → اگر طراح خالی باشد، طراح پیش‌فرض انتخاب می‌شود
+            // تغییر مقادیر فقط وقتی رخ می‌دهد که خدمت عوض شده باشد، تا انتخابِ دستیِ
+            // کاربر (موارد استثنا) و کیس‌های قدیمیِ بدون طراح دست‌نخورده بمانند.
+            function syncDesignerWithService(mode) {
+                var serviceId = jQuery('#case-service-id').val();
+                var note = document.getElementById('case-design-note');
+                var userChangedService = (mode === 'service');
+                if (!serviceRequiresDesign(serviceId)) {
+                    if (userChangedService) jQuery('#case-designer-id').val('');
+                    if (note) {
+                        note.textContent = 'برای این خدمت طراحی لازم نیست؛ کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.';
+                        note.style.display = 'block';
+                    }
+                } else {
+                    if (note) { note.textContent = ''; note.style.display = 'none'; }
+                    if (userChangedService && !jQuery('#case-designer-id').val()) {
+                        var did = Number(window.__DEFAULT_DESIGNER_ID__ || 0);
+                        if (did) jQuery('#case-designer-id').val(did);
+                    }
+                }
+            }
+
             // Load per-unit design fee for the selected designer + service
             function reloadDesignFee() {
                 var designerId = jQuery('#case-designer-id').val();
                 var serviceId = jQuery('#case-service-id').val();
+                // خدمتِ بدون طراحی → هزینهٔ طراحی صفر (طراحی معنا ندارد)
+                if (!serviceRequiresDesign(serviceId)) {
+                    currentDesignUnitFee = null;
+                    jQuery('#case-design-fee').val('0');
+                    setDesignFeeNote('');
+                    return;
+                }
                 if (!designerId) {
                     currentDesignUnitFee = null;
                     jQuery('#case-design-fee').val('0');
+                    setDesignFeeNote('');
                     return;
                 }
                 if (!serviceId) {
                     currentDesignUnitFee = null;
+                    setDesignFeeNote('');
                     return;
                 }
                 jQuery.ajax({
@@ -1488,6 +1769,10 @@ panel_layout_start('مدیریت کیس‌ها');
                     dataType: 'json',
                     success: function(resp) {
                         currentDesignUnitFee = (resp.price !== null) ? parseFloat(resp.price) : null;
+                        // نرخ نامشخص → هشدار بده تا هزینهٔ طراحی بی‌سروصدا صفر نشود
+                        setDesignFeeNote(currentDesignUnitFee === null
+                            ? '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ هزینهٔ طراحی ۰ می‌ماند. مبلغ درست را دستی وارد یا در «نقشه قیمت‌گذاری» ثبت کنید.'
+                            : '');
                         applyDesignFee();
                     }
                 });
@@ -1500,11 +1785,22 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-design-fee').val(Math.round(currentDesignUnitFee * qty));
             }
 
-            jQuery('#case-designer-id, #case-service-id').on('change', function() {
+            // تغییر خدمت → پیش‌فرضِ طراح را اعمال کن، سپس هزینهٔ طراحی/تعداد را حساب کن
+            jQuery('#case-service-id').on('change', function() {
+                syncDesignerWithService('service');
+                reloadDesignFee();
+                // حالت تعداد (دستی/خودکار) با خدمتِ جدید عوض می‌شود؛ مقدار به حالت خودکار برمی‌گردد
+                applyQtyMode();
+                jQuery('#case-quantity').val(autoQuantityValue());
+                applyDesignFee();
+                applyServicePricingNote();
+            });
+            jQuery('#case-designer-id').on('change', function() {
                 reloadDesignFee();
             });
             jQuery('#case-quantity').on('input change', function() {
                 applyDesignFee();
+                applyServicePricingNote();
             });
 
             // ─── Print labels for selected cases ───
@@ -1648,10 +1944,14 @@ panel_layout_start('مدیریت کیس‌ها');
                             table.ajax.reload(null, false);
                             alert(j.updated + ' کیس با موفقیت بروزرسانی شد.');
                         } else {
-                            alert('خطا: ' + (j.errors ? j.errors.join(', ') : j.error));
+                            alert('خطا: ' + (j.errors && j.errors.length ? j.errors.join('، ') : (j.message || j.error || 'نامشخص')));
                         }
                     },
-                    error: function(){ alert('خطا در سرور'); }
+                    error: function(xhr){
+                        var j = null;
+                        try { j = JSON.parse(xhr && xhr.responseText ? xhr.responseText : ''); } catch(e){ j = null; }
+                        alert((j && (j.message || j.error)) ? ('خطا: ' + (j.message || j.error)) : ('خطای سرور (کد ' + ((xhr && xhr.status) || '?') + ')'));
+                    }
                 });
             });
 
@@ -1688,10 +1988,14 @@ panel_layout_start('مدیریت کیس‌ها');
                             if (j.errors && j.errors.length) msg += '\n' + j.errors.join('\n');
                             alert(msg);
                         } else {
-                            alert('خطا: ' + (j.errors ? j.errors.join(', ') : j.error));
+                            alert('خطا: ' + (j.errors && j.errors.length ? j.errors.join('، ') : (j.message || j.error || 'نامشخص')));
                         }
                     },
-                    error: function(){ alert('خطا در سرور'); }
+                    error: function(xhr){
+                        var j = null;
+                        try { j = JSON.parse(xhr && xhr.responseText ? xhr.responseText : ''); } catch(e){ j = null; }
+                        alert((j && (j.message || j.error)) ? ('خطا: ' + (j.message || j.error)) : ('خطای سرور (کد ' + ((xhr && xhr.status) || '?') + ')'));
+                    }
                 });
             });
         }

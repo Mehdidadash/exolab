@@ -790,10 +790,12 @@
         pWrap.style.display = 'block'; rWrap.style.display = 'block';
         var hint = '';
         if (k === 'design_fee') {
-            // نرخ طراحی: ارائه‌دهنده فقط «طراح»، دریافت‌کننده فقط «شعبه مرکزی»
+            // نرخ طراحی: ارائه‌دهنده «طراح» (قابل انتخاب) و دریافت‌کننده «شعبه مرکزی»
             pType.value = 'designer'; pType.disabled = true;
-            rType.value = 'branch'; rId.value = '1'; rType.disabled = true; rId.disabled = true;
-            hint = 'نرخ طراحی: ارائه‌دهنده = طراح، دریافت‌کننده = شعبه مرکزی (که هزینه‌ی طراحی را می‌پردازد). اگر خدمت را خالی بگذارید، نرخِ کلی همان طراح است.';
+            if (pId) pId.disabled = false;   // انتخاب اینکه نرخ برای کدام طراح است
+            rType.value = 'branch'; rType.disabled = true;
+            rId.value = '1'; rId.disabled = true;
+            hint = 'نرخ طراحی: ارائه‌دهنده = طراح (انتخاب کنید)، دریافت‌کننده = شعبه مرکزی (که هزینه‌ی طراحی را می‌پردازد). اگر خدمت را خالی بگذارید، نرخِ کلی همان طراح است.';
         } else if (k === 'general') {
             // قیمت عمومی: فقط خدمت + قیمت (بدون طرفین) — مرجع/پیش‌فرض
             pWrap.style.display = 'none'; rWrap.style.display = 'none';
@@ -883,6 +885,12 @@
                 if (!pId || !pId.value) msg = 'لطفاً ارائه‌دهنده را انتخاب کنید.';
                 else if (!rId || !rId.value) msg = 'لطفاً دریافت‌کننده را انتخاب کنید.';
                 else if (pType && rType && pType.value === rType.value && pId.value === rId.value) msg = 'ارائه‌دهنده و دریافت‌کننده یکسان هستند.';
+            }
+            // ⚠️ selectهایی که با disabled قفل شده‌اند در POST فرستاده نمی‌شوند؛ به همین
+            // دلیل ذخیره‌ی «نرخ طراحی» همیشه شکست می‌خورد (provider/receiver خالی می‌رفت).
+            // قبل از ارسال، فقط برای همین لحظه بازشان می‌کنیم.
+            if (!msg) {
+                [pType, pId, rType, rId].forEach(function (el) { if (el) el.disabled = false; });
             }
         }
         if (msg) { ev.preventDefault(); alert(msg); }

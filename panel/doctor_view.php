@@ -12,7 +12,7 @@ if (!$doctorId) {
 
 $isDesigner = ($user['role'] === 'designer');
 $canAccess = has_role('admin')
-    || ($isDesigner && designerCanAccessUser($doctorId))
+    || (is_designer_user($user) && designerCanAccessUser($doctorId))
     || (has_role('doctor') && (int) $doctorId === (int) $user['id'])
     || (has_role('clinic') && canAccessDoctor($doctorId));
 if (!$canAccess) {

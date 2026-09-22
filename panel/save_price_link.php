@@ -46,7 +46,23 @@ if ($priceType === 'branch_default' && $providerType !== 'branch') {
 }
 
 if (!$ok) {
-    header('Location: prices.php?tab=map?error=1');
+    // دلیل خطا را مشخص می‌کنیم تا در صفحهٔ نقشه نمایش داده شود (قبلاً بدون پیام و با
+    // آدرسِ خراب `?tab=map?error=1` برمی‌گشت و به تب اشتباه می‌افتاد → «انگار هیچ نشد»).
+    $err = 'invalid';
+    if ($price <= 0) {
+        $err = 'price';
+    } elseif (!in_array($providerType, $validTypes, true) || $providerId <= 0) {
+        $err = 'provider';
+    } elseif ($priceType !== 'branch_default' && (!in_array($receiverType, $validTypes, true) || $receiverId <= 0)) {
+        $err = 'receiver';
+    } elseif ($serviceId <= 0 && $priceType !== 'design_fee') {
+        $err = 'service';
+    } elseif ($providerType === $receiverType && $providerId === $receiverId) {
+        $err = 'same_party';
+    } elseif ($priceType === 'branch_default' && $providerType !== 'branch') {
+        $err = 'branch_default';
+    }
+    header('Location: prices.php?tab=map&pm_error=' . urlencode($err));
     exit;
 }
 
@@ -81,5 +97,5 @@ syncLegacyFromPriceLink([
     'note'          => $note,
 ]);
 
-header('Location: prices.php?tab=map');
+header('Location: prices.php?tab=map&pm_saved=1');
 exit;

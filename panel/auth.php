@@ -133,6 +133,19 @@ function is_branch_scoped(): bool {
 }
 
 /**
+ * آیا این کاربر «طراح» است؟
+ * یک کاربر می‌تواند نقشِ دیگری داشته باشد (مثلاً لابراتوار برون‌سپاری) و هم‌زمان با
+ * تیکِ «طراح» در فرم کاربر (users.is_designer) به‌عنوان طراح هم کار کند؛ پس برای
+ * توانایی‌های طراحی (آپلود فایل طراحی، دیدن گالری پزشکِ کیس، افزودن یادداشت) هم
+ * نقشِ designer و هم فلگ is_designer کافی است.
+ */
+function is_designer_user(?array $user = null): bool {
+    $user = $user ?: current_user();
+    if (!$user) return false;
+    return ($user['role'] ?? '') === 'designer' || !empty($user['is_designer']);
+}
+
+/**
  * Whether the current user may see internal designer names on cases.
  * Designer info is internal: only our staff / secretaries / branch users see it.
  * Doctors, clinics, and external labs do NOT see designer names (unless the
@@ -288,10 +301,11 @@ function canAccessDoctor(int $doctorId): bool {
  * Check if a designer can access a target user's profile.
  * Designers may view profiles of doctors, clinics, and labs that are linked
  * to a case where they are assigned as the designer.
+ * (کاربرانی که نقشِ دیگری دارند ولی با تیکِ «طراح» علامت خورده‌اند هم شامل می‌شوند.)
  */
 function designerCanAccessUser(int $targetUserId): bool {
     $user = current_user();
-    if (!$user || $user['role'] !== 'designer') {
+    if (!$user || !is_designer_user($user)) {
         return false;
     }
     $designerId = (int) $user['id'];
@@ -349,6 +363,38 @@ function panel_layout_start($title = 'پنل مدیریت') {
         <link rel="stylesheet" href="../assets/css/datatables.min.css">
         <script src="../assets/js/jquery-3.6.0.min.js"></script>
         <script src="../assets/js/datatables.min.js"></script>
+        <!-- اسکریپت‌های منو در head تعریف می‌شوند تا اگر در ادامهٔ صفحه خطایی رخ دهد،
+             دکمه‌های منو (همبرگری/گروه‌های کشویی) از کار نیفتند. -->
+        <script>
+        function toggleMobileMenu() {
+            var nav = document.getElementById('siteNav');
+            if (nav) nav.classList.toggle('mobile-open');
+        }
+        // Grouped nav dropdowns: open one group at a time.
+        function toggleNavGroup(btn) {
+            var group = btn.closest('.nav-group');
+            if (!group) return;
+            var wasOpen = group.classList.contains('open');
+            document.querySelectorAll('#siteNav .nav-group.open').forEach(function(g){
+                if (g !== group) g.classList.remove('open');
+            });
+            group.classList.toggle('open', !wasOpen);
+        }
+        if (!window.__exolabNavBound) {
+            window.__exolabNavBound = true;
+            // بستن گروه‌ها/منوی موبایل با کلیک بیرون از منو
+            document.addEventListener('click', function(e){
+                if (!e.target.closest('#siteNav')) {
+                    document.querySelectorAll('#siteNav .nav-group.open').forEach(function(g){ g.classList.remove('open'); });
+                }
+                var nav = document.getElementById('siteNav');
+                var btn = document.getElementById('menuToggle');
+                if (nav && btn && nav.classList.contains('mobile-open') && !nav.contains(e.target) && !btn.contains(e.target)) {
+                    nav.classList.remove('mobile-open');
+                }
+            });
+        }
+        </script>
     </head>
     <body>
     <header class="site-header">
@@ -363,6 +409,9 @@ function panel_layout_start($title = 'پنل مدیریت') {
             <nav class="site-nav" id="siteNav">
                 <?php
                 $navCanCases  = has_permission('view_all_cases') || has_permission('view_own_cases') || has_permission('view_assigned_cases') || has_permission('view_clinic_cases') || has_role('designer');
+                // نوبت اسکن: کارکنان/مدیران ثبت می‌کنند و پزشکان نوبت‌های خودشان را می‌بینند
+                $navCanAppts  = function_exists('canManageScanAppointments') && canManageScanAppointments($user);
+                $navCanAppts  = $navCanAppts || (($user['role'] ?? '') === 'doctor');
                 $navCanUpload = $user && in_array($user['role'] ?? '', ['doctor', 'designer', 'admin', 'branch_admin', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
                 $navCanInv    = has_permission('view_invoices') || has_permission('view_clinic_invoices') || has_permission('view_own_invoices') || is_admin();
                 $navCanPay    = has_permission('view_own_payments') || has_permission('view_clinic_payments') || has_permission('view_payments') || is_admin();
@@ -375,6 +424,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
                         <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">کیس‌ها <span class="caret">▼</span></button>
                         <div class="nav-group-menu">
                             <a href="cases.php">کیس‌ها</a>
+                            <?php if (!empty($navCanAppts)): ?><a href="scan_appointments.php">🗓 نوبت اسکن</a><?php endif; ?>
                             <?php if ($navIsAdmin): ?><a href="case_expenses.php">کیس‌های مخارج</a><?php endif; ?>
                         </div>
                     </div>
@@ -463,9 +513,36 @@ function panel_layout_start($title = 'پنل مدیریت') {
         <div class="container">
             <h2><?= htmlspecialchars($title) ?></h2>
     <?php
+    // ── نگهبانِ خطای کشنده ──────────────────────────────────────────────
+    // اگر بعد از شروع چیدمان خطای کشنده‌ای رخ دهد، صفحهٔ نیمه‌کاره (بدون منو و بدون
+    // اسکریپت‌های انتهایی) تحویل داده نمی‌شود؛ به‌جایش پیام واضح نمایش داده می‌شود و
+    // انتهای چیدمان فراخوانی می‌شود تا منو/جداول سالم بمانند.
+    static $layoutFatalGuardDone = false;
+    if (!$layoutFatalGuardDone) {
+        $layoutFatalGuardDone = true;
+        register_shutdown_function(function () {
+            $e = error_get_last();
+            $fatalTypes = [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR, E_RECOVERABLE_ERROR];
+            if (!$e || !in_array((int) $e['type'], $fatalTypes, true)) return;
+            if (!headers_sent()) { @http_response_code(500); }
+            $isAdminForErrors = false;
+            try { $isAdminForErrors = function_exists('is_admin') && is_admin(); } catch (\Throwable $t) { $isAdminForErrors = false; }
+            echo '<div class="form-card" style="border:1px solid #fca5a5; background:#fef2f2; color:#991b1b; margin:14px 0; line-height:1.9;">'
+               . '<strong>⚠️ خطای داخلی سرور</strong><br>'
+               . ($isAdminForErrors
+                    ? '<span style="direction:ltr; display:inline-block; word-break:break-all; font-family:monospace; font-size:.82rem;">'
+                        . htmlspecialchars((string) $e['message'] . ' — ' . basename((string) $e['file']) . ':' . (int) $e['line']) . '</span>'
+                    : 'این صفحه کامل بارگذاری نشد؛ لطفاً موضوع را به مدیر سایت اطلاع دهید.')
+               . '</div>';
+            if (empty($GLOBALS['__exolab_layout_ended']) && function_exists('panel_layout_end')) {
+                panel_layout_end();
+            }
+        });
+    }
 }
 
 function panel_layout_end() {
+    $GLOBALS['__exolab_layout_ended'] = true;
     ?>
         </div>
     </main>
@@ -503,39 +580,9 @@ function panel_layout_end() {
         }
     });
     </script>
-    <script>
-    function toggleMobileMenu() {
-        var nav = document.getElementById('siteNav');
-        if (nav) nav.classList.toggle('mobile-open');
-    }
-    // Grouped nav dropdowns: open one group at a time.
-    function toggleNavGroup(btn) {
-        var group = btn.closest('.nav-group');
-        if (!group) return;
-        var wasOpen = group.classList.contains('open');
-        document.querySelectorAll('#siteNav .nav-group.open').forEach(function(g){
-            if (g !== group) g.classList.remove('open');
-        });
-        group.classList.toggle('open', !wasOpen);
-    }
-    // Close groups when clicking outside the nav
-    document.addEventListener('click', function(e) {
-        if (!e.target.closest('#siteNav')) {
-            document.querySelectorAll('#siteNav .nav-group.open').forEach(function(g){
-                g.classList.remove('open');
-            });
-        }
-    });
-    // Close menu when clicking outside
-    document.addEventListener('click', function(e) {
-        var nav = document.getElementById('siteNav');
-        var btn = document.getElementById('menuToggle');
-        if (nav && nav.classList.contains('mobile-open') && !nav.contains(e.target) && !btn.contains(e.target)) {
-            nav.classList.remove('mobile-open');
-        }
-    });
-    </script>
     <?php
+    // نکته: توابع منو (toggleMobileMenu/toggleNavGroup) و بستن با کلیک بیرون، در head
+    // تعریف شده‌اند تا حتی در صورت بروز خطا در ادامهٔ صفحه، منو از کار نیفتد.
     // panel_layout_end is a separate function scope from panel_layout_start,
     // so re-fetch the current user here.
     $user = current_user();

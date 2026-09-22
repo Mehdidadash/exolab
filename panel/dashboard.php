@@ -9,6 +9,59 @@ use Morilog\Jalali\Jalalian;
 
 panel_layout_start('داشبورد');
 
+// ─── نوبت‌های اسکن: امروز و فردا (کارکنان/مدیران همهٔ شعبه، پزشک فقط نوبت‌های خودش) ───
+$dashCanAppts = (function_exists('canManageScanAppointments') && canManageScanAppointments($user)) || $role === 'doctor';
+if ($dashCanAppts):
+    $dToday    = date('Y-m-d');
+    $dTomorrow = date('Y-m-d', strtotime('+1 day'));
+    $dAppts    = getScanAppointments(['from' => $dToday, 'to' => $dTomorrow, 'limit' => 12]);
+    $dTypes    = scanAppointmentTypes();
+    $dStatuses = scanAppointmentStatuses();
+    $dScanBody = 0;
+    foreach ($dAppts as $da) { if (!empty($da['needs_scan_body'])) $dScanBody++; }
+    ?>
+    <div class="form-card" style="margin-bottom:20px;">
+        <h4 style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px;">
+            <span>🗓 نوبت‌های اسکن امروز و فردا
+                <?php if ($dScanBody): ?>
+                    <span class="badge" style="background:#fef3c7; color:#92400e; margin-inline-start:6px;">🧩 <?= toPersianDigits((string) $dScanBody) ?> مورد اسکن‌بادی</span>
+                <?php endif; ?>
+            </span>
+            <span style="display:flex; gap:6px; flex-wrap:wrap;">
+                <?php if (canManageScanAppointments($user)): ?>
+                    <a class="btn" href="scan_appointments.php?new=1" style="background:#0F172A; color:#fff; padding:5px 12px;">➕ نوبت جدید</a>
+                <?php endif; ?>
+                <a class="btn" href="scan_appointments.php" style="background:#E5E7EB; color:#0F172A; padding:5px 12px;">تقویم نوبت‌ها</a>
+            </span>
+        </h4>
+        <?php if (empty($dAppts)): ?>
+            <p class="empty" style="margin:0;">امروز و فردا نوبت اسکنی ثبت نشده است.</p>
+        <?php else: ?>
+            <div style="display:grid; gap:8px;">
+                <?php foreach ($dAppts as $da):
+                    $dtMeta = $dTypes[(string) $da['appt_type']] ?? ['label' => '—', 'icon' => '📌', 'color' => '#64748b'];
+                    $dsMeta = $dStatuses[(string) $da['status']] ?? ['label' => '—', 'color' => '#64748b'];
+                ?>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:8px 10px;">
+                        <strong style="min-width:86px;"><?= toJalaliDateFormatted((string) $da['appt_date']) ?></strong>
+                        <span><?= toPersianDigits(substr((string) $da['start_time'], 0, 5)) ?><?= !empty($da['end_time']) ? ' تا ' . toPersianDigits(substr((string) $da['end_time'], 0, 5)) : '' ?></span>
+                        <span style="background:<?= htmlspecialchars($dtMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 8px; font-size:.78rem;"><?= $dtMeta['icon'] ?> <?= htmlspecialchars($dtMeta['label']) ?></span>
+                        <?php if (!empty($da['needs_scan_body'])): ?>
+                            <span style="background:#fef3c7; color:#92400e; border-radius:6px; padding:2px 8px; font-size:.78rem; font-weight:700;">🧩 اسکن‌بادی بردار</span>
+                        <?php endif; ?>
+                        <span style="background:<?= htmlspecialchars($dsMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 8px; font-size:.78rem;"><?= htmlspecialchars($dsMeta['label']) ?></span>
+                        <?php if (!empty($da['doctor_name'])): ?><span style="font-size:.86rem; color:#334155;">👨‍⚕️ <?= htmlspecialchars((string) $da['doctor_name']) ?></span><?php endif; ?>
+                        <?php if (!empty($da['patient_name']) || !empty($da['case_patient'])): ?><span style="font-size:.86rem; color:#334155;">🧑 <?= htmlspecialchars((string) ($da['patient_name'] ?: $da['case_patient'])) ?></span><?php endif; ?>
+                        <?php if (!empty($da['case_id'])): ?><a href="view_case.php?id=<?= (int) $da['case_id'] ?>" style="font-size:.82rem;">کیس #<?= (int) $da['case_id'] ?></a><?php endif; ?>
+                        <?php if (!empty($da['address'])): ?><span style="font-size:.8rem; color:#64748b;">📍 <?= htmlspecialchars((string) $da['address']) ?></span><?php endif; ?>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
+<?php
 if ($role === 'admin' || $role === 'branch_admin') {
     // ─── آمارهای لحظه‌ای ───
     // مدیر کل = کل مجموعه؛ مدیر شعبه = فقط مواردِ شعبهٔ خودش (کیس‌ها، فاکتورها، ...)

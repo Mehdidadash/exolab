@@ -9,9 +9,18 @@ use App\Database\Connection;
 function db() {
     static $pdo = null;
     if ($pdo === null) {
-        $pdo = Connection::getInstance();
+        // اگر دیتابیس در دسترس نباشد (مثلاً MySQL هاست برای چند لحظه restart شود و
+        // خطای 2002 رخ دهد) به‌جای Fatal error و صفحهٔ سفید، پیام 503 برگردان.
+        try {
+            $pdo = Connection::getInstance();
+        } catch (Throwable $e) {
+            error_log('db connection failed: ' . $e->getMessage());
+            dbConnectionFailedResponse();
+        }
         try {
             ensureSitePricesOrderColumn($pdo);
+            ensureSitePricesDesignRequiredColumn($pdo);
+            ensureSitePricesShortNameColumn($pdo);
             ensureEntityCommentsTable($pdo);
             ensureNotificationsTable($pdo);
             ensureCasesDesignFeeColumn($pdo);
@@ -19,9 +28,56 @@ function db() {
             ensureCasesOutsourcedRateColumn($pdo);
             ensureCaseFilesDescriptionColumn($pdo);
             ensureUserUploadsDescriptionColumn($pdo);
+            ensureCaseFileCaseLinksTable($pdo);
+            ensureScanAppointmentsTable($pdo);
+            ensureServicePricingColumns($pdo);
         } catch (Throwable $e) {}
     }
     return $pdo;
+}
+
+/**
+ * پاسخ دوستانه وقتی اتصال به دیتابیس برقرار نمی‌شود (خطاهای 2002/1040 هاست).
+ * برای درخواست‌های JSON پاسخ JSON و برای صفحات، یک صفحهٔ ساده با کد 503 می‌دهد.
+ */
+function dbConnectionFailedResponse(): void {
+    if (!headers_sent()) {
+        http_response_code(503);
+        header('Retry-After: 30');
+    }
+    $script = (string) ($_SERVER['SCRIPT_NAME'] ?? '');
+    $wantsJson = stripos((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), 'application/json') !== false
+        || stripos((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? ''), 'xmlhttprequest') !== false
+        || (bool) preg_match('#/(check_|data|get_|save_|upload_|delete_|toggle_|generate_|download_|link_|batch_|update_|append_|reorder_|export_|print_|serve_)[A-Za-z0-9_\-]*\.php$#i', $script);
+    if ($wantsJson) {
+        if (!headers_sent()) header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'success' => false,
+            'error' => 'db_unavailable',
+            'message' => 'ارتباط با دیتابیس برقرار نشد. لطفاً چند لحظه بعد دوباره تلاش کنید.',
+        ], JSON_UNESCAPED_UNICODE);
+    } else {
+        if (!headers_sent()) header('Content-Type: text/html; charset=utf-8');
+        echo '<!DOCTYPE html><html lang="fa"><head><meta charset="utf-8"><title>سرویس موقتاً در دسترس نیست</title></head>'
+           . '<body style="font-family:Tahoma,sans-serif;padding:40px;text-align:center;color:#0f172a;">'
+           . '<h2>سرویس موقتاً در دسترس نیست</h2>'
+           . '<p>ارتباط با دیتابیس برقرار نشد. لطفاً چند لحظه بعد صفحه را دوباره باز کنید.</p>'
+           . '</body></html>';
+    }
+    exit;
+}
+
+/**
+ * site_prices.design_required — خدماتي که طراحي لازم ندارند (مثل پست NPG، پرينت کست،
+ * الاینر شفاف) تا کیس به‌صورت پیش‌فرض بدون طراح ثبت شود. مقدار پیش‌فرض ۱ (نیازمند طراحی).
+ */
+function ensureSitePricesDesignRequiredColumn($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'site_prices' AND COLUMN_NAME = 'design_required'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int) $row['cnt'] === 0) {
+        $pdo->exec("ALTER TABLE site_prices ADD COLUMN design_required TINYINT(1) NOT NULL DEFAULT 1");
+    }
 }
 
 function ensureSitePricesOrderColumn($pdo) {
@@ -31,6 +87,47 @@ function ensureSitePricesOrderColumn($pdo) {
     if (empty($row) || (int)$row['cnt'] === 0) {
         $pdo->exec("ALTER TABLE site_prices ADD COLUMN display_order INT DEFAULT 0");
     }
+}
+
+/**
+ * site_prices.short_name — نام اختصاری خدمت (مثل ML برای «روکش زیرکونیا مولتی لیر»).
+ * در جدول کیس‌ها و چاپ برچسب استفاده می‌شود تا متن‌ها کوتاه و چیدمان ثابت بماند.
+ */
+function ensureSitePricesShortNameColumn($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'site_prices' AND COLUMN_NAME = 'short_name'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int) $row['cnt'] === 0) {
+        $pdo->exec("ALTER TABLE site_prices ADD COLUMN short_name VARCHAR(24) NULL AFTER title");
+    }
+}
+
+/** نام اختصاری یک خدمت (اگر تعریف نشده باشد، null). */
+function getServiceShortName(int $serviceId): ?string {
+    if ($serviceId <= 0) return null;
+    try {
+        $st = db()->prepare('SELECT short_name FROM site_prices WHERE id = ?');
+        $st->execute([$serviceId]);
+        $v = $st->fetchColumn();
+    } catch (Throwable $e) {
+        return null;
+    }
+    $v = is_string($v) ? trim($v) : '';
+    return $v === '' ? null : $v;
+}
+
+/** نقشهٔ service_id → نام اختصاری برای همهٔ خدمات (برای لیست‌ها/برچسب‌ها). */
+function getServiceShortNamesMap(): array {
+    $map = [];
+    try {
+        foreach (db()->query('SELECT id, short_name FROM site_prices') as $r) {
+            $s = trim((string) ($r['short_name'] ?? ''));
+            if ($s !== '') $map[(int) $r['id']] = $s;
+        }
+    } catch (Throwable $e) {
+        return [];
+    }
+    return $map;
 }
 
 function ensureCasesDesignFeeColumn($pdo) {
@@ -175,45 +272,105 @@ function unlinkUserUploadFromCase(int $uploadId, int $caseId): void {
     $pdo->prepare('UPDATE user_uploads SET case_id = NULL WHERE id = ? AND case_id = ?')->execute([(int) $uploadId, (int) $caseId]);
 }
 
+/**
+ * نقش‌هایی که دسترسی‌شان به کیس فقط از راهِ «رابطهٔ مستقیم با کیس» تعریف می‌شود
+ * (پزشکِ کیس، طراحِ کیس، لابراتوارِ کیس/برون‌سپاری، پزشکانِ زیرمجموعهٔ کلینیک).
+ * این نقش‌ها با مجوزهای عمومیِ کارکنان (view_all_cases و…) دسترسی اضافه نمی‌گیرند.
+ */
+function isCaseRelationalRole(string $role): bool {
+    return in_array($role, ['doctor', 'designer', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab', 'clinic'], true);
+}
+
+/** ستون‌های رابطهٔ مستقیمِ کاربر با کیس. */
+function caseRelationColumns(): array {
+    return ['doctor_id', 'designer_id', 'lab_id', 'outsourced_lab_id'];
+}
+
+/**
+ * آیا این کیس در محدودهٔ شعبهٔ کاربر قرار می‌گیرد؟
+ * - مدیر کل (role = admin) و کاربران بدون شعبه: محدودیتی ندارند.
+ * - کاربر شعبه‌محور: کیس‌های همان شعبه، کیس‌های خانوادهٔ کیس (والد/فرزند) و
+ *   کیس‌هایی که شعبه‌شان طرفِ برون‌سپاری است → مجاز (منطقِ branchCaseScope).
+ */
+function caseInUserBranchScope(array $case, ?array $user = null): bool {
+    $user = $user ?: (function_exists('current_user') ? current_user() : null);
+    if (!$user) return false;
+    if (($user['role'] ?? '') === 'admin') return true;          // مدیر کل: سراسری
+    $branchId = ($user['branch_id'] ?? null);
+    if ($branchId === null || $branchId === '' || (int) $branchId <= 0) return true; // بدون شعبه
+    $bs = branchCaseScope('c', (int) $branchId);
+    if (empty($bs['scoped'])) return true;
+    $st = db()->prepare('SELECT COUNT(*) FROM cases c WHERE c.id = ? AND ' . $bs['sql']);
+    $st->execute(array_merge([(int) $case['id']], $bs['params']));
+    return ((int) $st->fetchColumn()) > 0;
+}
+
+/**
+ * دسترسی دیدنِ یک کیس (صفحهٔ مشاهدهٔ کیس، فایل‌های کیس، فراخوانی‌های AJAX).
+ *
+ * ملاکِ اصلی «رابطهٔ کاربر با کیس» است، نه فقط نامِ نقش؛ بنابراین کاربری که
+ * هم‌زمان «لابراتوار برون‌سپاری» است و «طراح» هم هست، اگر هر یک از این دو رابطه
+ * برقرار باشد اجازهٔ دیدن دارد (رفع باگِ دسترسیِ کیس ۱۲۲۴).
+ *
+ * ترتیب بررسی:
+ *   ۱) مدیر کل → همهٔ کیس‌ها.
+ *   ۲) رابطهٔ مستقیم: doctor_id / designer_id / lab_id / outsourced_lab_id.
+ *   ۳) کلینیک → کیس‌های پزشکانِ زیرمجموعه.
+ *   ۴) نقش‌های کارکنان با مجوزِ view_all_cases → با محدودهٔ شعبه.
+ *
+ * @param array|null $case ردیف کیس (اختیاری) برای پرهیز از کوئریِ تکراری.
+ */
+function userCanViewCase(int $caseId, ?array $user = null, ?array $case = null): bool {
+    if ($caseId <= 0) return false;
+    $user = $user ?: (function_exists('current_user') ? current_user() : null);
+    if (!$user) return false;
+    $role = (string) ($user['role'] ?? '');
+    if ($role === 'admin') return true;                          // مدیر کل: همه‌چیز
+    $uid = (int) $user['id'];
+
+    if (!is_array($case) || (int) ($case['id'] ?? 0) !== $caseId) {
+        $st = db()->prepare('SELECT id, doctor_id, designer_id, lab_id, outsourced_lab_id, branch_id, source_branch_id, parent_id FROM cases WHERE id = ?');
+        $st->execute([$caseId]);
+        $case = $st->fetch() ?: null;
+    }
+    if (!$case) return false;
+
+    // ۱) رابطهٔ مستقیم با کیس (مستقل از نامِ نقش)
+    foreach (caseRelationColumns() as $col) {
+        if (!empty($case[$col]) && (int) $case[$col] === $uid) return true;
+    }
+
+    // ۲) کلینیک: کیس‌های پزشکانِ زیرمجموعه
+    if ($role === 'clinic' && function_exists('getClinicScope')) {
+        $sc = getClinicScope('c');
+        $st = db()->prepare('SELECT COUNT(*) FROM cases c WHERE c.id = ? AND ' . $sc['sql']);
+        $st->execute(array_merge([$caseId], $sc['params']));
+        if ((int) $st->fetchColumn() > 0) return true;
+    }
+
+    // ۳) نقش‌های رابطه‌محور: بدون رابطه، دسترسی ندارند
+    if (isCaseRelationalRole($role)) return false;
+
+    // ۴) کارکنان/منشی/فنی: مجوز + محدودهٔ شعبه
+    if (has_permission('view_all_cases')) return caseInUserBranchScope($case, $user);
+
+    return false;
+}
+
 /** Whether the given user can open a case (used for library-file access). Mirrors view_case.php. */
 function userCanViewCaseId(int $caseId, ?array $user = null): bool {
     $user = $user ?: (function_exists('current_user') ? current_user() : null);
     if (!$user) return false;
-    $id = (int) $user['id'];
-    $role = $user['role'];
-    if ($role === 'doctor') {
-        $st = db()->prepare('SELECT id FROM cases WHERE id = ? AND doctor_id = ?');
-        $st->execute([$caseId, $id]);
-        return (bool) $st->fetch();
-    }
-    if ($role === 'clinic') {
-        $sc = getClinicScope('c');
-        $st = db()->prepare('SELECT COUNT(*) FROM cases c WHERE c.id = ? AND ' . $sc['sql']);
-        $st->execute(array_merge([$caseId], $sc['params']));
-        return ((int) $st->fetchColumn()) > 0;
-    }
-    if (in_array($role, ['lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true)) {
-        $st = db()->prepare('SELECT COUNT(*) FROM cases WHERE id = ? AND (lab_id = ? OR outsourced_lab_id = ?)');
-        $st->execute([$caseId, $id, $id]);
-        return ((int) $st->fetchColumn()) > 0;
-    }
-    if ($role === 'designer') {
-        $st = db()->prepare('SELECT id FROM cases WHERE id = ? AND designer_id = ?');
-        $st->execute([$caseId, $id]);
-        return (bool) $st->fetch();
-    }
-    if (has_permission('view_all_cases') || has_permission('view_assigned_cases') || has_permission('view_own_cases')) {
-        $scopeBranch = currentBranchId();
-        if ($scopeBranch === null && function_exists('is_root_admin') && is_root_admin()) $scopeBranch = 1;
-        if ($scopeBranch !== null) {
-            $sc = branchCaseScope('c', $scopeBranch);
-            $st = db()->prepare('SELECT COUNT(*) FROM cases c WHERE c.id = ? AND ' . $sc['sql']);
-            $st->execute(array_merge([$caseId], $sc['params']));
-            return ((int) $st->fetchColumn()) > 0;
-        }
-        return true;
-    }
-    return false;
+    if (userCanViewCase($caseId, $user)) return true;
+
+    // نقش‌های رابطه‌محور با مجوزهای سبک‌تر (view_assigned_cases/view_own_cases) دسترسی نمی‌گیرند
+    if (isCaseRelationalRole((string) ($user['role'] ?? ''))) return false;
+    if (!has_permission('view_assigned_cases') && !has_permission('view_own_cases')) return false;
+
+    $st = db()->prepare('SELECT id, doctor_id, designer_id, lab_id, outsourced_lab_id, branch_id, source_branch_id FROM cases WHERE id = ?');
+    $st->execute([$caseId]);
+    $row = $st->fetch();
+    return $row ? caseInUserBranchScope($row, $user) : false;
 }
 
 /**
@@ -231,6 +388,357 @@ function userCanViewUserUpload(array $up, ?array $user = null): bool {
         if (userCanViewCaseId((int) $cid, $user)) return true;
     }
     return false;
+}
+
+// =====================================================
+// فایل‌های مرتبط: اتصالِ فایلِ یک کیس به کیس‌های دیگر
+// (case_files ↔ case_file_case_links)
+// =====================================================
+
+/** جدولِ پیوندِ فایل‌های کیس را در صورت نبود می‌سازد (هم‌سبکِ سایر ensureها). */
+function ensureCaseFileCaseLinksTable($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'case_file_case_links'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int) $row['cnt'] === 0) {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS case_file_case_links (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            case_file_id INT NOT NULL,
+            case_id INT NOT NULL,
+            created_by INT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_casefile_case (case_file_id, case_id),
+            KEY idx_cfcl_case (case_id),
+            KEY idx_cfcl_file (case_file_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
+    }
+}
+
+/**
+ * فایل‌هایی که به این کیس وصل شده‌اند و مبدأشان کیسِ دیگری است.
+ * (فایل‌های خودِ کیس در جدول اصلی case_files نمایش داده می‌شوند.)
+ */
+function getLinkedCaseFilesForCase(int $caseId): array {
+    $cid = (int) $caseId;
+    $st = db()->prepare("SELECT cf.*, l.id AS link_id, l.created_at AS linked_at, l.case_id AS target_case_id, l.created_by AS link_created_by,
+            src.id AS src_case_id, src.patient_name AS src_patient_name, src.service_id AS src_service_id,
+            src.received_date AS src_received_date,
+            up.full_name AS uploader_name, lu.full_name AS linker_name
+        FROM case_file_case_links l
+        JOIN case_files cf ON cf.id = l.case_file_id
+        JOIN cases src ON src.id = cf.case_id
+        LEFT JOIN users up ON up.id = cf.uploader_id
+        LEFT JOIN users lu ON lu.id = l.created_by
+        WHERE l.case_id = ? AND cf.case_id <> ?
+        ORDER BY l.created_at DESC, cf.id DESC");
+    $st->execute([$cid, $cid]);
+    return $st->fetchAll();
+}
+
+/** کیس‌هایی که این فایل به آن‌ها وصل شده است (کیسِ مبدأ شامل نمی‌شود). */
+function caseFileLinkedCaseIds(int $fileId): array {
+    $st = db()->prepare('SELECT case_id FROM case_file_case_links WHERE case_file_id = ?');
+    $st->execute([(int) $fileId]);
+    return array_map('intval', array_column($st->fetchAll(), 'case_id'));
+}
+
+/** کیس‌های متصل به یک فایل با نام بیمار (برای نمایشِ برچسب روی فایل). */
+function caseFileLinkTargets(int $fileId): array {
+    $st = db()->prepare('SELECT l.case_id, c.patient_name FROM case_file_case_links l
+        LEFT JOIN cases c ON c.id = l.case_id WHERE l.case_file_id = ? ORDER BY l.case_id');
+    $st->execute([(int) $fileId]);
+    return $st->fetchAll();
+}
+
+/** اتصالِ یک فایلِ کیس به کیسِ دیگر (تکراری‌ها نادیده گرفته می‌شوند). */
+function linkCaseFileToCase(int $fileId, int $caseId, ?int $userId = null): void {
+    db()->prepare('INSERT IGNORE INTO case_file_case_links (case_file_id, case_id, created_by, created_at) VALUES (?, ?, ?, NOW())')
+        ->execute([(int) $fileId, (int) $caseId, $userId]);
+}
+
+/** حذف اتصالِ فایل از یک کیس (تکراری‌ها نادیده گرفته می‌شوند). */
+function unlinkCaseFileFromCase(int $fileId, int $caseId): void {
+    db()->prepare('DELETE FROM case_file_case_links WHERE case_file_id = ? AND case_id = ?')
+        ->execute([(int) $fileId, (int) $caseId]);
+}
+
+/** آیا کاربر از طریق «اتصال‌ها» به این فایل دسترسی دارد؟ (کیسِ مبدأ را جدا بررسی کنید.) */
+function caseFileAccessibleViaLinks(int $fileId, ?array $user = null): bool {
+    foreach (caseFileLinkedCaseIds($fileId) as $cid) {
+        if (userCanViewCaseId((int) $cid, $user)) return true;
+    }
+    return false;
+}
+
+/** فایلِ کیس + اطلاعات کیسِ مبدأ (برای بررسی دسترسی و پاسخ‌های JSON). */
+function getCaseFileRow(int $fileId) {
+    $st = db()->prepare('SELECT cf.*, c.doctor_id, c.lab_id, c.designer_id, c.branch_id, c.source_branch_id, c.patient_name
+        FROM case_files cf JOIN cases c ON cf.case_id = c.id WHERE cf.id = ? LIMIT 1');
+    $st->execute([$fileId]);
+    $row = $st->fetch();
+    return $row ?: null;
+}
+
+// =====================================================
+// نوبت‌دهی اسکن (scan_appointments)
+// =====================================================
+
+/** جدولِ نوبت‌های اسکن را در صورت نبود می‌سازد (هم‌سبکِ سایر ensureها). */
+function ensureScanAppointmentsTable($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'scan_appointments'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int) $row['cnt'] === 0) {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS scan_appointments (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            branch_id INT NULL,
+            doctor_id INT NULL,
+            case_id INT NULL,
+            patient_name VARCHAR(160) NULL,
+            title VARCHAR(180) NULL,
+            appt_date DATE NOT NULL,
+            start_time TIME NOT NULL,
+            end_time TIME NULL,
+            appt_type VARCHAR(20) NOT NULL DEFAULT 'scan',
+            needs_scan_body TINYINT(1) NOT NULL DEFAULT 0,
+            address VARCHAR(255) NULL,
+            phone VARCHAR(30) NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+            notes TEXT NULL,
+            reminder_sent_at DATETIME NULL,
+            created_by INT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME NULL,
+            KEY idx_sa_date (appt_date),
+            KEY idx_sa_doctor (doctor_id),
+            KEY idx_sa_branch (branch_id),
+            KEY idx_sa_case (case_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
+    }
+}
+
+/** ستون‌های قیمت‌گذاری خدمات: تعداد دستی + قیمت پله‌ای. */
+function ensureServicePricingColumns($pdo) {
+    foreach ([
+        'qty_manual'       => "TINYINT(1) NOT NULL DEFAULT 0",
+        'base_units'       => "INT NOT NULL DEFAULT 1",
+        'extra_unit_price' => "DECIMAL(15,2) NULL",
+    ] as $col => $def) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'site_prices' AND COLUMN_NAME = ?");
+        $stmt->execute([DB_NAME, $col]);
+        $row = $stmt->fetch();
+        if (empty($row) || (int) $row['cnt'] === 0) {
+            $pdo->exec("ALTER TABLE site_prices ADD COLUMN {$col} {$def}");
+        }
+    }
+}
+
+/** نوع نوبت‌ها → برچسب فارسی/آیکون/رنگ (برای تقویم و فرم). */
+function scanAppointmentTypes(): array {
+    return [
+        'scan'      => ['label' => 'اسکن',            'icon' => '🦷', 'color' => '#0ea5e9'],
+        'scan_body' => ['label' => 'اسکن + اسکن‌بادی', 'icon' => '🧩', 'color' => '#7c3aed'],
+        'pickup'    => ['label' => 'دریافت کار',      'icon' => '📥', 'color' => '#d97706'],
+        'delivery'  => ['label' => 'تحویل کار',       'icon' => '📦', 'color' => '#16a34a'],
+        'other'     => ['label' => 'سایر',            'icon' => '📌', 'color' => '#64748b'],
+    ];
+}
+
+/** وضعیت نوبت‌ها → برچسب/رنگ. */
+function scanAppointmentStatuses(): array {
+    return [
+        'scheduled' => ['label' => 'رزرو شده', 'color' => '#0ea5e9'],
+        'done'      => ['label' => 'انجام شد', 'color' => '#16a34a'],
+        'canceled'  => ['label' => 'لغو شد',   'color' => '#b91c1c'],
+    ];
+}
+
+/** چه کسی می‌تواند نوبت ثبت/ویرایش/حذف کند؟ (مدیر، مدیر شعبه، کارمند/منشی/تکنسین — پزشک فقط مشاهده) */
+function canManageScanAppointments(?array $user = null): bool {
+    $user = $user ?: (function_exists('current_user') ? current_user() : null);
+    if (!$user) return false;
+    $role = (string) ($user['role'] ?? '');
+    if ($role === 'doctor') return false;   // پزشک فقط نوبت‌های خودش را می‌بیند
+    if (in_array($role, ['admin', 'branch_admin', 'technician', 'secretary', 'staff'], true)) return true;
+    if (function_exists('has_permission') && has_permission('manage_appointments')) return true;
+    return false;
+}
+
+/**
+ * محدودهٔ نوبت‌های قابل مشاهده برای کاربر:
+ *   پزشک → فقط نوبت‌های خودش | کاربر شعبه → نوبت‌های شعبهٔ خودش | مدیر کل → همه.
+ * @return array{sql:string, params:array, manage:bool, doctorOnly:bool}
+ */
+function scanAppointmentScope(?array $user = null): array {
+    $user = $user ?: (function_exists('current_user') ? current_user() : null);
+    $manage = canManageScanAppointments($user);
+    if (!$user) return ['sql' => '1=0', 'params' => [], 'manage' => false, 'doctorOnly' => false];
+
+    if (($user['role'] ?? '') === 'doctor') {
+        return ['sql' => 'a.doctor_id = ?', 'params' => [(int) $user['id']], 'manage' => false, 'doctorOnly' => true];
+    }
+    $bid = function_exists('currentBranchId') ? currentBranchId() : null;
+    if ($bid === null) {
+        return ['sql' => '1=1', 'params' => [], 'manage' => $manage, 'doctorOnly' => false];
+    }
+    // شعبهٔ خودی + نوبت‌های بدون شعبه + نوبت‌هایی که پزشکشان به این شعبه تعلق دارد
+    // (نوبت بین‌شعبه‌ای هم قابل مشاهده باشد). توجه: این SQL نباید به alias جدول users
+    // وابسته باشد تا در همهٔ کوئری‌ها (لیست/فید/داشبورد) قابل استفاده باشد.
+    return [
+        'sql' => '(a.branch_id = ? OR a.branch_id IS NULL OR a.doctor_id IN (SELECT id FROM users WHERE branch_id = ?))',
+        'params' => [(int) $bid, (int) $bid],
+        'manage' => $manage,
+        'doctorOnly' => false,
+    ];
+}
+
+/** یک نوبت با اطلاعات پزشک/کیس/شعبه. */
+function getScanAppointment(int $id): ?array {
+    $st = db()->prepare("SELECT a.*, u.full_name AS doctor_name, u.phone AS doctor_phone, b.name AS branch_name,
+               c.patient_name AS case_patient, c.service_id AS case_service_id, c.case_type AS case_type,
+               p.title AS service_title, p.short_name AS service_short, cu.full_name AS created_by_name
+        FROM scan_appointments a
+        LEFT JOIN users u ON u.id = a.doctor_id
+        LEFT JOIN branches b ON b.id = a.branch_id
+        LEFT JOIN cases c ON c.id = a.case_id
+        LEFT JOIN site_prices p ON p.id = c.service_id
+        LEFT JOIN users cu ON cu.id = a.created_by
+        WHERE a.id = ? LIMIT 1");
+    $st->execute([$id]);
+    $row = $st->fetch();
+    return $row ?: null;
+}
+
+/**
+ * لیست/فید نوبت‌ها.
+ * @param array $f شامل: from, to, doctor_id, case_id, status, type, q, needs_scan_body, limit
+ */
+function getScanAppointments(array $f = []): array {
+    $scope = scanAppointmentScope();
+    $where = [$scope['sql']];
+    $params = $scope['params'];
+
+    if (!empty($f['from'])) { $where[] = 'a.appt_date >= ?'; $params[] = $f['from']; }
+    if (!empty($f['to']))   { $where[] = 'a.appt_date <= ?'; $params[] = $f['to']; }
+    if (!empty($f['id']))   { $where[] = 'a.id = ?';          $params[] = (int) $f['id']; }
+    if (!empty($f['doctor_id'])) { $where[] = 'a.doctor_id = ?'; $params[] = (int) $f['doctor_id']; }
+    if (!empty($f['case_id']))   { $where[] = 'a.case_id = ?';   $params[] = (int) $f['case_id']; }
+    if (!empty($f['status']))    { $where[] = 'a.status = ?';    $params[] = (string) $f['status']; }
+    if (!empty($f['type']))      { $where[] = 'a.appt_type = ?'; $params[] = (string) $f['type']; }
+    if (isset($f['needs_scan_body']) && $f['needs_scan_body'] !== '') {
+        $where[] = 'a.needs_scan_body = ?';
+        $params[] = (int) $f['needs_scan_body'] ? 1 : 0;
+    }
+    if (!empty($f['q'])) {
+        $like = '%' . $f['q'] . '%';
+        $where[] = '(a.patient_name LIKE ? OR a.title LIKE ? OR a.notes LIKE ? OR a.address LIKE ? OR u.full_name LIKE ? OR c.patient_name LIKE ?)';
+        array_push($params, $like, $like, $like, $like, $like, $like);
+    }
+
+    $limit = isset($f['limit']) ? max(1, min(2000, (int) $f['limit'])) : 1000;
+    $sql = "SELECT a.*, u.full_name AS doctor_name, b.name AS branch_name, c.patient_name AS case_patient,
+                   p.title AS service_title, p.short_name AS service_short
+            FROM scan_appointments a
+            LEFT JOIN users u ON u.id = a.doctor_id
+            LEFT JOIN branches b ON b.id = a.branch_id
+            LEFT JOIN cases c ON c.id = a.case_id
+            LEFT JOIN site_prices p ON p.id = c.service_id
+            WHERE " . implode(' AND ', $where) . "
+            ORDER BY a.appt_date ASC, a.start_time ASC
+            LIMIT {$limit}";
+    $st = db()->prepare($sql);
+    $st->execute($params);
+    return $st->fetchAll();
+}
+
+/** نوبت‌های یک کیس (برای صفحهٔ مشاهدهٔ کیس). */
+function getCaseScanAppointments(int $caseId): array {
+    $st = db()->prepare("SELECT a.*, u.full_name AS doctor_name FROM scan_appointments a
+        LEFT JOIN users u ON u.id = a.doctor_id
+        WHERE a.case_id = ? ORDER BY a.appt_date DESC, a.start_time DESC");
+    $st->execute([$caseId]);
+    return $st->fetchAll();
+}
+
+/** نوبت‌های پیش‌رو (برای داشبورد)، با محدودهٔ دسترسی کاربر. */
+function getUpcomingScanAppointments(int $limit = 8, ?string $fromDate = null): array {
+    return getScanAppointments([
+        'from'  => $fromDate ?: date('Y-m-d'),
+        'to'    => date('Y-m-d', strtotime('+60 days')),
+        'limit' => $limit,
+    ]);
+}
+
+/**
+ * ثبت/ویرایش نوبت. $d کلیدها: appt_date, start_time, end_time, doctor_id, case_id,
+ * patient_name, title, appt_type, needs_scan_body, address, phone, status, notes, branch_id
+ */
+function saveScanAppointment(array $d, ?int $id = null): int {
+    $fields = [
+        'branch_id', 'doctor_id', 'case_id', 'patient_name', 'title', 'appt_date', 'start_time', 'end_time',
+        'appt_type', 'needs_scan_body', 'address', 'phone', 'status', 'notes',
+    ];
+    $vals = [];
+    foreach ($fields as $f) {
+        $vals[$f] = array_key_exists($f, $d) ? ($d[$f] === '' ? null : $d[$f]) : null;
+    }
+    $vals['needs_scan_body'] = !empty($d['needs_scan_body']) ? 1 : 0;
+    $vals['appt_type'] = isset($d['appt_type']) && array_key_exists($d['appt_type'], scanAppointmentTypes()) ? $d['appt_type'] : 'scan';
+    $vals['status'] = isset($d['status']) && array_key_exists($d['status'], scanAppointmentStatuses()) ? $d['status'] : 'scheduled';
+
+    if ($id) {
+        $sql = 'UPDATE scan_appointments SET branch_id = ?, doctor_id = ?, case_id = ?, patient_name = ?, title = ?, appt_date = ?, start_time = ?, end_time = ?, appt_type = ?, needs_scan_body = ?, address = ?, phone = ?, status = ?, notes = ?, updated_at = NOW() WHERE id = ?';
+        $st = db()->prepare($sql);
+        $st->execute(array_merge(array_values($vals), [$id]));
+        return $id;
+    }
+    $sql = 'INSERT INTO scan_appointments (branch_id, doctor_id, case_id, patient_name, title, appt_date, start_time, end_time, appt_type, needs_scan_body, address, phone, status, notes, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())';
+    $st = db()->prepare($sql);
+    $st->execute(array_merge(array_values($vals), [(int) ($d['created_by'] ?? 0) ?: null]));
+    return (int) db()->lastInsertId();
+}
+
+function deleteScanAppointment(int $id): void {
+    db()->prepare('DELETE FROM scan_appointments WHERE id = ?')->execute([$id]);
+}
+
+/** تاریخ‌های شمسی برای فیلدها/فیدها. */
+function scanApptDateTimeLabel(array $appt): string {
+    return toJalaliDateFormatted((string) $appt['appt_date']) . ' — ' . substr((string) $appt['start_time'], 0, 5)
+        . (!empty($appt['end_time']) ? ' تا ' . substr((string) $appt['end_time'], 0, 5) : '');
+}
+
+// =====================================================
+// قیمت‌گذاری خدمات: تعداد دستی + قیمت پله‌ای
+// =====================================================
+
+/** تنظیمات قیمت‌گذاری یک خدمت (price, qty_manual, base_units, extra_unit_price). */
+function getServicePricing(int $serviceId): array {
+    $svc = $serviceId > 0 ? getPrice($serviceId) : null;
+    return [
+        'id'               => $serviceId,
+        'title'            => $svc['title'] ?? '',
+        'price'            => $svc ? (float) $svc['price'] : 0.0,
+        'qty_manual'       => $svc ? (int) ($svc['qty_manual'] ?? 0) : 0,
+        'base_units'       => $svc ? max(1, (int) ($svc['base_units'] ?? 1)) : 1,
+        'extra_unit_price' => ($svc && $svc['extra_unit_price'] !== null && $svc['extra_unit_price'] !== '')
+            ? (float) $svc['extra_unit_price'] : null,
+    ];
+}
+
+/**
+ * مبلغ کل خدمت با احتساب «قیمت پله‌ای»:
+ *   مبلغ = قیمت پایه + (تعداد − واحدهای پایه) × قیمت هر واحد اضافه
+ * اگر خدمتی «قیمت هر واحد اضافه» نداشته باشد، رفتار قبلی (تعداد × قیمت) حفظ می‌شود.
+ */
+function serviceTotalPrice(float $unitPrice, int $quantity, ?int $serviceId): float {
+    $qty = max(1, $quantity);
+    $p = getServicePricing((int) $serviceId);
+    $baseUnits = $p['base_units'];
+    $extraUnit = $p['extra_unit_price'] ?? $unitPrice;
+    $extraUnits = max(0, $qty - $baseUnits);
+    return round($unitPrice + ($extraUnits * $extraUnit));
 }
 
 // ----- Branch helpers (multi-branch / hierarchical lab system) -----
@@ -265,23 +773,12 @@ function getAllLabs(): array {
 
 /**
  * Lab options for OUTSOURCING a case (برون‌سپاری / کار از لابراتوار همکار).
- * A branch cannot outsource to its own lab, so labs belonging to the current
- * branch are excluded (external labs with no branch stay). One lab id can be
- * kept (the value already set on a case being edited). مدیر کل = شعبهٔ مرکزی.
+ * همهٔ لابراتوارهای فعال برگردانده می‌شوند: یک شعبه می‌تواند هم به لابراتوارهای
+ * زیرمجموعهٔ خودش کار بدهد/بگیرد و هم به لابراتوارهای شعب دیگر. (§ تصمیم کاربر)
+ * پارامتر $keepLabId فقط برای سازگاریِ فراخوانی‌های قبلی نگه داشته شده است.
  */
 function getOutsourceLabOptions(?int $keepLabId = null): array {
-    $bid = currentBranchId();
-    if ($bid === null && function_exists('is_root_admin') && is_root_admin()) {
-        $bid = 1;
-    }
-    $labs = getAllLabs();
-    if ($bid === null) {
-        return $labs;
-    }
-    return array_values(array_filter($labs, function ($l) use ($bid, $keepLabId) {
-        if ($keepLabId !== null && (int) $l['id'] === (int) $keepLabId) return true;
-        return empty($l['branch_id']) || (int) $l['branch_id'] !== (int) $bid;
-    }));
+    return getAllLabs();
 }
 
 /**
@@ -1698,6 +2195,7 @@ function getUninvoicedCasesForDesigner(int $designerId, string $startDate, strin
         LEFT JOIN users u ON c.doctor_id = u.id
         WHERE c.designer_id = ?
           AND c.designer_invoice_id IS NULL
+          AND COALESCE(p.design_required, 1) = 1
           AND c.received_date BETWEEN ? AND ?' . $payerCond . '
         ORDER BY c.received_date ASC, c.id ASC
     ');

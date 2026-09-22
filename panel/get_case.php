@@ -40,30 +40,19 @@ if (!$id) {
     exit;
 }
 
-if ($user['role'] === 'doctor') {
-    $stmt = db()->prepare('SELECT * FROM cases WHERE id = ? AND doctor_id = ?');
-    $stmt->execute([$id, $user['id']]);
-} else {
-    if (!has_permission('view_all_cases')) {
-        http_response_code(403);
-        echo json_encode(['success' => false, 'error' => 'forbidden']);
-        exit;
-    }
-    $sql = 'SELECT * FROM cases c WHERE c.id = ?';
-    $params = [$id];
-    if (is_branch_scoped()) {
-        $bScope = branchCaseScope('c');
-        $sql .= ' AND ' . $bScope['sql'];
-        $params = array_merge($params, $bScope['params']);
-    }
-    $stmt = db()->prepare($sql);
-    $stmt->execute($params);
-}
-
+$stmt = db()->prepare('SELECT * FROM cases c WHERE c.id = ?');
+$stmt->execute([$id]);
 $case = $stmt->fetch();
 if (!$case) {
     http_response_code(404);
     echo json_encode(['success' => false, 'error' => 'not_found']);
+    exit;
+}
+
+// دسترسی: تابع واحدِ userCanViewCase() — رابطهٔ کاربر با کیس (پزشک/طراح/لابراتوار/کلینیک/شعبه/مجوز)
+if (!userCanViewCase($id, $user, $case)) {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'forbidden'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 

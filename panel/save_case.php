@@ -63,10 +63,14 @@ $teeth = normalizePersianDigits(trim($data['teeth'] ?? ''));
 $teeth = str_replace(['،', ';'], ',', $teeth);
 $shade = trim($data['shade'] ?? '');
 $quantity = !empty($data['quantity']) ? (int)$data['quantity'] : 1;
+if ($quantity < 1) $quantity = 1;
+if ($quantity > 999) $quantity = 999;   // جلوگیری از اشتباه تایپی
 $unit_price = !empty($data['unit_price']) ? (float)$data['unit_price'] : 0;
 $design_fee = !empty($data['design_fee']) ? (float)$data['design_fee'] : 0;
-// Total is the work price only – the design fee is billed separately
-$total_price = $quantity * $unit_price;
+// مبلغ کار فقط (هزینهٔ طراحی جدا محاسبه/فاکتور می‌شود).
+// اگر خدمت «قیمت پله‌ای» داشته باشد (قیمت پایه + قیمت هر واحد اضافه)، همان محاسبه می‌شود؛
+// در غیر این صورت رفتار قبلی (تعداد × فی) حفظ می‌شود.
+$total_price = serviceTotalPrice($unit_price, $quantity, $service_id);
 $received_date = parseJalaliToGregorian($data['received_date'] ?? '');
 if ($received_date === '') {
     $received_date = parseDateInput($data['received_date'] ?? '');
@@ -132,7 +136,7 @@ if (!$editingCase && $currentUser['role'] === 'doctor') {
         $forcedPrice = getApplicablePrice($doctor_id, $service_id);
         if ($forcedPrice !== null) {
             $unit_price = $forcedPrice;
-            $total_price = $quantity * $unit_price;
+            $total_price = serviceTotalPrice($unit_price, $quantity, $service_id);
         }
     }
 }
@@ -143,7 +147,7 @@ if (!$editingCase && $currentUser['role'] === 'doctor') {
 // ناخواسته پاک نشود، مقدار فعلیِ کیس را این‌جا داریم.
 $existingCaseRow = null;
 if ($id) {
-    $exRow = db()->prepare('SELECT doctor_id, service_id, lab_id, case_type, branch_id, source_branch_id FROM cases WHERE id = ?');
+    $exRow = db()->prepare('SELECT doctor_id, service_id, status_id, lab_id, case_type, branch_id, source_branch_id FROM cases WHERE id = ?');
     $exRow->execute([$id]);
     $existingCaseRow = $exRow->fetch() ?: null;
 }
@@ -207,41 +211,18 @@ if ($isCrossBranchEdit && $source_branch_id === null && ($existingCaseRow['sourc
     $source_branch_id = (int) $existingCaseRow['source_branch_id'];
 }
 
-// ─── جلوگیری از برون‌سپاری به لابراتوارِ خودِ شعبه ───
-// (یک شعبه نه به خودش می‌تواند کار بدهد نه از خودش بگیرد)
-// این قاعده مربوط به «شعبهٔ مالکِ کیس» است؛ ویرایشگرِ کیسِ بین‌شعبه‌ای (مثلاً
-// لابراتوارِ مقصد که مالک کیس نیست) نباید با این محدودیت متوقف شود.
-$effBranchGuard = $isCrossBranchEdit ? null : $editorBranch;
-if (!$isCrossBranchEdit && currentBranchId() === null && function_exists('is_root_admin') && is_root_admin()) {
-    $effBranchGuard = 1; // مدیر کل = شعبهٔ مرکزی
+// «شعبهٔ همکار» هرگز نباید با «شعبهٔ مالک» یکی باشد (یعنی شعبه با خودش طرف حساب شود).
+// چنین مقداری بی‌معنی است و نشانهٔ داده‌ی خراب/اشتباه است → NULL ذخیره می‌شود.
+if ($source_branch_id !== null && (int) $source_branch_id === (int) $branch_id) {
+    $source_branch_id = null;
 }
-if ($effBranchGuard !== null) {
-    $labBranchOf = function ($labUserId) {
-        if (!$labUserId) return null;
-        $s = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
-        $s->execute([(int) $labUserId]);
-        $v = $s->fetchColumn();
-        return ($v === null || $v === '') ? null : (int) $v;
-    };
-    if (in_array($case_type, ['lab_out', 'lab_in'], true) && $lab_id) {
-        $lb = $labBranchOf($lab_id);
-        if ($lb !== null && $lb === (int) $effBranchGuard) {
-            http_response_code(400);
-            header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['success' => false, 'error' => 'self_lab', 'message' => 'یک شعبه نمی‌تواند به لابراتوارِ خودِ شعبه برون‌سپاری کند.']);
-            exit;
-        }
-    }
-    if ($outsourced_lab_id && $outsourced_qty > 0) {
-        $lb = $labBranchOf($outsourced_lab_id);
-        if ($lb !== null && $lb === (int) $effBranchGuard) {
-            http_response_code(400);
-            header('Content-Type: application/json; charset=utf-8');
-            echo json_encode(['success' => false, 'error' => 'self_lab', 'message' => 'برون‌سپاری جانبی نمی‌تواند به لابراتوارِ خودِ شعبه باشد.']);
-            exit;
-        }
-    }
-}
+
+// ─── برون‌سپاری / دریافت کار از لابراتوارها ───
+// قاعدهٔ قبلی («یک شعبه نمی‌تواند به لابراتوارِ خودِ شعبه کار بدهد یا بگیرد») حذف شد:
+// یک شعبه مجاز است هم از لابراتوارهای زیرمجموعهٔ خودش کار بگیرد و هم به آن‌ها کار بدهد،
+// و همین‌طور می‌تواند به لابراتوارهای زیرمجموعهٔ شعبِ دیگر کار بدهد.
+// تنها نرمال‌سازیِ لازم این است که «شعبهٔ همکار» با «شعبهٔ مالکِ کیس» یکی نشود
+// (همان بلوک بالا: در آن حالت source_branch_id تهی می‌شود).
 
 // ─── اعتبارسنجی کلیدهای خارجی (پزشک / خدمت) ───
 // ممکن است فرمِ ویرایش، پزشکِ کیس را در لیستِ خود نداشته باشد (لیست پزشکان بر اساس
@@ -261,6 +242,34 @@ if (!$idExistsIn('users', $doctor_id)) {
 }
 if (!$idExistsIn('site_prices', $service_id)) {
     $service_id = ($existingCaseRow && !empty($existingCaseRow['service_id'])) ? (int) $existingCaseRow['service_id'] : null;
+}
+
+// وضعیت (status_id) هم کلید خارجی و NOT NULL است. اگر فرم مقدار خالی/نامعتبر بفرستد
+// — مثلاً وقتی وضعیت فعلیِ کیس در لیستِ مجازِ کاربر نباشد و select به گزینهٔ اول برگردد —
+// مقدار قبلی حفظ می‌شود؛ وگرنه خطای «Column 'status_id' cannot be null» می‌داد.
+if (!$idExistsIn('case_statuses', $status_id)) {
+    $status_id = ($existingCaseRow && !empty($existingCaseRow['status_id'])) ? (int) $existingCaseRow['status_id'] : null;
+}
+if ($status_id === null) {
+    // پیش‌فرض: اولین وضعیت (معمولاً «ثبت شد»)
+    $stDefault = db()->query('SELECT id FROM case_statuses ORDER BY sort_order ASC, id ASC LIMIT 1')->fetchColumn();
+    $status_id = $stDefault ? (int) $stDefault : 1;
+}
+
+// ─── خدمات بدون طراحی (design_required = 0) ───
+// برای این خدمات (مثل پست NPG، پرینت کست، الاینر شفاف) طراحی معنا ندارد؛ پس هزینهٔ
+// طراحی همیشه صفر ذخیره می‌شود تا عددِ بی‌معنی روی کیس ثبت نشود.
+$serviceRequiresDesign = true;
+if ($service_id) {
+    $svcReq = db()->prepare('SELECT design_required FROM site_prices WHERE id = ? LIMIT 1');
+    $svcReq->execute([$service_id]);
+    $reqVal = $svcReq->fetchColumn();
+    if ($reqVal !== false && $reqVal !== null) {
+        $serviceRequiresDesign = ((int) $reqVal === 1);
+    }
+}
+if (!$serviceRequiresDesign) {
+    $design_fee = 0;
 }
 
 if (empty($patient_name)) {

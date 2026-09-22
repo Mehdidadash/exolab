@@ -14,35 +14,28 @@ if (!$fileId) {
 }
 
 $user = current_user();
-$isDoctor = ($user['role'] === 'doctor');
-$isDesigner = ($user['role'] === 'designer');
 
-// همان قواعد دسترسیِ صفحه‌ی مشاهده کیس: دکتر فقط کیس خودش، طراح فقط کیس خودش،
-// بقیه نیاز به مجوز view_all_cases + محدوده‌ی شعبه.
-$sql = 'SELECT cf.*, c.doctor_id, c.designer_id FROM case_files cf JOIN cases c ON cf.case_id = c.id WHERE cf.id = ?';
-$params = [$fileId];
-if ($isDoctor) {
-    $sql .= ' AND c.doctor_id = ?';
-    $params[] = (int) $user['id'];
-} elseif ($isDesigner) {
-    $sql .= ' AND c.designer_id = ?';
-    $params[] = (int) $user['id'];
-} elseif (!has_permission('view_all_cases')) {
-    http_response_code(403);
-    die('دسترسی غیرمجاز');
-}
-if (is_branch_scoped()) {
-    $bScope = branchCaseScope('c');
-    $sql .= ' AND ' . $bScope['sql'];
-    $params = array_merge($params, $bScope['params']);
-}
-
-$stmt = db()->prepare($sql);
-$stmt->execute($params);
-$file = $stmt->fetch();
-if (!$file) {
+// ردیف خام فایل (برای بررسی دسترسی از راه «اتصال به کیس‌های دیگر»)
+$raw = getCaseFileRow($fileId);
+if (!$raw) {
     http_response_code(404);
     die('فایل یافت نشد');
+}
+
+// ۱) دسترسی از راه کیسِ خودِ فایل
+// همان تابع واحدی که صفحهٔ مشاهدهٔ کیس هم از آن استفاده می‌کند: هر کس رابطه‌ای با کیس
+// داشته باشد (پزشک/طراح/لابراتوارِ کیس یا برون‌سپاری/کلینیک/شعبه/مجوز) فایل را می‌بیند.
+$canCheckOwnCase = userCanViewCaseId((int) $raw['case_id'], $user);
+$file = $canCheckOwnCase ? $raw : null;
+
+// ۲) اگر از راه کیسِ خودش دسترسی نداشت: شاید فایل به کیسی که کاربر می‌بیند وصل شده باشد
+if (!$file && caseFileAccessibleViaLinks($fileId, $user)) {
+    $file = $raw;
+}
+
+if (!$file) {
+    http_response_code($canCheckOwnCase ? 404 : 403);
+    die($canCheckOwnCase ? 'فایل یافت نشد' : 'دسترسی غیرمجاز');
 }
 
 $path = resolve_upload_path('cases/' . $file['case_id'] . '/' . $file['filename']);

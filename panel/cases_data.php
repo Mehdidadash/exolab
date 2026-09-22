@@ -62,8 +62,10 @@ if ($isDoctor && !$isClinicOwner) {
     $whereClauses[] = 'c.doctor_id = ?';
     $params[] = $doctorId;
 } elseif ($isLab) {
-    // Lab users see cases assigned to their lab OR side-outsourced to them
-    $whereClauses[] = '(c.lab_id = ? OR c.outsourced_lab_id = ?)';
+    // کارهای لابراتوارِ خودشان + کارهایی که (به‌عنوان طراح) به آن‌ها سپرده شده؛
+    // یک کاربر می‌تواند هم‌زمان «لابراتوار برون‌سپاری» و «طراح» باشد (مثال: کیس ۱۲۲۴).
+    $whereClauses[] = '(c.lab_id = ? OR c.outsourced_lab_id = ? OR c.designer_id = ?)';
+    $params[] = $user['id'];
     $params[] = $user['id'];
     $params[] = $user['id'];
 } elseif ($isDesigner) {
@@ -137,8 +139,8 @@ if ($isDoctor && !$isClinicOwner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE doctor_id = ?');
     $totalStmt->execute([$doctorId]);
 } elseif ($isLab) {
-    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE lab_id = ? OR outsourced_lab_id = ?');
-    $totalStmt->execute([$user['id'], $user['id']]);
+    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE lab_id = ? OR outsourced_lab_id = ? OR designer_id = ?');
+    $totalStmt->execute([$user['id'], $user['id'], $user['id']]);
 } elseif ($isDesigner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE designer_id = ?');
     $totalStmt->execute([$user['id']]);
@@ -177,7 +179,7 @@ if ($clientAll) {
     $start = max(0, (int) $start);
 }
 
-$dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, cs.name AS status_name,
+$dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, p.short_name AS service_short, cs.name AS status_name,
         cs.icon AS status_icon, cs.color AS status_color,
         di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, olab.full_name AS outsourced_lab_name,
         des.full_name AS designer_name,
@@ -372,7 +374,8 @@ foreach ($rows as $r) {
         $r['receipt_number'] ?: '',
         $r['raw_downloaded'] ? 1 : 0,
         $r['design_downloaded'] ? 1 : 0,
-        $hasUpdates
+        $hasUpdates,
+        $r['service_short'] ?? ''
     ];
 }
 

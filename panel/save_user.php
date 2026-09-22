@@ -49,6 +49,9 @@ if ($id) {
         $stmt->execute([$fullName, $username, $email ?: null, $phone ?: null, $role, $clinic_id, $is_designer, $active, $notes ?: null, $branch_id, $id]);
     }
     // Ensure only one default designer
+    // ⚠️ $savedId باید قبل از این بلوک مقدار بگیرد؛ قبلاً «متغیر تعریفنشده» بود و
+    // UPDATE با id = NULL اجرا میشد → تیکِ «طراح پیشفرض» ذخیره نمیشد.
+    $savedId = (int) $id;
     if (!empty($_POST['is_default_designer'])) {
         db()->exec('UPDATE users SET is_default_designer = 0 WHERE is_designer = 1');
         $upd = db()->prepare('UPDATE users SET is_default_designer = 1 WHERE id = ?');
@@ -57,7 +60,6 @@ if ($id) {
         $upd = db()->prepare('UPDATE users SET is_default_designer = 0 WHERE id = ?');
         $upd->execute([$savedId]);
     }
-    $savedId = $id;
 } else {
     if (empty($password)) {
         header('Location: user_form.php?error=missing_password');

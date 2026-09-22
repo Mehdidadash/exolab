@@ -14,12 +14,12 @@ if ($doctorId <= 0 || $f === '' || $f === '.' || $f === '..') {
     die('درخواست نامعتبر');
 }
 
-$isDesigner = ($user['role'] === 'designer');
+$isDesigner = is_designer_user($user);
 $canAccess = has_role('admin')
     || ($isDesigner && designerCanAccessUser($doctorId))
     || (has_role('doctor') && $doctorId === (int) $user['id'])
     || (has_role('clinic') && canAccessDoctor($doctorId));
-$canViewGallery = in_array($user['role'] ?? '', ['admin', 'designer', 'staff', 'secretary'], true);
+$canViewGallery = in_array($user['role'] ?? '', ['admin', 'designer', 'staff', 'secretary'], true) || $isDesigner;
 
 if (!$canAccess || !$canViewGallery) {
     http_response_code(403);

@@ -180,7 +180,18 @@ foreach ($files['error'] as $idx => $err) {
     if ($err !== UPLOAD_ERR_OK) {
         if ($err === UPLOAD_ERR_NO_FILE) continue;
         $errors[] = "upload_error_{$idx}_{$err}";
-        error_log("upload_case_files: upload error idx=$idx err=$err");
+        // err=3 (PARTIAL) معمولاً یعنی اتصال/حجم/زمانِ آپلود کافی نبوده؛ برای عیب‌یابی
+        // نام و حجم فایل و محدودیت‌های PHP را هم ثبت می‌کنیم.
+        $lim = uploadLimits();
+        error_log(sprintf(
+            'upload_case_files: upload error idx=%d err=%d file=%s size=%s max_file=%s post_max=%s',
+            $idx,
+            $err,
+            (string) ($files['name'][$idx] ?? '?'),
+            (string) ($files['size'][$idx] ?? 0),
+            (string) $lim['max_file'],
+            (string) $lim['post_max']
+        ));
         continue;
     }
     $tmp = $files['tmp_name'][$idx];
@@ -227,5 +238,8 @@ if ($uploaded > 0) {
 echo json_encode([
     'success' => empty($errors),
     'uploaded' => $uploaded,
-    'errors' => $errors
+    'partial' => ($uploaded > 0 && !empty($errors)),
+    'errors' => $errors,
+    'error_messages' => array_map('uploadErrorLabel', $errors),
+    'limits' => uploadLimits(),
 ], JSON_UNESCAPED_UNICODE);
