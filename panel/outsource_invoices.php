@@ -12,6 +12,7 @@ panel_layout_start('فاکتورهای برون‌سپاری');
     <div>
         <a class="btn" href="generate_outsource_invoice.php" style="background: #059669; color: #fff;">صدور فاکتور برون‌سپاری</a>
         <a class="btn" href="outsource_rates.php" style="background: #0F172A; color: #fff;">نرخ‌های برون‌سپاری</a>
+        <a class="btn" href="expenses.php" style="background: #b45309; color: #fff;">فاکتورهای مخارج</a>
         <a class="btn" href="invoices.php" style="background: #E5E7EB; color: #0F172A;">بازگشت به فاکتورها</a>
     </div>
 </div>
@@ -38,7 +39,8 @@ panel_layout_start('فاکتورهای برون‌سپاری');
             <td><?= htmlspecialchars($inv['period_label'] ?? '—') ?></td>
             <td><?= toJalaliDateFormatted($inv['invoice_date']) ?></td>
             <td><?= formatAmountToman($inv['total_amount']) ?></td>
-            <td class="actions">
+            <td class="actions" style="white-space:nowrap;">
+                <a class="btn" href="outsource_invoice_form.php?id=<?= (int) $inv['id'] ?>" title="ویرایش" style="background:#eef2ff; color:#3730a3; padding:4px 10px; text-decoration:none;">✏️</a>
                 <a class="btn" href="outsource_invoice_pdf.php?id=<?= (int) $inv['id'] ?>" target="_blank" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">PDF</a>
             </td>
         </tr>

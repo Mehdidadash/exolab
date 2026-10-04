@@ -70,7 +70,8 @@ panel_layout_start('ویرایش فاکتور طراحی');
                 <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;"># کیس</th>
                 <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">بیمار</th>
                 <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">پزشک</th>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">خدمت</th>
+                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">خدمت (اختصاری)</th>
+                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">تاریخ دریافت</th>
                 <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">تعداد</th>
                 <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">فی طراحی (تومان)</th>
                 <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:center;">حذف</th>
@@ -78,12 +79,18 @@ panel_layout_start('ویرایش فاکتور طراحی');
             </thead>
             <tbody>
             <?php foreach ($items as $it):
-                $iid = (int) $it['id']; ?>
+                $iid = (int) $it['id'];
+                // نام اختصاری خدمت (مثلاً ML/IM_ML)؛ اگر نبود عنوان کامل
+                $svcShort = trim((string) ($it['service_short'] ?? '')) !== ''
+                    ? $it['service_short']
+                    : ($it['service_title'] ?? '—');
+                $recvDate = !empty($it['case_received_date']) ? $it['case_received_date'] : ($it['received_date'] ?? null); ?>
             <tr data-row="<?= $iid ?>">
                 <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= (int) ($it['case_id'] ?? 0) ?: '—' ?></td>
                 <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= htmlspecialchars($it['patient_name'] ?? '—') ?></td>
                 <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= htmlspecialchars($it['doctor_name'] ?? '—') ?></td>
-                <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= htmlspecialchars($it['service_title'] ?? '—') ?></td>
+                <td style="border:1px solid #e5e7eb; padding:6px 8px;" title="<?= htmlspecialchars($it['service_title'] ?? '') ?>"><?= htmlspecialchars($svcShort) ?></td>
+                <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= $recvDate ? htmlspecialchars(toJalaliDateFormatted($recvDate)) : '—' ?></td>
                 <td style="border:1px solid #e5e7eb; padding:6px 8px;">
                     <input type="number" class="row-qty" name="items[<?= $iid ?>][qty]" value="<?= (int) ($it['quantity'] ?? 1) ?>" min="1" step="1" style="width:70px;">
                 </td>

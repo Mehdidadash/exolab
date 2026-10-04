@@ -102,14 +102,59 @@ document.addEventListener('DOMContentLoaded', function () {
         var tr = document.createElement('tr');
         tr.className = 'invoice-item-row';
         var patient = (c.patient_name || '').replace(/"/g, '&quot;');
-        var servTitle = (c.service_title || 'خدمت').replace(/"/g, '&quot;');
+        // ⭐ ردیفِ تخفیف: تخفیف‌ها case_id ندارند و مبلغشان منفی ذخیره می‌شود.
+        // اگر هنگام بارگذاریِ مجددِ فرم این پرچم ست نشود، تخفیف به‌جای «تفریق»
+        // «جمع» می‌شود و مبلغ فاکتور اشتباه درمی‌آید (باگِ گزارش‌شده).
+        var isNeg = (c.is_discount === true)
+            || (!c.service_id && !c.patient_name && Number(c.total_amount || 0) < 0)
+            || (!c.service_id && c.item_title === 'تخفیف');
+        if (isNeg) { tr.setAttribute('data-discount', '1'); }
+
+        var servTitle = (c.service_title || (isNeg ? 'تخفیف' : 'خدمت')).replace(/"/g, '&quot;');
         // Use only teeth/location as description, without "کیس #" prefix
-        var desc = (c.item_description || c.teeth || c.location_type || c.patient_name || '').replace(/"/g, '&quot;');
+        var desc = (c.item_description || c.teeth || c.location_type || '').replace(/"/g, '&quot;');
         // Strip common patterns
         desc = desc.replace(/^کیس #\d+ - /, '').replace(/^دندان /, '');
         // Use unit_price (not total_price) – جمع = تعداد × فی
-        var price = Math.round(c.unit_price || c.total_price || 0);
+        // برای تخفیف هم کاربر مبلغِ **مثبت** می‌زند و ردیف منفی حساب می‌شود.
+        var price = Math.abs(Math.round(c.unit_price || c.total_price || 0));
         var qty = c.quantity || 1;
+
+        if (isNeg) {
+            // ردیفِ سادهٔ تخفیف (بدون select خدمت)
+            tr.innerHTML =
+                '<td style="text-align:center; vertical-align:middle;">تخفیف</td>' +
+                '<td>' +
+                    '<input type="text" class="item-description" value="' + desc.replace(/"/g, '&quot;') + '" placeholder="عنوان تخفیف">' +
+                    '<input type="hidden" class="item-title-hidden" value="' + servTitle + '">' +
+                    '<input type="hidden" class="item-case-hidden" value="">' +
+                    '<input type="hidden" class="item-price-hidden" value="">' +
+                '</td>' +
+                '<td><input type="text" class="item-patient" value="' + patient + '"></td>' +
+                '<td><input type="number" class="item-unit-price" step="1" value="' + price + '" placeholder="مبلغ تخفیف"></td>' +
+                '<td><input type="number" class="item-quantity" min="1" value="' + qty + '"></td>' +
+                '<td><input type="text" class="item-total" readonly value="' + Math.round(-price * qty) + '"></td>' +
+                '<td><button type="button" class="remove-item-btn" title="حذف">🗑</button></td>';
+
+            var dDesc = tr.querySelector('.item-description');
+            var dHiddenTitle = tr.querySelector('.item-title-hidden');
+            var dQty = tr.querySelector('.item-quantity');
+            var dPrice = tr.querySelector('.item-unit-price');
+            if (dDesc && dHiddenTitle) {
+                dDesc.addEventListener('input', function() { dHiddenTitle.value = this.value; });
+            }
+            if (dQty) dQty.addEventListener('input', function() { updateRowTotal(tr); });
+            if (dPrice) dPrice.addEventListener('input', function() { updateRowTotal(tr); });
+            tr.querySelector('.remove-item-btn').addEventListener('click', function() {
+                tr.remove();
+                refreshRowNames();
+                updateInvoiceTotal();
+            });
+            itemRows.appendChild(tr);
+            refreshRowNames();
+            updateRowTotal(tr);
+            return;
+        }
 
         // Build price select
         var selectHtml = '<select style="width:100%;">';

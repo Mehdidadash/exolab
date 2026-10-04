@@ -6,13 +6,21 @@
 require_once __DIR__ . '/auth.php';
 require_admin();
 
-// Clinics with their sub-doctors
+// Clinics with their sub-doctors (یک پزشک می‌تواند در چند کلینیک باشد: users.clinic_id یا user_clinics)
 $clinics = db()->query('SELECT id, full_name, email, phone, active FROM users WHERE role = "clinic" ORDER BY full_name')->fetchAll();
 $clinicDoctors = [];
-$stmt = db()->prepare('SELECT id, full_name, phone, email, active FROM users WHERE role = "doctor" AND clinic_id = ? ORDER BY full_name');
 foreach ($clinics as $c) {
-    $stmt->execute([(int) $c['id']]);
-    $clinicDoctors[(int) $c['id']] = $stmt->fetchAll();
+    $ids = getClinicDoctorIdsForClinic((int) $c['id'], false);
+    if (!$ids) { $clinicDoctors[(int) $c['id']] = []; continue; }
+    $ph = implode(',', array_fill(0, count($ids), '?'));
+    $st = db()->prepare("SELECT id, full_name, phone, email, active FROM users WHERE id IN ({$ph}) ORDER BY full_name");
+    $st->execute($ids);
+    $clinicDoctors[(int) $c['id']] = $st->fetchAll();
+}
+// تعداد کلینیک‌های هر پزشک (برای نشان دادن پزشکانِ چند‌کلینیکی)
+$doctorClinicCount = [];
+foreach (db()->query("SELECT id FROM users WHERE role = 'doctor'")->fetchAll(PDO::FETCH_COLUMN) as $docId) {
+    $doctorClinicCount[(int) $docId] = count(getUserClinicIds((int) $docId));
 }
 
 // Labs with their sub-doctors
@@ -25,7 +33,10 @@ foreach ($labs as $l) {
 }
 
 // Independent doctors (not assigned to any clinic or lab)
-$independent = db()->query('SELECT id, full_name, phone, email, active FROM users WHERE role = "doctor" AND clinic_id IS NULL AND lab_id IS NULL ORDER BY full_name')->fetchAll();
+$independent = db()->query('SELECT id, full_name, phone, email, active FROM users
+    WHERE role = "doctor" AND clinic_id IS NULL AND lab_id IS NULL
+      AND NOT EXISTS (SELECT 1 FROM user_clinics uc WHERE uc.user_id = users.id)
+    ORDER BY full_name')->fetchAll();
 // All doctors for add-dropdowns
 $allDoctors = db()->query('SELECT id, full_name FROM users WHERE role = "doctor" AND active = 1 ORDER BY full_name')->fetchAll();
 
@@ -37,7 +48,7 @@ panel_layout_start('شبکه همکاران');
     <a class="btn" href="dashboard.php" style="background:#E5E7EB; color:#0F172A;">بازگشت</a>
 </div>
 
-<p style="color:#525252; margin-bottom:18px;">نمای شبکه‌ای همکاران: هر کلینیک یا لابراتوار می‌تواند پزشکان زیرمجموعه خودش را داشته باشد. پزشک می‌تواند عضو حداکثر یک کلینیک و یک لابراتوار باشد.</p>
+<p style="color:#525252; margin-bottom:18px;">نمای شبکه‌ای همکاران: هر کلینیک یا لابراتوار می‌تواند پزشکان زیرمجموعه خودش را داشته باشد. یک پزشک می‌تواند <strong>عضو چند کلینیک</strong> (مثلاً دو کلینیک) و یک لابراتوار باشد.</p>
 
 <!-- ─── Clinics ─── -->
 <h3 style="margin:20px 0 10px;">کلینیک‌ها و پزشکان زیرمجموعه</h3>
@@ -72,15 +83,20 @@ panel_layout_start('شبکه همکاران');
         <?php else: ?>
             <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;">
                 <?php foreach ($subs as $sd): ?>
-                    <span style="display:inline-flex; align-items:center; gap:6px; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:8px; padding:4px 10px; font-size:0.9rem;">
+                    <span style="display:inline-flex; align-items:center; gap:6px; background:#f3f4f6; border:1px solid #e5e7eb; border-radius:8px; padding:4px 10px; font-size:0.9rem;"
+                        title="کلینیک‌های این پزشک: <?= htmlspecialchars(implode('، ', getUserClinicNames((int) $sd['id'])) ?: '—') ?>">
                         🩺 <?= htmlspecialchars($sd['full_name']) ?>
+                        <?php $dcCount = $doctorClinicCount[(int) $sd['id']] ?? 1; ?>
+                        <?php if ($dcCount > 1): ?>
+                            <span class="badge" style="background:#e0e7ff; color:#3730a3; font-size:0.72rem;" title="<?= htmlspecialchars(implode('، ', getUserClinicNames((int) $sd['id']))) ?>"><?= toPersianDigits((string) $dcCount) ?> کلینیک</span>
+                        <?php endif; ?>
                         <form method="post" action="save_entity_doctor.php" style="display:inline;">
                             <?= csrf_field() ?>
                             <input type="hidden" name="entity_type" value="clinic">
                             <input type="hidden" name="entity_id" value="<?= (int) $cl['id'] ?>">
                             <input type="hidden" name="doctor_id" value="<?= (int) $sd['id'] ?>">
                             <input type="hidden" name="action" value="remove">
-                            <button type="submit" style="background:none; border:none; color:#b91c1c; cursor:pointer; font-size:0.85rem;" title="حذف از کلینیک">✕</button>
+                            <button type="submit" style="background:none; border:none; color:#b91c1c; cursor:pointer; font-size:0.85rem;" title="حذف از این کلینیک">✕</button>
                         </form>
                     </span>
                 <?php endforeach; ?>

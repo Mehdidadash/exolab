@@ -41,14 +41,17 @@ if (empty($caseIds) || !is_array($caseIds) || !$statusId) {
 }
 
 // Verify status exists
-$checkStatus = db()->prepare('SELECT id FROM case_statuses WHERE id = ?');
+$checkStatus = db()->prepare('SELECT id, name FROM case_statuses WHERE id = ?');
 $checkStatus->execute([$statusId]);
-if (!$checkStatus->fetch()) {
+$statusRow = $checkStatus->fetch();
+if (!$statusRow) {
     http_response_code(400);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => false, 'error' => 'invalid_status']);
     exit;
 }
+// نامِ وضعیت برای ثبت در تاریخچهٔ فعالیت‌ها (یک‌بار خوانده می‌شود).
+$statusName = (string) ($statusRow['name'] ?? '');
 
 // Enforce per-role allowed statuses
 if (!canUserSetStatus($statusId)) {
@@ -99,6 +102,10 @@ foreach ($caseIds as $cid) {
         $stmt = db()->prepare('UPDATE cases SET status_id = ?, updated_at = NOW() WHERE id = ?');
         $stmt->execute([$statusId, $cid]);
         $updated++;
+
+        // ثبت در تاریخچهٔ فعالیت‌های کیس (مثل تغییرِ وضعیتِ تکی در update_case_status.php)
+        // تا تغییرِ وضعیتِ گروهی هم در «تاریخچه فعالیت‌های کیس» دیده شود.
+        log_case_activity($cid, 'status_change', 'تغییر وضعیت به: ' . ($statusName !== '' ? $statusName : ('#' . $statusId)));
 
         // اعلان فقط برای وضعیت‌های «خارج از ترتیب» (sort_order > 30)
         notifyCaseStatusChangeParticipants($cid, (int) $user['id'], $statusId, $oldStatusId ?: null);

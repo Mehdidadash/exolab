@@ -189,7 +189,8 @@ panel_layout_start('کیس‌های مخارج (بدهی‌ها)');
     function toman(n){ n = Math.round(Number(n) || 0); return faDigits(n.toLocaleString('en-US')); }
     var table = jQuery('#case-expenses-table').DataTable({
         data: data,
-        pageLength: 25,
+        pageLength: 100,
+        lengthMenu: [25, 50, 100, 250, 500, -1],
         order: [[0, 'desc']],
         layout: { top1: 'searchPanes' },
         searchPanes: {

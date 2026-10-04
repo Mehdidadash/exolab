@@ -1,7 +1,7 @@
 <?php
 // panel/save_scan_appointment.php
 // ثبت/ویرایش نوبت اسکن (AJAX → JSON).  POST: id?, appt_date, start_time, end_time?, doctor_id?,
-// case_id?, patient_name?, title?, appt_type, needs_scan_body, address?, phone?, status?, notes?
+// case_id?, patient_name?, title?, appt_type, needs_scan_body, scan_body_type_id?, address?, phone?, status?, notes?
 require_once __DIR__ . '/auth.php';
 require_login();
 
@@ -39,6 +39,8 @@ $patient    = trim((string) ($_POST['patient_name'] ?? ''));
 $title      = trim((string) ($_POST['title'] ?? ''));
 $apptType   = (string) ($_POST['appt_type'] ?? 'scan');
 $needsBody  = !empty($_POST['needs_scan_body']);
+// نوع اسکن‌بادی فقط وقتی معنی دارد که «اسکن‌بادی لازم است» تیک خورده باشد
+$scanBodyTypeId = (!$needsBody || empty($_POST['scan_body_type_id'])) ? null : (int) $_POST['scan_body_type_id'];
 $address    = trim((string) ($_POST['address'] ?? ''));
 $phone      = trim((string) ($_POST['phone'] ?? ''));
 $status     = (string) ($_POST['status'] ?? 'scheduled');
@@ -76,6 +78,7 @@ if ($endTime !== '' && $startTime !== '' && $endTime <= $startTime) {
 }
 if (!array_key_exists($apptType, scanAppointmentTypes())) $apptType = 'scan';
 if (!array_key_exists($status, scanAppointmentStatuses()))  $status = 'scheduled';
+if ($scanBodyTypeId !== null && !getScanBodyType($scanBodyTypeId)) $scanBodyTypeId = null;
 if ($doctorId) {
     $chk = db()->prepare('SELECT COUNT(*) FROM users WHERE id = ?');
     $chk->execute([$doctorId]);
@@ -145,6 +148,7 @@ $payload = [
     'end_time'        => ($endTime !== '' ? $endTime : null),
     'appt_type'       => $apptType,
     'needs_scan_body' => $needsBody ? 1 : 0,
+    'scan_body_type_id' => $scanBodyTypeId,
     'address'         => ($address !== '' ? $address : null),
     'phone'           => ($phone !== '' ? $phone : null),
     'status'          => $status,
@@ -167,8 +171,9 @@ if ($caseId) {
 // اعلان به پزشک (اگر نوبت برای پزشکی ثبت شده و به‌روزرسانی مهم است)
 if ($doctorId && (int) $doctorId !== (int) $user['id']) {
     try {
+        $bodyTypeName = $scanBodyTypeId ? scanBodyTypeName($scanBodyTypeId) : '';
         $msg = 'نوبت ' . (scanAppointmentTypes()[$apptType]['label'] ?? 'اسکن') . ' — ' . toJalaliDateFormatted($apptDate)
-             . ' ساعت ' . $startTime . ($needsBody ? ' (اسکن‌بادی لازم است)' : '');
+             . ' ساعت ' . $startTime . ($needsBody ? ' (اسکن‌بادی لازم است' . ($bodyTypeName !== '' ? ': ' . $bodyTypeName : '') . ')' : '');
         createNotification((int) $doctorId, 'نوبت اسکن', $msg, $caseId, 'appointment');
     } catch (Throwable $e) {
         // اعلان نباید ذخیرهٔ نوبت را خراب کند

@@ -43,6 +43,13 @@ if ($extraProvided) {
     $extraUnitPrice = ($rawExtra === '') ? null : max(0, (float) $rawExtra);
 }
 
+// ویژگی‌های خدمت: نیازمند طراحی + نیازمند انتخاب نوع اسکن‌بادی (اباتمنت/فیکسچر ایمپلنت).
+// چون در جدولِ inline (prices.php) هم چک‌باکس‌ها همیشه فرستاده می‌شوند، مقدار صریح ذخیره می‌شود.
+$designRequiredProvided   = array_key_exists('design_required', $_POST);
+$designRequired           = $designRequiredProvided ? (((string) $_POST['design_required'] === '1') ? 1 : 0) : null;
+$requiresScanBodyProvided = array_key_exists('requires_scan_body', $_POST);
+$requiresScanBody         = $requiresScanBodyProvided ? (((string) $_POST['requires_scan_body'] === '1') ? 1 : 0) : null;
+
 if ($title === '' || $price === '') {
     if ($isAjax) {
         http_response_code(400);
@@ -64,16 +71,20 @@ if (!empty($_POST['id'])) {
     if ($qtyManualProvided)  { $setParts[] = 'qty_manual = ?';       $params[] = $qtyManual; }
     if ($baseUnitsProvided)  { $setParts[] = 'base_units = ?';       $params[] = $baseUnits; }
     if ($extraProvided)      { $setParts[] = 'extra_unit_price = ?'; $params[] = $extraUnitPrice; }
+    if ($designRequiredProvided)   { $setParts[] = 'design_required = ?';    $params[] = $designRequired; }
+    if ($requiresScanBodyProvided) { $setParts[] = 'requires_scan_body = ?'; $params[] = $requiresScanBody; }
     $params[] = (int) $_POST['id'];
     $stmt = db()->prepare('UPDATE site_prices SET ' . implode(', ', $setParts) . ' WHERE id = ?');
     $stmt->execute($params);
 } else {
-    $stmt = db()->prepare('INSERT INTO site_prices (title, short_name, description, price, category, active, display_order, hide_on_site, qty_manual, base_units, extra_unit_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt = db()->prepare('INSERT INTO site_prices (title, short_name, description, price, category, active, display_order, hide_on_site, qty_manual, base_units, extra_unit_price, design_required, requires_scan_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         $title, ($shortName === '' ? null : $shortName), $description, $price, $category, $active, $display_order, $hideOnSite,
         ($qtyManualProvided ? $qtyManual : 0),
         ($baseUnitsProvided ? $baseUnits : 1),
         ($extraProvided ? $extraUnitPrice : null),
+        ($designRequiredProvided ? $designRequired : 1),
+        ($requiresScanBodyProvided ? $requiresScanBody : 0),
     ]);
 }
 

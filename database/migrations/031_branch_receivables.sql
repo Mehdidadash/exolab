@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS branch_receivables (
     payment_status ENUM('unpaid','partial','paid') NOT NULL DEFAULT 'unpaid',
     created_at DATETIME NULL,
     updated_at DATETIME NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS branch_receivable_items (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS branch_receivable_items (
     total_amount DECIMAL(14,2) NOT NULL DEFAULT 0,
     received_date DATE NULL,
     created_at DATETIME NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 CREATE TABLE IF NOT EXISTS branch_receivable_payments (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -43,6 +43,6 @@ CREATE TABLE IF NOT EXISTS branch_receivable_payments (
     notes VARCHAR(191) NULL,
     created_at DATETIME NULL,
     updated_at DATETIME NULL
-);
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 ALTER TABLE cases ADD COLUMN IF NOT EXISTS receivable_invoice_id INT NULL AFTER outsource_invoice_id;

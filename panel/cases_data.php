@@ -104,10 +104,30 @@ if (!empty($_GET['designer_id'])) {
     $whereClauses[] = 'c.designer_id = ?';
     $params[] = (int) $_GET['designer_id'];
 }
+// Filter by clinic ('' = همه، '0' = بدون کلینیک، عدد = آن کلینیک)
+if (isset($_GET['clinic_id']) && trim((string) $_GET['clinic_id']) !== '') {
+    $clinicFilter = (int) $_GET['clinic_id'];
+    if ($clinicFilter > 0) {
+        $whereClauses[] = 'c.clinic_id = ?';
+        $params[] = $clinicFilter;
+    } else {
+        $whereClauses[] = '(c.clinic_id IS NULL OR c.clinic_id = 0)';
+    }
+}
 // Filter by service (type of work)
 if (!empty($_GET['service_id'])) {
     $whereClauses[] = 'c.service_id = ?';
     $params[] = (int) $_GET['service_id'];
+}
+// فیلتر «فاکتورنشده»: کیسی که به هیچ فاکتوری اضافه نشده باشد — نه فاکتور پزشک/کلینیک
+// (invoice_id)، نه فاکتور طراح، نه فاکتور برون‌سپاری، نه فاکتور طلب از شعبه.
+if (!empty($_GET['uninvoiced'])) {
+    $whereClauses[] = '(c.invoice_id IS NULL AND c.designer_invoice_id IS NULL
+                       AND c.outsource_invoice_id IS NULL AND c.receivable_invoice_id IS NULL)';
+}
+// فیلتر «برچسب‌نشده‌ها»: کیس‌هایی که هنوز برچسبشان چاپ نشده (label_printed_at خالی).
+if (!empty($_GET['unprinted_labels'])) {
+    $whereClauses[] = '(c.label_printed_at IS NULL OR c.label_printed_at = \'\')';
 }
 // Filter by shade
 if (isset($_GET['shade']) && trim((string) $_GET['shade']) !== '') {
@@ -134,6 +154,10 @@ if ($searchValue !== '') {
 
 $db = db();
 
+// نامِ «طراح» برای نمایش به کاربران بیرونی (پزشک/کلینیک/لابراتوار): نام طراحِ واقعیِ کیس
+// اطلاعات داخلی است؛ به این نقش‌ها فقط برچسبِ «طراح پیش‌فرض» نشان داده می‌شود (بدون هیچ نامی).
+$externalDesignerName = canSeeDesignerInfo() ? '' : defaultDesignerDisplayName();
+
 // Total records (scoped)
 if ($isDoctor && !$isClinicOwner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE doctor_id = ?');
@@ -145,8 +169,10 @@ if ($isDoctor && !$isClinicOwner) {
     $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE designer_id = ?');
     $totalStmt->execute([$user['id']]);
 } elseif (has_permission('view_clinic_cases') && $user['role'] === 'clinic') {
+    // ⚠️ کوئریِ دامنهٔ کلینیک با alias «c» ساخته می‌شود → باید جدول هم alias داشته باشد
+    // (قبلاً «FROM cases» بدون alias بود و برای کاربران کلینیک خطای Unknown column می‌داد).
     $clinicScope = getClinicScope('c');
-    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases WHERE ' . $clinicScope['sql']);
+    $totalStmt = $db->prepare('SELECT COUNT(*) FROM cases c WHERE ' . $clinicScope['sql']);
     $totalStmt->execute($clinicScope['params']);
 } elseif (is_branch_scoped() || is_root_admin()) {
     $scopeBranch = currentBranchId();
@@ -214,14 +240,18 @@ $rows = $stmt->fetchAll();
 $data = [];
 
 // نقشهٔ وضعیت‌ها برای نمایش (شماره‌ی مرحله + آیکون + رنگ) — به ترتیب تعیین‌شده.
+// برای کاربرانِ بیرونی (پزشک/کلینیک/لابراتوار) وضعیتِ «ارسال به لاب همکار» به
+// «در حال انجام» تبدیل می‌شود تا ارجاعِ کار به لابراتوارِ همکار افشا نشود.
 $statusMeta = [];
+$isExternalViewer = isExternalCaseViewer($user);
 $stOrdinal = 0;
 foreach (getAllCaseStatuses() as $st) {
     $stOrdinal++;
+    $isMaskedSt = $isExternalViewer && isMaskedExternalStatus($st['name'] ?? '');
     $statusMeta[(int) $st['id']] = [
-        'name' => (string) $st['name'],
-        'icon' => (string) ($st['icon'] ?? ''),
-        'color' => (string) ($st['color'] ?? ''),
+        'name' => $isMaskedSt ? externalStatusMaskLabel() : (string) $st['name'],
+        'icon' => $isMaskedSt ? '' : (string) ($st['icon'] ?? ''),
+        'color' => $isMaskedSt ? '' : (string) ($st['color'] ?? ''),
         'num' => $stOrdinal,
     ];
 }
@@ -253,7 +283,19 @@ foreach ($rows as $r) {
             $price = formatAmountToman(getInboundReceivableAmount($r));
         }
     }
-    $invoiceHtml = !empty($r['invoice_number']) ? '<a href="invoice_form.php?id=' . htmlspecialchars($r['invoice_id']) . '">' . htmlspecialchars($r['invoice_number']) . '</a>' : '—';
+    // ستون فاکتور: برای کاربران داخلی (مدیر/کارمند) لینک به فرم فاکتور؛ برای پزشک/کلینیک/
+    // لابراتوار (کاربران بیرونی) لینک دانلود PDF فاکتور — چون فرم فاکتور به آن‌ها دسترسی نمی‌دهد.
+    $invoiceHtml = '—';
+    if (!empty($r['invoice_number'])) {
+        $invId = (int) $r['invoice_id'];
+        $invNum = htmlspecialchars($r['invoice_number']);
+        if (!canSeeDesignerInfo() && !$isAdmin) {
+            $invoiceHtml = '<a href="invoice_pdf.php?id=' . $invId . '" target="_blank" title="دانلود PDF فاکتور">'
+                . $invNum . ' <span style="font-size:0.75rem;">📄</span></a>';
+        } else {
+            $invoiceHtml = '<a href="invoice_form.php?id=' . $invId . '">' . $invNum . '</a>';
+        }
+    }
     if ($isDesigner) {
         // Designers must not see prices, totals, or invoice info
         $price = '—';
@@ -264,6 +306,9 @@ foreach ($rows as $r) {
         $eye = svg_icon('eye', 'icon-sm');
         $edit = svg_icon('edit', 'icon-sm');
         $trash = svg_icon('trash', 'icon-sm');
+        $plus = svg_icon('plus', 'icon-sm');
+        // «افزودن کیس زیرمجموعه» فقط برای کسانی که مجوز ساخت کیس دارند
+        $canAddSub = has_permission('create_cases');
 
         $tid = htmlspecialchars($r['id'], ENT_QUOTES, 'UTF-8');
         $actionDropdown = '<div class="action-dropdown" style="position:relative; display:inline-block;">'
@@ -271,6 +316,9 @@ foreach ($rows as $r) {
             . '<div class="action-menu" style="display:none; position:absolute; right:0; background:#fff; border:1px solid #e5e7eb; padding:4px; border-radius:6px; min-width:40px; box-shadow:0 6px 18px rgba(0,0,0,0.08); z-index:999;">'
                 . '<a class="btn action-icon" href="view_case.php?id=' . htmlspecialchars($r['id']) . '" target="_blank" onclick="event.stopPropagation(); window.open(this.href, \'_blank\'); return false;" style="display:block; padding:4px 6px; text-align:center;">' . $eye . '</a>'
                 . '<a href="#" class="btn action-icon edit-case" data-id="' . htmlspecialchars($r['id']) . '" style="display:block; padding:4px 6px; text-align:center;">' . $edit . '</a>'
+                . ($canAddSub
+                    ? '<a class="btn action-icon add-sub-case" href="cases.php?add_sub=' . htmlspecialchars($r['id']) . '" data-id="' . htmlspecialchars($r['id']) . '" title="افزودن کیس زیرمجموعه" style="display:block; padding:4px 6px; text-align:center; color:#15803d;">' . $plus . '</a>'
+                    : '')
                 . '<a href="#" class="btn action-icon delete-case" data-id="' . htmlspecialchars($r['id']) . '" style="display:block; padding:4px 6px; text-align:center; color:#b91c1c;">' . $trash . '</a>'
             . '</div>'
         . '</div>';
@@ -367,15 +415,18 @@ foreach ($rows as $r) {
         $invoiceHtml,
         $labHtml,
         $actionDropdown,
-        canSeeDesignerInfo() ? ($r['designer_name'] ?: '—') : '—',
+        canSeeDesignerInfo()
+            ? ($r['designer_name'] ?: '—')
+            : ($externalDesignerName !== '' ? $externalDesignerName : '—'),
         $r['file_count'] ?: 0,
         $r['label_printed_at'] ?? null,
-        $r['status_name'] ?: '—',
+        visibleStatusName($r['status_name'] ?? '', $user) ?: '—',
         $r['receipt_number'] ?: '',
         $r['raw_downloaded'] ? 1 : 0,
         $r['design_downloaded'] ? 1 : 0,
         $hasUpdates,
-        $r['service_short'] ?? ''
+        $r['service_short'] ?? '',
+        (int) ($r['quantity'] ?? 0)   // 21: تعداد واحد (برای جمعِ زیر جدول)
     ];
 }
 

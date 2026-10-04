@@ -146,14 +146,84 @@ function is_designer_user(?array $user = null): bool {
 }
 
 /**
+ * آیا این کاربر «بیرونی» است؟
+ * پزشک، کلینیک و لابراتوارهای همکار/برون‌سپاری/مشتری نباید:
+ *   • نام طراحِ واقعیِ کیس را ببینند (به‌جایش «طراح پیش‌فرض» نشان داده می‌شود)
+ *   • لابراتوارهای مرتبط با کیس (لابراتوارِ کیس، برون‌سپاری جانبی، شعبهٔ همکار) را ببینند.
+ * نقش‌های داخلی (مدیر/کارمند/منشی/تکنسین/طراح) محدودیتی ندارند.
+ */
+function isExternalCaseViewer(?array $user = null): bool {
+    $user = $user ?: current_user();
+    if (!$user) return true;
+    return in_array($user['role'] ?? '', ['doctor', 'clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
+}
+
+/**
+ * نامِ وضعیتِ «ارسال به لاب همکار» (وضعیت داخلیِ ارجاعِ کار به لابراتوارِ همکار).
+ * کاربرانِ بیرونی نباید بدانند کار به لابراتوارِ همکار ارجاع شده است؛ به‌جای آن
+ * «در حال انجام» نمایش داده می‌شود.
+ */
+function externalPartnerLabStatusName(): string {
+    return 'ارسال به لاب همکار';
+}
+
+/** برچسبی که به کاربرانِ بیرونی به‌جای وضعیتِ «ارسال به لاب همکار» نشان داده می‌شود. */
+function externalStatusMaskLabel(): string {
+    return 'در حال انجام';
+}
+
+/**
+ * آیا این وضعیت باید برای کاربرانِ بیرونی «ماسک» شود؟
+ * فقط وضعیتِ «ارسال به لاب همکار» ماسک می‌شود (با نام — مستقل از شناسه، تا اگر
+ * شناسهٔ وضعیت در دیتابیسِ دیگری متفاوت بود باز هم درست کار کند).
+ */
+function isMaskedExternalStatus(?string $statusName): bool {
+    $statusName = trim((string) $statusName);
+    if ($statusName === '') return false;
+    return $statusName === externalPartnerLabStatusName();
+}
+
+/**
+ * نامِ وضعیتی که برای نمایش به کاربرِ جاری مناسب است.
+ * برای کاربرانِ بیرونی (پزشک/کلینیک/لابراتوار) وضعیتِ «ارسال به لاب همکار» به
+ * «در حال انجام» تبدیل می‌شود؛ برای کاربرانِ داخلی نامِ واقعی برمی‌گردد.
+ *
+ * @param string|null $statusName نامِ واقعیِ وضعیت از دیتابیس
+ * @param array|null  $user       کاربر (پیش‌فرض: کاربرِ جاری)
+ */
+function visibleStatusName(?string $statusName, ?array $user = null): string {
+    $statusName = (string) $statusName;
+    if (!isExternalCaseViewer($user)) return $statusName;
+    return isMaskedExternalStatus($statusName) ? externalStatusMaskLabel() : $statusName;
+}
+
+/**
+ * شناسهٔ وضعیت‌هایی که برای کاربرِ جاری نباید «قابل انتخاب» باشند.
+ * (کاربرِ بیرونی نمی‌تواند وضعیتِ «ارسال به لاب همکار» را انتخاب/مشاهده کند.)
+ *
+ * @param array $statuses خروجیِ getAllCaseStatuses()
+ * @return int[] شناسهٔ وضعیت‌های ماسک‌شده (برای کاربرِ داخلی: خالی)
+ */
+function maskedStatusIdsForUser(array $statuses, ?array $user = null): array {
+    if (!isExternalCaseViewer($user)) return [];
+    $ids = [];
+    foreach ($statuses as $st) {
+        if (isMaskedExternalStatus($st['name'] ?? '')) {
+            $ids[] = (int) $st['id'];
+        }
+    }
+    return $ids;
+}
+
+/**
  * Whether the current user may see internal designer names on cases.
- * Designer info is internal: only our staff / secretaries / branch users see it.
- * Doctors, clinics, and external labs do NOT see designer names (unless the
- * user is a branch member / admin).
+ * Designer info is internal: نقش‌های بیرونی (پزشک/کلینیک/لابراتوار) هرگز نام طراحِ واقعی را
+ * نمی‌بینند؛ به‌جایش «طراح پیش‌فرض» نمایش داده می‌شود. کاربران شعب/کارکنان داخلی می‌بینند.
  */
 function canSeeDesignerInfo(): bool {
     $user = current_user();
     if (!$user) return false;
+    if (isExternalCaseViewer($user)) return false;
     // Internal roles + anyone scoped to a branch
     if (in_array($user['role'] ?? '', ['admin', 'branch_admin', 'staff', 'secretary', 'technician', 'designer'], true)) {
         return true;
@@ -242,6 +312,84 @@ function require_root_admin() {
     }
 }
 
+/**
+ * آیا کاربرِ جاری می‌تواند کاربرهای یک شعبه را مدیریت کند (افزودن/ویرایش/حذف)؟
+ *   • مدیر کل (admin) → همهٔ کاربران.
+ *   • مدیر شعبه (branch_admin) → فقط کاربرانِ شعبهٔ خودش.
+ */
+function can_manage_users(): bool {
+    return is_admin();
+}
+
+/**
+ * شناسهٔ شعبه‌ای که کاربرِ جاری مجاز به مدیریت کاربرانش است.
+ * مدیر کل → null (همه). مدیر شعبه → شناسهٔ شعبهٔ خودش. سایر نقش‌ها → null.
+ */
+function managed_users_branch_id(): ?int {
+    $user = current_user();
+    if (!$user) return null;
+    if ($user['role'] === 'admin') return null;    // global
+    if ($user['role'] === 'branch_admin') {
+        $bid = $user['branch_id'] ?? null;
+        return ($bid !== null && $bid !== '') ? (int) $bid : null;
+    }
+    return null;
+}
+
+/**
+ * آیا کاربرِ جاری مجاز به مشاهده/ویرایشِ کاربرِ هدف است؟
+ * مدیر کل → همه (به‌جز محدودیت‌های ادمین اصلی id=1 در ویرایش).
+ * مدیر شعبه → فقط کاربرانِ همان شعبه، و هرگز کاربر «ادمین» یا «مدیر شعبهٔ دیگر».
+ */
+function can_manage_target_user(?array $target = null, ?int $targetId = null): bool {
+    $me = current_user();
+    if (!$me) return false;
+    if (is_root_admin()) return true;
+    if ($me['role'] !== 'branch_admin') return false;
+
+    $branchId = managed_users_branch_id();
+    if ($branchId === null) return false;   // مدیر شعبه بدون شعبه → دسترسی ندارد
+
+    if ($target === null && $targetId !== null) {
+        $st = db()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1');
+        $st->execute([(int) $targetId]);
+        $target = $st->fetch() ?: null;
+    }
+    if (!$target) return false;
+
+    // هرگز به کاربر ادمین یا خودش/مدیران دیگر دست نزند
+    if ((int) $target['id'] === (int) $me['id']) return false;
+    if (in_array($target['role'] ?? '', ['admin'], true)) return false;
+    if ((int) ($target['branch_id'] ?? 0) !== $branchId) return false;
+
+    return true;
+}
+
+/**
+ * نقش‌هایی که کاربرِ جاری مجاز به انتساب آن‌هاست.
+ * مدیر شعبه نمی‌تواند «مدیر سیستم» یا «مدیر شعبه» بسازد (تا دسترسی افقی نسازد).
+ * @return array نقش‌های مجاز با آرایه‌ای از نام‌ها
+ */
+function assignable_user_roles(): array {
+    $all = [];
+    if (function_exists('getAllRoles')) {
+        foreach (getAllRoles() as $r) {
+            $all[(string) $r['name']] = (string) $r['label'];
+        }
+    }
+    if (is_root_admin()) return $all;
+    // مدیر شعبه: بدون admin و branch_admin
+    foreach (['admin', 'branch_admin'] as $blocked) {
+        unset($all[$blocked]);
+    }
+    return $all;
+}
+
+/** آیا این نقش را کاربرِ جاری مجاز به انتساب است؟ */
+function can_assign_user_role(string $role): bool {
+    return array_key_exists($role, assignable_user_roles());
+}
+
 function require_permission($permission) {
     require_login();
     if (!has_permission($permission)) {
@@ -252,30 +400,32 @@ function require_permission($permission) {
 
 // ─── Clinic hierarchy helpers ───
 
-/** Get IDs of doctors belonging to the current clinic user */
+/**
+ * شناسهٔ پزشکانِ زیرمجموعهٔ کاربرِ جاری (وقتی خودش کلینیک است).
+ * یک پزشک می‌تواند عضو چند کلینیک باشد؛ پس هم «کلینیک اصلیِ» پزشک (users.clinic_id)
+ * و هم عضویت جدولِ user_clinics در نظر گرفته می‌شود.
+ */
 function getClinicDoctorIds(): array {
     $user = current_user();
     if (!$user) return [];
 
     if ($user['role'] === 'clinic' || $user['role'] === 'doctor') {
-        $stmt = db()->prepare('SELECT id FROM users WHERE clinic_id = ? AND active = 1');
-        $stmt->execute([$user['id']]);
-        return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        return getClinicDoctorIdsForClinic((int) $user['id']);
     }
 
     return [];
 }
 
-/** Get a WHERE clause snippet for clinic-scoped queries. Returns ['sql' => '...', 'params' => [...]] */
+/**
+ * شرطِ SQL برای دیدن کیس‌های یک کلینیک: کلینیکِ صریحِ کیس (cases.clinic_id) یا
+ * پزشکانی که عضو آن کلینیک هستند (کلینیک اصلی یا عضویت چندگانه).
+ */
 function getClinicScope(string $alias = 'c'): array {
     $user = current_user();
     if ($user && $user['role'] === 'clinic') {
-        $ids = getClinicDoctorIds();
-        if (empty($ids)) {
-            return ['sql' => "{$alias}.doctor_id IN (0)", 'params' => []];
-        }
-        $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        return ['sql' => "{$alias}.doctor_id IN ({$placeholders})", 'params' => $ids];
+        // حتی اگر کلینیک هیچ پزشکِ زیرمجموعه‌ای نداشته باشد، کیس‌هایی که صریحاً به
+        // خودش نسبت داده شده‌اند (cases.clinic_id) دیده می‌شوند.
+        return clinicCaseScope($alias, (int) $user['id']);
     }
     return ['sql' => '1=1', 'params' => []];
 }
@@ -309,13 +459,15 @@ function designerCanAccessUser(int $targetUserId): bool {
         return false;
     }
     $designerId = (int) $user['id'];
+    // پزشکانِ عضوِ هر کلینیکی که می‌خواهد پروفایلش را ببیند (کلینیک اصلی یا عضویت چندگانه)
     $stmt = db()->prepare('
         SELECT COUNT(*) FROM cases c
-        LEFT JOIN users d ON c.doctor_id = d.id
         WHERE c.designer_id = ?
-          AND (c.doctor_id = ? OR c.lab_id = ? OR d.clinic_id = ?)
+          AND (c.doctor_id = ? OR c.lab_id = ?
+               OR EXISTS (SELECT 1 FROM users du WHERE du.id = c.doctor_id AND du.clinic_id = ?)
+               OR EXISTS (SELECT 1 FROM user_clinics uc WHERE uc.user_id = c.doctor_id AND uc.clinic_id = ?))
     ');
-    $stmt->execute([$designerId, $targetUserId, $targetUserId, $targetUserId]);
+    $stmt->execute([$designerId, $targetUserId, $targetUserId, $targetUserId, $targetUserId]);
     return (int) $stmt->fetchColumn() > 0;
 }
 
@@ -379,6 +531,16 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 if (g !== group) g.classList.remove('open');
             });
             group.classList.toggle('open', !wasOpen);
+            // روی گوشی، پنلِ منو خودش اسکرول دارد؛ اگر زیرمنوی بلندی (مثل «مالی») باز شد
+            // مطمئن می‌شویم دکمهٔ همان گروه بالای دید می‌ماند تا زیرمنو کامل دیده شود.
+            if (!wasOpen && group.classList.contains('open')) {
+                var nav = document.getElementById('siteNav');
+                if (nav && nav.classList.contains('mobile-open')) {
+                    var navRect = nav.getBoundingClientRect();
+                    var btnRect = btn.getBoundingClientRect();
+                    nav.scrollTop += (btnRect.top - navRect.top) - 6;
+                }
+            }
         }
         if (!window.__exolabNavBound) {
             window.__exolabNavBound = true;
@@ -418,6 +580,8 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 $navIsAdmin   = is_admin();
                 $navIsRoot    = is_root_admin();
                 $navIsBranch  = is_branch_scoped();
+                // کتابخانهٔ اسکن‌بادی: مدیران (کامل) + طراح‌ها (فقط مشاهده/دانلود)
+                $navCanBodyLib = function_exists('canViewScanBodyLibrary') && canViewScanBodyLibrary($user);
                 ?>
                 <?php if ($navCanCases): ?>
                     <div class="nav-group">
@@ -469,9 +633,12 @@ function panel_layout_start($title = 'پنل مدیریت') {
                             <?php if ($navIsRoot): ?>
                                 <a href="users.php">کاربران</a>
                                 <a href="branches.php">شعبه‌ها</a>
+                            <?php elseif (function_exists('can_manage_users') && can_manage_users()): ?>
+                                <a href="users.php">کاربران شعبه</a>
                             <?php endif; ?>
                             <a href="network.php">شبکه همکاران</a>
                             <a href="case_statuses.php">وضعیت‌های کیس</a>
+                            <a href="scan_body_types.php">🧩 انواع و کتابخانه اسکن‌بادی</a>
                         </div>
                     </div>
 
@@ -488,7 +655,20 @@ function panel_layout_start($title = 'پنل مدیریت') {
                     <div class="nav-group">
                         <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">تنظیمات <span class="caret">▼</span></button>
                         <div class="nav-group-menu">
-                            <a href="change_password.php">تغییر رمز عبور</a>
+                            <?php
+                            // کاربرانِ بیرونی (پزشک/کلینیک/لابراتوار همکار و برون‌سپاری) به‌جای
+                            // صفحهٔ «پروفایل من» به پروفایلِ خودشان در doctor_view.php می‌روند
+                            // (که دکمهٔ «ویرایش مشخصات من و رمز عبور» را هم دارد).
+                            $navProfileRole   = (string) ($user['role'] ?? '');
+                            $navIsDoctor      = ($navProfileRole === 'doctor');
+                            $navExternalParty = in_array($navProfileRole, ['clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
+                            ?>
+                            <?php if ($navIsDoctor || $navExternalParty): ?>
+                                <a href="doctor_view.php?id=<?= (int) $user['id'] ?>">پروفایل من</a>
+                            <?php else: ?>
+                                <a href="change_password.php">تغییر رمز عبور</a>
+                                <a href="my_profile.php">پروفایل من (نام، ایمیل، تلفن)</a>
+                            <?php endif; ?>
                             <?php if ($navIsRoot): ?>
                                 <a href="roles.php">نقش‌ها</a>
                                 <a href="audit_log.php">لاگ فعالیت‌ها</a>
@@ -555,7 +735,8 @@ function panel_layout_end() {
                 if (jQuery.fn.dataTable.isDataTable(this)) return; // skip if already initialized
                 var config = {
                     responsive: true,
-                    pageLength: 25,
+                    pageLength: 100,
+                    lengthMenu: [25, 50, 100, 250, 500, -1],
                     destroy: true,
                     language: {
                         search: "جستجو:",
@@ -570,9 +751,26 @@ function panel_layout_end() {
                         aria: { sortAscending: ": مرتب‌سازی صعودی", sortDescending: ": مرتب‌سازی نزولی" }
                     }
                 };
+                // جداولی که ستون‌هایشان نباید پنهان/جمع شوند (مثل جدول ویرایش آیتم‌های
+                // فاکتور که داخل سلول‌ها ورودی دارد) با data-dt-plain علامت می‌خورند:
+                // بدون حالت responsive، بدون مرتب‌سازی، بدون صفحه‌بندی.
+                if (this.hasAttribute('data-dt-plain')) {
+                    config.responsive = false;
+                    config.paging = false;
+                    config.info = false;
+                    config.ordering = false;
+                }
+                // ستون‌هایی که نباید قابل مرتب‌سازی باشند (مثل چک‌باکس و ستون‌های متنی)
+                var noSort = this.getAttribute('data-dt-nosort');
+                if (noSort) {
+                    config.columnDefs = [{
+                        orderable: false,
+                        targets: noSort.split(',').map(function (n) { return parseInt(n, 10); })
+                    }];
+                }
                 // If the table has a data-order attribute, use it
                 var orderIdx = this.getAttribute('data-order');
-                if (orderIdx !== null) {
+                if (orderIdx !== null && !this.hasAttribute('data-dt-plain')) {
                     config.order = [[parseInt(orderIdx), 'desc']];
                 }
                 jQuery(this).DataTable(config);

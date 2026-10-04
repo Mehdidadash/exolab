@@ -60,8 +60,22 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
             </thead>
             <tbody id="invoice-items" data-items='<?= json_encode(array_map(function ($item) {
                 // Map DB fields to the format expected by addCaseRow() in invoice-items.js
-                $unitPrice = round((float) $item['unit_price']);
                 $quantity = (int) ($item['quantity'] ?? 1);
+                $rawTotal = round((float) $item['total_amount']);
+                $rawUnit  = (float) $item['unit_price'];
+                // ─── تشخیص ردیف تخفیف ───
+                // تخفیف‌ها case_id ندارند (به کیس وصل نیستند). ولی علامتِ ذخیره‌شده
+                // قابل اعتماد نیست: بعضی ردیف‌ها unit_price مثبت و total_amount منفی
+                // ذخیره شده‌اند و بعضی (باگ) هر دو مثبت. پس از عنوان/توضیح هم کمک می‌گیریم
+                // تا تخفیف همیشه «تفریق» شود و هیچ‌وقت «جمع» نشود.
+                $looksDiscount = (bool) preg_match('/تخفیف/u', (string) $item['item_title'] . ' ' . (string) $item['item_description']);
+                $isDiscount = empty($item['case_id']) && ($rawTotal < 0 || $rawUnit < 0 || $looksDiscount);
+                if ($isDiscount) {
+                    // مبلغی که کاربر تایپ می‌کند مثبت است؛ ردیف همیشه منفی حساب می‌شود.
+                    $unitPrice = abs($rawUnit > 0 ? $rawUnit : ($rawTotal / max(1, $quantity)));
+                } else {
+                    $unitPrice = round($rawUnit);
+                }
                 return [
                     'id' => $item['case_id'],
                     'case_id' => $item['case_id'],
@@ -74,7 +88,8 @@ panel_layout_start($editing ? 'ویرایش فاکتور' : 'ایجاد فاکت
                     'quantity' => $quantity,
                     'unit_price' => $unitPrice,
                     'total_price' => $unitPrice * $quantity,
-                    'total_amount' => round((float) $item['total_amount']),
+                    'total_amount' => $rawTotal,
+                    'is_discount' => $isDiscount,
                 ];
             }, $invoiceItems), JSON_UNESCAPED_UNICODE) ?>'>
             </tbody>

@@ -30,8 +30,19 @@ foreach (($_POST['items'] ?? []) as $k => $r) {
     if (!is_array($r) || !empty($r['remove'])) {
         continue;
     }
+    // ردیف‌هایی که کیسشان حذف شده («ردیف یتیم») نباید تعداد/نرخشان صفر شود؛
+    // جمع کل و جزء‌به‌جزء فاکتور باید حفظ شود، پس آن‌ها را دست‌نخورده رد می‌کنیم.
+    $itemId = (int) $k;
+    $chk = db()->prepare('SELECT i.case_id, (SELECT COUNT(*) FROM cases c WHERE c.id = i.case_id) AS case_exists
+                          FROM branch_receivable_items i WHERE i.id = ? AND i.receivable_id = ?');
+    $chk->execute([$itemId, $id]);
+    $row = $chk->fetch();
+    if ($row && (int) $row['case_id'] > 0 && (int) $row['case_exists'] === 0) {
+        $rows[] = ['item_id' => $itemId, 'skip' => true];
+        continue;
+    }
     $rows[] = [
-        'item_id' => (int) $k,
+        'item_id' => $itemId,
         'qty' => (int) ($r['qty'] ?? 1),
         'unit' => (float) ($r['unit'] ?? 0),
     ];

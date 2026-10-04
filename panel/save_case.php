@@ -62,6 +62,13 @@ $location_type = trim($data['location_type'] ?? '');
 $teeth = normalizePersianDigits(trim($data['teeth'] ?? ''));
 $teeth = str_replace(['،', ';'], ',', $teeth);
 $shade = trim($data['shade'] ?? '');
+// نوع اسکن‌بادی + نوع اتصال: فقط برای خدماتی که requires_scan_body دارند معنی دارند،
+// ولی اعتبارسنجی نهایی بعد از معلوم شدن service_id انجام می‌شود (پایین‌تر).
+$scanBodyTypeId = !empty($data['scan_body_type_id']) ? (int) $data['scan_body_type_id'] : null;
+$connectionType = trim((string) ($data['connection_type'] ?? ''));
+$connectionType = isValidConnectionType($connectionType) ? $connectionType : null;
+// نوع اسکن‌بادی کیس (فقط برای خدماتی که requires_scan_body دارند — اباتمنت/فیکسچر ایمپلنت)
+$scan_body_type_id = !empty($data['scan_body_type_id']) ? (int) $data['scan_body_type_id'] : null;
 $quantity = !empty($data['quantity']) ? (int)$data['quantity'] : 1;
 if ($quantity < 1) $quantity = 1;
 if ($quantity > 999) $quantity = 999;   // جلوگیری از اشتباه تایپی
@@ -95,9 +102,13 @@ if (!in_array($case_type, ['doctor', 'lab_in', 'lab_out'])) $case_type = 'doctor
 $description = trim($data['description'] ?? '');
 $parent_id = !empty($data['parent_id']) ? (int)$data['parent_id'] : null;
 $designer_id = !empty($data['designer_id']) ? (int)$data['designer_id'] : null;
-// If no designer chosen (e.g. partner lab / branch creating a case), auto-assign
-// the DEFAULT designer (is_default_designer=1) so a designer is always present.
-if (!$designer_id && !$editingCase) {
+// کلینیکِ صاحبِ کار (اختیاری): یکی از کلینیک‌های پزشک یا هر کلینیکی برای مدیران.
+// خالی باشد → «کلینیک اصلیِ» پزشک به‌عکس پیش‌فرض انتخاب می‌شود.
+$clinic_id = !empty($data['clinic_id']) ? (int) $data['clinic_id'] : null;
+// اگر فیلدِ «طراح» اصلاً ارسال نشده باشد (فرمِ محدودِ پزشک یا فراخوانی برنامه‌ای)،
+// «طراح پیش‌فرض» (is_default_designer=1) انتخاب می‌شود تا کیس همیشه طراح داشته باشد.
+// اگر فرم فیلد را فرستاده و کاربر عمداً «بدون طراح» را انتخاب کرده، همان خالی می‌ماند.
+if (!$designer_id && !$editingCase && !array_key_exists('designer_id', $data)) {
     $defaultDesigner = getDefaultDesigner();
     if ($defaultDesigner) {
         $designer_id = (int) $defaultDesigner['id'];
@@ -127,16 +138,33 @@ if (!$editingCase && $currentUser['role'] === 'doctor') {
     $case_type = 'doctor';
     $doctor_id = (int) $currentUser['id'];
     $lab_id = null;
-    $designer_id = null;
+    // فرمِ محدودِ پزشک فیلد «طراح» ندارد؛ پس همان «طراح پیش‌فرض» بالاتر (auto-assign)
+    // بر کیس می‌ماند. حذفش می‌کردیم → کیسِ پزشک هیچ‌وقت طراح و هزینهٔ طراحی نمی‌گرفت
+    // (ناسازگار با کیس‌های doctor‌ی که کارکنان ثبت می‌کنند).
     $received_date = date('Y-m-d');
     $statusSt = db()->query("SELECT id FROM case_statuses WHERE name = 'ثبت شد' ORDER BY id LIMIT 1")->fetchColumn();
     $status_id = $statusSt ? (int) $statusSt : 1;
+    // اگر پزشک هنگام ایجاد کیس، فایل اسکن هم بفرستد → وضعیت «اسکن شد» ثبت می‌شود.
+    // (فرم ابتدا کیس را ذخیره می‌کند و بعد فایل‌ها را آپلود می‌کند؛ پس فقط یک پرچم از
+    //  سمت مرورگر می‌رسد که «فایل دارم».)
+    if (!empty($data['has_files']) && $data['has_files'] !== '0') {
+        $scanSt = db()->query("SELECT id FROM case_statuses WHERE name = 'اسکن شد' ORDER BY id LIMIT 1")->fetchColumn();
+        if ($scanSt) { $status_id = (int) $scanSt; }
+    }
     // Force the unit price to the doctor's applicable price for the service
     if ($service_id) {
         $forcedPrice = getApplicablePrice($doctor_id, $service_id);
         if ($forcedPrice !== null) {
             $unit_price = $forcedPrice;
             $total_price = serviceTotalPrice($unit_price, $quantity, $service_id);
+        }
+    }
+    // هزینهٔ طراحی هم مثل فرمِ کارکنان محاسبه شود (نرخِ طراح × تعداد) — فرمِ پزشک
+    // فیلد هزینهٔ طراحی ندارد، پس سرور آن را از «نقشهٔ قیمت‌گذاری» می‌خواند.
+    if ($designer_id && !array_key_exists('design_fee', $data)) {
+        $unitDesignFee = getApplicableDesignFee((int) $designer_id, $service_id > 0 ? (int) $service_id : null);
+        if ($unitDesignFee !== null) {
+            $design_fee = round((float) $unitDesignFee * (int) $quantity, 2);
         }
     }
 }
@@ -147,7 +175,10 @@ if (!$editingCase && $currentUser['role'] === 'doctor') {
 // ناخواسته پاک نشود، مقدار فعلیِ کیس را این‌جا داریم.
 $existingCaseRow = null;
 if ($id) {
-    $exRow = db()->prepare('SELECT doctor_id, service_id, status_id, lab_id, case_type, branch_id, source_branch_id FROM cases WHERE id = ?');
+    $exRow = db()->prepare('SELECT doctor_id, service_id, status_id, lab_id, case_type, branch_id, source_branch_id, clinic_id,
+                                   designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate,
+                                   scan_body_type_id, connection_type
+                            FROM cases WHERE id = ?');
     $exRow->execute([$id]);
     $existingCaseRow = $exRow->fetch() ?: null;
 }
@@ -161,6 +192,47 @@ if ($existingCaseRow
     && in_array($case_type, ['lab_in', 'lab_out'], true)
     && (string) ($existingCaseRow['case_type'] ?? '') === (string) $case_type) {
     $lab_id = (int) $existingCaseRow['lab_id'];
+}
+
+// ─── حفظِ اطلاعاتِ داخلیِ کیس وقتی فرم آن‌ها را همراه ندارد ───
+// کاربران بیرونی (پزشک/کلینیک/لابراتوار) شناسهٔ طراح و لابراتوارهای مرتبط را در
+// فرم نمی‌بینند (get_case.php آن‌ها را حذف می‌کند). اگر این محافظ نباشد، ویرایشِ کیس
+// توسط پزشک باعث NULL شدنِ طراح/برون‌سپاری جانبی و ناپدید شدن کیس از گزارش‌ها می‌شود.
+if ($existingCaseRow) {
+    $preserve = [
+        'designer_id'           => 'designer_id',
+        'outsourced_lab_id'     => 'outsourced_lab_id',
+        'outsourced_service_id' => 'outsourced_service_id',
+        'outsourced_qty'        => 'outsourced_qty',
+        'outsourced_rate'       => 'outsourced_rate',
+    ];
+    foreach ($preserve as $field => $var) {
+        if (array_key_exists($field, $data)) {
+            continue;   // فیلد در فرم بوده → همان مقدارِ فرم معتبر است (خالی = پاک کردنِ آگاهانه)
+        }
+        $old = $existingCaseRow[$field] ?? null;
+        if ($var === 'designer_id') {
+            if ($old !== null && $old !== '') { $designer_id = (int) $old; }
+        } elseif ($var === 'outsourced_qty') {
+            $outsourced_qty = $old !== null && $old !== '' ? (int) $old : 0;
+        } elseif ($var === 'outsourced_rate') {
+            $outsourced_rate = ($old !== null && $old !== '') ? (float) $old : null;
+        } elseif ($old !== null && $old !== '') {
+            ${$var} = (int) $old;
+        }
+    }
+    // اگر کیس برون‌سپاری جانبی دارد ولی فرم آن را نفرستاده، هر سه مقدار باید هم‌زمان بمانند
+    if (!array_key_exists('outsourced_lab_id', $data)
+        && $outsourced_lab_id && (!$outsourced_service_id || $outsourced_qty <= 0)) {
+        $outsourced_service_id = !empty($existingCaseRow['outsourced_service_id']) ? (int) $existingCaseRow['outsourced_service_id'] : null;
+        $outsourced_qty = !empty($existingCaseRow['outsourced_qty']) ? (int) $existingCaseRow['outsourced_qty'] : 0;
+        if (!$outsourced_service_id || $outsourced_qty <= 0) {
+            $outsourced_lab_id = null;
+            $outsourced_service_id = null;
+            $outsourced_qty = 0;
+            $outsourced_rate = null;
+        }
+    }
 }
 
 // ─── Branch assignment ───
@@ -270,6 +342,75 @@ if ($service_id) {
 }
 if (!$serviceRequiresDesign) {
     $design_fee = 0;
+    // خدماتی مثل پست NPG / پرینت کست / الاینر شفاف طراحی ندارند؛ در «ایجاد» کیس،
+    // طراح هم ثبت نمی‌شود (کیس بطور پیش‌فرض «بدون طراح» می‌ماند). در ویرایش، انتخابِ
+    // کاربر دست‌نخورده می‌ماند تا مقدارِ قدیمی ناخواسته پاک نشود.
+    if (!$editingCase) {
+        $designer_id = null;
+    }
+}
+
+// ─── نوع اسکن‌بادی و نوع اتصال (فقط برای خدماتِ اباتمنت/فیکسچر) ───
+// اگر خدمت نیازمند اسکن‌بادی نباشد، هر دو مقدار پاک می‌شوند (مثل اعتبارسنجیِ نوبت اسکن).
+// در ویرایش، اگر خدمت نیاز نداشت مقدارِ قبلی حفظ نمی‌شود مگر خدمت هنوز نیازمند باشد —
+// چون فیلد به‌کلی بی‌معنی است.
+if (!serviceRequiresScanBody($service_id)) {
+    $scanBodyTypeId = null;
+    $connectionType = null;
+} else {
+    if ($scanBodyTypeId !== null && !getScanBodyType($scanBodyTypeId)) {
+        $scanBodyTypeId = null;
+    }
+}
+
+// ─── نوع اسکن‌بادی کیس (service requires_scan_body) ───
+// فیلد فقط برای خدماتی نمایش داده می‌شود که در prices.php تیک «نیازمند انتخاب نوع اسکن‌بادی»
+// دارند (اباتمنت کره‌ای/اروپایی، فیکسچر ایمپلنت). برای بقیهٔ خدمات مقدار پاک می‌شود تا
+// دادهٔ بی‌ربط روی کیس نماند، و نوعِ نامعتبر هم رد می‌شود.
+if ($scan_body_type_id !== null) {
+    if (!serviceRequiresScanBody($service_id) || !getScanBodyType($scan_body_type_id)) {
+        $scan_body_type_id = null;
+    }
+}
+if ($scan_body_type_id === null && $service_id && serviceRequiresScanBody($service_id) && $existingCaseRow) {
+    // در ویرایش، اگر کاربر مقداری نفرستاده بود، نوعِ ذخیره‌شده حفظ شود
+    $prevBody = !empty($existingCaseRow['scan_body_type_id']) ? (int) $existingCaseRow['scan_body_type_id'] : null;
+    if ($prevBody && getScanBodyType($prevBody)) {
+        $scan_body_type_id = $prevBody;
+    }
+}
+
+// ─── کلینیکِ کیس (اعتبارسنجی و مقدار پیش‌فرض) ───
+// جای دقیق: بعد از نهایی‌شدنِ $doctor_id و ساختِ $existingCaseRow تا در پزشکِ
+// محدودشده هم کلینیک درست محاسبه شود.
+$clinicValid = false;
+$clinicSent = array_key_exists('clinic_id', $data);   // فیلد در فرم بوده؟ (برای تفکیک «خالی=پاک» از «نبوده»)
+$clinicFromForm = $clinicSent ? $clinic_id : null;
+if ($clinic_id) {
+    $cchk = db()->prepare("SELECT id FROM users WHERE id = ? AND role = 'clinic' AND active = 1 LIMIT 1");
+    $cchk->execute([$clinic_id]);
+    $clinicValid = (bool) $cchk->fetchColumn();
+}
+if (!$clinic_id || !$clinicValid) {
+    $clinic_id = null;
+}
+if ($clinic_id && (($currentUser['role'] ?? '') === 'doctor')) {
+    // پزشک فقط به یکی از کلینیک‌های خودش؛ اگر کلینیک دیگری بفرستد، به کلینیکِ اصلیِ
+    // خودش برمی‌گردد (وقتی ندارد → بدون کلینیک).
+    if (!in_array($clinic_id, getUserClinicIds((int) $currentUser['id']), true)) {
+        $ownClinics = getUserClinicIds((int) $currentUser['id']);
+        $clinic_id = !empty($ownClinics) ? (int) $ownClinics[0] : null;
+    }
+}
+if (!$clinic_id && $doctor_id && !$clinicSent) {
+    // فیلد در فرم نبود (فراخوانی برنامه‌ای): مقدار قبلیِ کیس، وگرنه کلینیکِ اصلی پزشک
+    $clinic_id = $existingCaseRow ? (!empty($existingCaseRow['clinic_id']) ? (int) $existingCaseRow['clinic_id'] : null) : null;
+    if (!$clinic_id) {
+        $pst = db()->prepare('SELECT clinic_id FROM users WHERE id = ? LIMIT 1');
+        $pst->execute([(int) $doctor_id]);
+        $primary = (int) $pst->fetchColumn();
+        if ($primary > 0) $clinic_id = $primary;
+    }
 }
 
 if (empty($patient_name)) {
@@ -307,12 +448,19 @@ if ($service_id === null) {
 
 /**
  * Upload case files to the server
+ * @param array       $relPaths مسیرهای نسبیِ آپلود پوشه‌ای، هم‌ترتیب با $files['name']
+ * @param string|null $fileType نوع فایل گروه (برای نام‌گذاری خودکار پوشهٔ طراحی نهایی)
  * @return array List of errors (empty if all OK)
  */
-function handleCaseFileUploads(int $caseId, array $files): array
+function handleCaseFileUploads(int $caseId, array $files, array $relPaths = [], ?string $fileType = null): array
 {
     $errors = [];
     if (empty($files) || empty($files['name'])) return $errors;
+
+    // نام‌گذاری خودکار فایل‌های «طراحی نهایی»:
+    //   {شماره کیس}_{سایه}_{نام بیمار}_{شماره قبض}_نام اصلی
+    // ⚠️ از تابع مشترک می‌آید تا با صفحهٔ مشاهدهٔ کیس **دقیقاً یکسان** بماند.
+    $namingPrefix = caseFilePrefixForUpload($caseId, $fileType);
 
     $uploadDir = ensure_uploads_dir('cases/' . $caseId) . '/';
 
@@ -327,7 +475,7 @@ function handleCaseFileUploads(int $caseId, array $files): array
     }
 
     // Allowed extensions: 3D files + common image formats
-    $allowed = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'rar', 'zip'];
+    $allowed = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'rar', 'zip', 'pdf', 'html', 'htm'];
 
     foreach ($files['error'] as $idx => $err) {
         if ($err !== UPLOAD_ERR_OK) {
@@ -341,6 +489,8 @@ function handleCaseFileUploads(int $caseId, array $files): array
         $size = (int) $files['size'][$idx];
         $mime = $files['type'][$idx] ?? '';
         $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
+        // مسیر نسبیِ همین فایل (آپلود پوشه‌ای) — فقط برای نمایش/گروه‌بندی در درخت
+        $relPath = sanitizeRelPath($relPaths[$idx] ?? null);
 
         if (!in_array($ext, $allowed)) {
             $errors[] = "ext_not_allowed_{$ext}";
@@ -349,7 +499,8 @@ function handleCaseFileUploads(int $caseId, array $files): array
         }
 
         // Dedup display name: if a file with the same name already exists for this case, append _YYYYMMDD
-        $displayName = uniqueCaseFileName($caseId, $orig);
+        // نام‌گذاری خودکار (تابع مشترک با بقیهٔ مسیرهای آپلود)
+        $displayName = caseFileDisplayName($caseId, $orig, $fileType, isFolderUploadFile($relPath));
 
         $safe = bin2hex(random_bytes(8)) . '.' . $ext;
         $dest = $uploadDir . $safe;
@@ -358,9 +509,9 @@ function handleCaseFileUploads(int $caseId, array $files): array
             @chmod($dest, 0644);
             try {
                 $ins = db()->prepare(
-                    'INSERT INTO case_files (case_id, filename, original_name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, NOW())'
+                    'INSERT INTO case_files (case_id, filename, original_name, rel_path, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())'
                 );
-                $ins->execute([$caseId, $safe, $displayName, $mime, $size]);
+                $ins->execute([$caseId, $safe, $displayName, $relPath, $mime, $size]);
             } catch (\Throwable $e) {
                 $errors[] = "db_insert_error";
                 error_log("save_case: DB insert failed for $orig: " . $e->getMessage());
@@ -376,14 +527,14 @@ function handleCaseFileUploads(int $caseId, array $files): array
 
 try {
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, updated_at = NOW() WHERE id = ?';
-        $params = [$doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $id];
+        $sql = 'UPDATE cases SET doctor_id = ?, clinic_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, scan_body_type_id = ?, connection_type = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, updated_at = NOW() WHERE id = ?';
+        $params = [$doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scanBodyTypeId, $connectionType, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, patient_name, receipt_number, service_id, location_type, teeth, shade, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, clinic_id, patient_name, receipt_number, service_id, location_type, teeth, shade, scan_body_type_id, connection_type, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scanBodyTypeId, $connectionType, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = (int) db()->lastInsertId();
@@ -394,7 +545,12 @@ try {
     // Handle file uploads
     $uploadErrors = [];
     if (!empty($_FILES['case_files'])) {
-        $uploadErrors = handleCaseFileUploads($caseId, $_FILES['case_files']);
+        // مسیرهای نسبیِ آپلود پوشه‌ای (webkitRelativePath)، هم‌ترتیب با فایل‌ها
+        $relPathsRaw = $_POST['rel_paths'] ?? [];
+        if (!is_array($relPathsRaw)) $relPathsRaw = [$relPathsRaw];
+        // نوع فایلِ گروه: اگر فرم چندگروهی است، فایل‌های هر گروه جدا ارسال می‌شوند
+        $uploadFileType = trim((string) ($_POST['file_type'] ?? ''));
+        $uploadErrors = handleCaseFileUploads($caseId, $_FILES['case_files'], $relPathsRaw, $uploadFileType !== '' ? $uploadFileType : null);
         if (empty($uploadErrors)) log_case_activity($caseId, 'file_upload', 'آپلود فایل هنگام ذخیره کیس');
     }
 

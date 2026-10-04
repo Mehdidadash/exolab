@@ -18,11 +18,13 @@ if (!$targetUser) {
 }
 
 $isDesigner = ($user['role'] === 'designer');
+// مدیر شعبه هم می‌تواند نمایهٔ کاربرانِ شعبهٔ خودش را ببیند.
 $canAccess = has_role('admin')
+    || (function_exists('can_manage_target_user') && can_manage_target_user($targetUser))
     || ($isDesigner && designerCanAccessUser((int) $targetUser['id']))
     || (has_role('doctor') && (int) $targetUser['id'] === (int) $user['id'])
     || (has_role('clinic') && in_array($targetUser['role'] ?? '', ['doctor', 'clinic']) && canAccessDoctor((int) $targetUser['id']));
-$showSensitiveContact = has_role('admin') || in_array($user['role'] ?? '', ['clinic', 'staff', 'secretary', 'technician'], true) || (has_role('doctor') && (int) $targetUser['id'] === (int) $user['id']);
+$showSensitiveContact = has_role('admin') || in_array($user['role'] ?? '', ['branch_admin', 'clinic', 'staff', 'secretary', 'technician'], true) || (has_role('doctor') && (int) $targetUser['id'] === (int) $user['id']);
 if (!$canAccess) {
     http_response_code(403);
     die('دسترسی غیرمجاز');

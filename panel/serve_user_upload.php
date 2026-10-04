@@ -36,10 +36,25 @@ $types = [
 ];
 $mime = $types[$ext] ?? ($up['mime'] ?: 'application/octet-stream');
 $isImage = in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true);
+// PDF هم به‌صورت inline نمایش داده می‌شود تا کاربر لازم نباشد اول دانلودش کند
+$isInline = $isImage || $ext === 'pdf';
+
+// ⚠️ امنیت: فایل HTML هرگز با Content-Type: text/html سرو نمی‌شود؛
+// در غیر این صورت اسکریپت داخل آن در دامنهٔ سایت اجرا می‌شد (XSS).
+// به‌صورت متن ساده و به‌شکل attachment نمایش داده می‌شود.
+$isHtml = in_array($ext, ['html', 'htm', 'xhtml'], true);
+if ($isHtml) {
+    $mime     = 'text/plain; charset=utf-8';
+    $isInline = false;
+}
 
 header('Content-Type: ' . $mime);
 $safeName = str_replace(["\r", "\n", '"'], '', $up['original_name']);
-header('Content-Disposition: ' . ($isImage ? 'inline' : 'attachment') . '; filename="' . $safeName . '"');
+if ($isHtml) {
+    header('Content-Security-Policy: sandbox; default-src \'none\'');
+    header('X-Content-Type-Options: nosniff');
+}
+header('Content-Disposition: ' . ($isInline ? 'inline' : 'attachment') . '; filename="' . $safeName . '"');
 header('Content-Length: ' . filesize($path));
 header('Cache-Control: private, max-age=3600');
 header('Pragma: public');

@@ -51,10 +51,23 @@ $mimes = [
     'stl' => 'model/stl', 'ply' => 'model/ply', 'obj' => 'model/obj',
     '3mf' => 'application/vnd.ms-package.3dmanufacturing-3dmodel+xml',
     'stp' => 'application/step', 'step' => 'application/step',
+    'pdf' => 'application/pdf',
 ];
 $ctype = $mimes[$ext] ?? 'application/octet-stream';
 
+// ⚠️ امنیت: فایل HTML هرگز با Content-Type: text/html سرو نمی‌شود؛
+// در غیر این صورت اسکریپت داخل آن در دامنهٔ سایت اجرا می‌شد (XSS).
+// به‌صورت متن ساده + بدون رندر نمایش داده می‌شود.
+$isHtml = in_array($ext, ['html', 'htm', 'xhtml'], true);
+if ($isHtml) {
+    $ctype = 'text/plain; charset=utf-8';
+}
+
 header('Content-Type: ' . $ctype);
+if ($isHtml) {
+    header('Content-Security-Policy: sandbox; default-src \'none\'');
+    header('X-Content-Type-Options: nosniff');
+}
 header('Content-Disposition: inline; filename="' . basename($file['original_name'] ?? $file['filename']) . '"');
 header('Content-Length: ' . filesize($path));
 header('Cache-Control: private, max-age=3600');

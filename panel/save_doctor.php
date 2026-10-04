@@ -29,6 +29,10 @@ $data = [
     'email' => $email ?: null,
     'notes' => $notes ?: null,
     'clinic_id' => $clinicId,
+    // کلینیک‌های عضویتِ چندگانه (یک پزشک می‌تواند در چند کلینیک کار کند)
+    'clinic_ids' => (isset($_POST['clinic_ids']) && is_array($_POST['clinic_ids']))
+        ? array_values(array_filter(array_unique(array_map('intval', $_POST['clinic_ids'])), function ($v) { return $v > 0; }))
+        : [],
 ];
 
 // Only include 'password' in the data array if one was actually typed.

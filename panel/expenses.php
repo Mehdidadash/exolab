@@ -114,7 +114,9 @@ panel_layout_start('فاکتورهای مخارج (بدهی‌ها)');
                     <span class="badge" style="background:#fee2e2; color:#991b1b;">پرداخت نشده</span>
                 <?php endif; ?>
             </td>
-            <td class="actions">
+            <td class="actions" style="white-space:nowrap;">
+                <?php // ویرایش فاکتور مخارج: صفحهٔ مخصوص هر نوع (طراحی / برون‌سپاری) ?>
+                <a class="btn" href="<?= $r['type'] === 'designer' ? 'designer_invoice_form.php' : 'outsource_invoice_form.php' ?>?id=<?= $r['invoice_id'] ?>" title="ویرایش فاکتور" style="background:#eef2ff; color:#3730a3; padding:4px 10px; text-decoration:none;">✏️ ویرایش</a>
                 <a class="btn" href="expense_payment_form.php?type=<?= $r['type'] ?>&invoice_id=<?= $r['invoice_id'] ?>" style="background:#06B6D4; color:#fff; padding:4px 10px; text-decoration:none;">💳 ثبت پرداخت</a>
                 <a class="btn" href="<?= htmlspecialchars($r['pdf']) ?>" target="_blank" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">PDF</a>
             </td>

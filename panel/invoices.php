@@ -27,7 +27,9 @@ if ($isDesigner || $isLab) {
     if (is_branch_scoped() && !$isDoctor) {
         $bid = currentBranchId();
         $granted = accessibleDoctorIds();
-        $invBranchFilter = ' AND (i.branch_id = ' . (int) $bid;
+        // فاکتورِ بدون شعبه (پزشک بدون branch یا فاکتورهای قدیمی) هم باید دیده شود،
+        // وگرنه بعد از ویرایش از لیست ناپدید می‌شود (باگ فاکتور #40).
+        $invBranchFilter = ' AND (i.branch_id IS NULL OR i.branch_id = ' . (int) $bid;
         if (!empty($granted)) {
             $ph = implode(',', array_fill(0, count($granted), '?'));
             $invBranchFilter .= " OR i.doctor_id IN ({$ph})";
@@ -39,16 +41,24 @@ if ($isDesigner || $isLab) {
     if ($isDoctor) {
         $invoices = getInvoicesForDoctor($doctorId);
     } elseif (has_permission('view_clinic_invoices') && $user['role'] === 'clinic') {
-        $clinicScope = getClinicScope('i');
-        $stmt = db()->prepare(
-            "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
-             FROM doctor_invoices i
-             LEFT JOIN users u ON i.doctor_id = u.id
-             WHERE {$clinicScope['sql']}
-             ORDER BY i.invoice_date DESC, i.id DESC"
-        );
-        $stmt->execute($clinicScope['params']);
-        $invoices = $stmt->fetchAll();
+        // فاکتورهای کلینیک = فاکتورهایی که طرف حسابشان یکی از پزشکانِ زیرمجموعهٔ این
+        // کلینیک است (doctor_invoices ستونِ clinic_id ندارد، پس نباید getClinicScope
+        // با alias «i» صدا زده شود — قبلاً خطای Unknown column 'i.clinic_id' می‌داد).
+        $clinicDoctorIds = getClinicDoctorIds((int) $user['id']);
+        if (empty($clinicDoctorIds)) {
+            $invoices = [];
+        } else {
+            $ph = implode(',', array_fill(0, count($clinicDoctorIds), '?'));
+            $stmt = db()->prepare(
+                "SELECT i.*, COALESCE(u.full_name, i.doctor_name) AS doctor_name
+                 FROM doctor_invoices i
+                 LEFT JOIN users u ON i.doctor_id = u.id
+                 WHERE i.doctor_id IN ({$ph})
+                 ORDER BY i.invoice_date DESC, i.id DESC"
+            );
+            $stmt->execute($clinicDoctorIds);
+            $invoices = $stmt->fetchAll();
+        }
     } else {
         // Any other role with access: staff/secretary/finance/technician/admin — full list
         if (!is_admin() && !has_permission('view_invoices') && !has_permission('view_clinic_invoices') && !has_permission('view_own_invoices')) {

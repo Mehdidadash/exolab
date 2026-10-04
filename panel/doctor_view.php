@@ -11,9 +11,13 @@ if (!$doctorId) {
 }
 
 $isDesigner = ($user['role'] === 'designer');
+// کاربرانِ بیرونی (کلینیک/لابراتوار همکار و برون‌سپاری) هم به پروفایلِ خودشان
+// از همین صفحه می‌رسند (به‌جای my_profile) — پس باید به خودشان دسترسی داشته باشند.
+$isSelfProfile = ((int) $user['id'] === (int) $doctorId);
 $canAccess = has_role('admin')
     || (is_designer_user($user) && designerCanAccessUser($doctorId))
-    || (has_role('doctor') && (int) $doctorId === (int) $user['id'])
+    || (has_role('doctor') && $isSelfProfile)
+    || $isSelfProfile   // هر کاربری به پروفایلِ خودش
     || (has_role('clinic') && canAccessDoctor($doctorId));
 if (!$canAccess) {
     http_response_code(403);
@@ -22,9 +26,19 @@ if (!$canAccess) {
 
 $doctor = getDoctor($doctorId);
 if (!$doctor) {
-    header('Location: doctors.php?error=notfound');
-    exit;
+    // غیرِ پزشک (کلینیک/لابراتوار) که پروفایلِ خودش را می‌خواهد: از جدول users می‌خوانیم
+    $selfStmt = db()->prepare('SELECT id, full_name AS name, email, phone, notes, active, clinic_id, lab_id, last_login FROM users WHERE id = ? LIMIT 1');
+    $selfStmt->execute([$doctorId]);
+    $doctor = $selfStmt->fetch() ?: null;
+    if (!$doctor) {
+        header('Location: dashboard.php');
+        exit;
+    }
 }
+
+// فقط پزشک/مدیر باید بافتِ «لیست پزشکان» را ببیند
+$showDoctorChrome = ((int) $user['id'] === (int) $doctorId) ? has_role('doctor') : true;
+$showDoctorChrome = $showDoctorChrome && !in_array((string) ($user['role'] ?? ''), ['clinic', 'lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
 
 $showSensitiveContact = has_role('admin') || in_array($user['role'] ?? '', ['clinic', 'staff', 'secretary', 'technician'], true) || (has_role('doctor') && (int) $doctorId === (int) $user['id']);
 
@@ -33,7 +47,9 @@ $totalCases = db()->prepare("SELECT COUNT(*) FROM cases WHERE doctor_id = ?");
 $totalCases->execute([$doctorId]);
 $totalCases = (int) $totalCases->fetchColumn();
 
-$activeCases = db()->prepare("SELECT COUNT(*) FROM cases c JOIN case_statuses s ON c.status_id = s.id WHERE c.doctor_id = ? AND s.name NOT IN ('Delivered','Cancelled')");
+// کیس‌های فعال = همهٔ کیس‌ها منهای «تحویل شد» (۴) و «لغو شد» (۵).
+// (نامِ وضعیت‌ها فارسی است: «تحویل شد» / «لغو شد» — نه Delivered/Cancelled)
+$activeCases = db()->prepare("SELECT COUNT(*) FROM cases WHERE doctor_id = ? AND status_id NOT IN (4, 5)");
 $activeCases->execute([$doctorId]);
 $activeCases = (int) $activeCases->fetchColumn();
 
@@ -49,7 +65,13 @@ $totalRevenue = db()->prepare("SELECT COALESCE(SUM(total_amount), 0) FROM doctor
 $totalRevenue->execute([$doctorId]);
 $totalRevenue = (float) $totalRevenue->fetchColumn();
 
-$totalDebt = db()->prepare("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE doctor_id = ? AND payment_status = 'unpaid'");
+// بدهی = مبلغ فاکتورهای پرداخت‌نشده منهای پرداخت‌های جزئیِ ثبت‌شده (خالص).
+// (قبلاً کل مبلغ فاکتور نیمه‌پرداخت‌شده به‌عنوان بدهی شمرده می‌شد.)
+$totalDebt = db()->prepare("SELECT COALESCE(SUM(i.total_amount - COALESCE(paid.applied, 0)), 0)
+    FROM doctor_invoices i
+    LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied FROM doctor_payment_invoices GROUP BY invoice_id) paid
+           ON paid.invoice_id = i.id
+    WHERE i.doctor_id = ? AND i.payment_status = 'unpaid'");
 $totalDebt->execute([$doctorId]);
 $totalDebt = (float) $totalDebt->fetchColumn();
 
@@ -87,13 +109,29 @@ $stmt = db()->prepare(
 $stmt->execute([$doctorId]);
 $recentPayments = $stmt->fetchAll();
 
-panel_layout_start('نمایه پزشک: ' . $doctor['name']);
+panel_layout_start($isSelfProfile && !has_role('doctor') ? 'پروفایل من' : 'نمایه پزشک: ' . $doctor['name']);
 ?>
 <?php $showFinancial = !$isDesigner; ?>
 <div style="margin-bottom:18px;">
+    <?php
+    // دکمهٔ «ویرایش پزشک» فقط برای کاربرانِ داخلی (مدیر/کارمند/منشی) نمایش داده می‌شود.
+    // برای کاربرانِ بیرونی (پزشک، کلینیک، لابراتوارهای همکار و برون‌سپاری) مخفی است.
+    $isExternalUser = isExternalCaseViewer($user);
+    $canEditDoctor = $showDoctorChrome
+        && !$isExternalUser
+        && !has_role('doctor');
+    // دکمهٔ «بازگشت به لیست پزشکان» هم برای کاربرانِ بیرونی بی‌معنی است → مخفی می‌شود.
+    $canBackToDoctors = $showDoctorChrome && !$isExternalUser && !has_role('doctor');
+    ?>
+    <?php if ($canBackToDoctors): ?>
     <a class="btn" href="doctors.php">بازگشت به لیست پزشکان</a>
-    <?php if (!$isDesigner): ?>
+    <?php endif; ?>
+    <?php if ($canEditDoctor): ?>
     <a class="btn" href="doctor_form.php?id=<?= $doctorId ?>" style="background:#0F172A; color:#fff;">ویرایش پزشک</a>
+    <?php endif; ?>
+    <?php // ویرایشِ مشخصات خود (نام، نام کاربری، ایمیل، تلفن، رمز عبور) — فقط برای خود شخص ?>
+    <?php if ($isSelfProfile): ?>
+    <a class="btn" href="my_profile.php?id=<?= (int) $user['id'] ?>" style="background:#06B6D4; color:#fff;">✏️ ویرایش مشخصات من و رمز عبور</a>
     <?php endif; ?>
 </div>
 
@@ -251,7 +289,7 @@ if ($canViewGallery):
                     <td><a href="view_case.php?id=<?= $c['id'] ?>"><?= $c['id'] ?></a></td>
                     <td><?= htmlspecialchars($c['patient_name'] ?? '') ?></td>
                     <td><?= htmlspecialchars($c['service_title'] ?? '') ?></td>
-                    <td><span class="badge"><?= htmlspecialchars($c['status_name'] ?? '') ?></span></td>
+                    <td><span class="badge"><?= htmlspecialchars(visibleStatusName($c['status_name'] ?? '', $user)) ?></span></td>
                     <td><?= toJalaliDateFormatted($c['received_date']) ?></td>
                 </tr>
             <?php endforeach; ?>
@@ -268,7 +306,7 @@ if ($canViewGallery):
             <tbody>
             <?php foreach ($recentInvoices as $inv): ?>
                 <tr>
-                    <td><a href="invoice_form.php?id=<?= $inv['id'] ?>"><?= htmlspecialchars($inv['invoice_number']) ?></a></td>
+                    <td><a href="invoice_pdf.php?id=<?= $inv['id'] ?>" target="_blank" rel="noopener"><?= htmlspecialchars($inv['invoice_number']) ?></a></td>
                     <td><?= toJalaliDateFormatted($inv['invoice_date']) ?></td>
                     <td><?= formatAmountToman($inv['total_amount']) ?></td>
                     <td><span class="badge" style="background:<?= $inv['payment_status'] === 'paid' ? '#dcfce7' : '#fef3c7' ?>; color:<?= $inv['payment_status'] === 'paid' ? '#166534' : '#92400e' ?>;">

@@ -28,6 +28,8 @@ $prices = getAllPrices();
         <th class="th-narrow" title="تیک = تعداد این خدمت در فرم کیس دستی قابل تغییر است (مثل الاینر)">تعداد دستی</th>
         <th class="th-narrow" title="تعداد واحدهایی که «قیمت» پوشش می‌دهد (معمولاً ۱)">واحد پایه</th>
         <th title="قیمت هر واحد اضافه — مبلغ کل = قیمت پایه + (تعداد − واحد پایه) × این مبلغ. خالی = همان قیمت هر واحد">هر واحد اضافه</th>
+        <th class="th-narrow" title="تیک = این خدمت طراحی لازم دارد (اگر بردارید، کیس پیش‌فرض بدون طراح ثبت می‌شود)">طراحی</th>
+        <th class="th-narrow" title="تیک = هنگام ثبت/ویرایش کیس، فیلد «نوع اسکن‌بادی» نمایش داده شود (اباتمنت/فیکسچر ایمپلنت)">🧩 اسکن‌بادی</th>
         <th class="th-narrow">ترتیب</th>
         <th class="th-narrow">فعال</th>
         <th class="th-narrow" title="تیک = نمایش در سایت اصلی">سایت</th>
@@ -45,10 +47,13 @@ $prices = getAllPrices();
             <td style="text-align:center;"><input type="checkbox" class="ed-qtymanual" <?= !empty($price['qty_manual']) ? 'checked' : '' ?> style="width:auto;" title="تعداد در فرم کیس دستی قابل تغییر باشد"></td>
             <td style="text-align:center;"><input type="number" class="ed-baseunits" value="<?= max(1, (int) ($price['base_units'] ?? 1)) ?>" min="1" step="1" style="width:64px;"></td>
             <td><input type="number" class="ed-extra" value="<?= ($price['extra_unit_price'] === null || $price['extra_unit_price'] === '') ? '' : htmlspecialchars(formatTomanInput($price['extra_unit_price'])) ?>" min="0" step="1" placeholder="= فی" style="width:130px;"></td>
+            <td style="text-align:center;"><input type="checkbox" class="ed-designrequired" <?= !isset($price['design_required']) || !empty($price['design_required']) ? 'checked' : '' ?> style="width:auto;" title="طراحی لازم دارد"></td>
+            <td style="text-align:center;"><input type="checkbox" class="ed-requirescanbody" <?= !empty($price['requires_scan_body']) ? 'checked' : '' ?> style="width:auto;" title="فیلد نوع اسکن‌بادی در فرم کیس نمایش داده شود"></td>
             <td><input type="number" class="ed-order" value="<?= isset($price['display_order']) ? (int)$price['display_order'] : 0 ?>" min="0" step="1" style="width:56px;"></td>
             <td style="text-align:center;"><input type="checkbox" class="ed-active" <?= $price['active'] ? 'checked' : '' ?> style="width:auto;"></td>
             <td style="text-align:center;"><input type="checkbox" class="ed-hideonsite" <?= empty($price['hide_on_site']) ? 'checked' : '' ?> style="width:auto;" title="تیک = در سایت اصلی نمایش داده شود"></td>
             <td class="actions" style="white-space:nowrap;">
+                <a class="btn" href="price_form.php?id=<?= (int) $price['id'] ?>" style="background:#0F172A; color:#fff; padding:3px 8px; font-size:0.85rem; text-decoration:none;" title="باز کردن فرم کامل ویرایش">ویرایش</a>
                 <button type="button" class="btn save-price-row" style="background:#06B6D4; color:#fff; padding:3px 8px; font-size:0.85rem;">ذخیره</button>
                 <button type="button" class="btn delete-price-row" style="background:#fee2e2; color:#991b1b; padding:3px 8px; font-size:0.85rem;">حذف</button>
                 <input type="hidden" class="ed-desc" value="<?= htmlspecialchars($price['description'] ?? '') ?>">
@@ -86,6 +91,10 @@ $prices = getAllPrices();
         data.set('base_units', bu ? (bu.value.trim() || '1') : '1');
         var ex = tr.querySelector('.ed-extra');
         data.set('extra_unit_price', ex ? ex.value.trim() : '');
+        var dr = tr.querySelector('.ed-designrequired');
+        data.set('design_required', (dr && dr.checked) ? '1' : '0');
+        var rs = tr.querySelector('.ed-requirescanbody');
+        data.set('requires_scan_body', (rs && rs.checked) ? '1' : '0');
         data.set('display_order', tr.querySelector('.ed-order').value.trim() || '0');
         data.set('active', tr.querySelector('.ed-active').checked ? '1' : '0');
         var hs = tr.querySelector('.ed-hideonsite');

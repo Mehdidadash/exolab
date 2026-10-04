@@ -10,6 +10,14 @@ require_once __DIR__ . '/../vendor/autoload.php';
 require_once __DIR__ . '/../includes/QrGenerator.php';
 require_login();
 
+// مجوز: فقط نقش‌هایی که «پرینت برچسب گروهی» دارند (ادمین/کارمند/منشی/تکنیسین).
+// بدون این بررسی، هر کاربرِ واردشده (مثل پزشک یا لابراتوار) می‌توانست با فرستادن
+// شناسهٔ دلخواهِ کیس، PDF برچسبِ کیس‌های دیگران (همراه با نام لابراتوار) را بگیرد.
+if (!is_admin() && !has_permission('batch_print_labels')) {
+    http_response_code(403);
+    die('دسترسی غیرمجاز — شما مجوز پرینت برچسب را ندارید.');
+}
+
 use Mpdf\Mpdf;
 
 // ─── Gather input ──────────────────────────────────────────────
@@ -35,6 +43,12 @@ $stmt = db()->prepare("
 ");
 $stmt->execute($caseIds);
 $cases = $stmt->fetchAll();
+
+// فقط کیس‌هایی که کاربر اجازهٔ دیدنشان را دارد (شعبه/رابطه/مجوز)
+$myUser = current_user();
+$cases = array_values(array_filter($cases, static function ($c) use ($myUser) {
+    return userCanViewCase((int) ($c['id'] ?? 0), $myUser, $c);
+}));
 
 if (empty($cases)) {
     die('کیسی یافت نشد.');

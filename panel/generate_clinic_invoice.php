@@ -79,7 +79,7 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
         }
 
         if (empty($cases)) {
-            $message = 'هیچ کیس فاکتورنشده‌ای برای پزشکان این کلینیک در بازه انتخابی وجود ندارد.';
+            $message = 'هیچ کیسِ فاکتورنشده‌ای که کلینیکِ آن همین کلینیک باشد، در بازه انتخابی وجود ندارد.';
         } else {
             // Group by doctor
             $groups = [];
@@ -116,6 +116,36 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                 <h2>پیش‌نمایش فاکتور کلینیک</h2>
                 <p><strong>کلینیک:</strong> <?= htmlspecialchars($clinicName) ?></p>
                 <p><strong>بازه:</strong> <?= htmlspecialchars($periodLabel) ?></p>
+                <?php
+                // قاعدهٔ شمول: فقط کیس‌هایی که «کلینیکِ صاحبِ کار» همان این کلینیک است.
+                // کارهای پزشکانِ این کلینیک که کلینیکِ دیگری ثبت شده‌اند، این‌جا هشدار داده می‌شوند
+                // تا اگر اشتباه است، با ویرایش کیس اصلاح شوند.
+                $mismatched = getClinicDoctorCasesAssignedElsewhere($clinicId, $startDate, $endDate, 10);
+                ?>
+                <p style="font-size:.85rem; color:#475569; margin:0 0 10px; line-height:1.9;">
+                    در این فاکتور فقط کیس‌هایی می‌آیند که «کلینیکِ صاحبِ کار» برایشان همین کلینیک ثبت شده باشد
+                    (فاکتور به کسی داده می‌شود که پرداخت‌کننده است). اگر پزشکی در چند کلینیک کار می‌کند،
+                    کلینیک هر کیس در فرم همان کیس انتخاب می‌شود.
+                </p>
+                <?php if (!empty($mismatched)): ?>
+                    <div style="background:#fffbeb; border:1px solid #fcd34d; color:#92400e; border-radius:10px; padding:12px 14px; margin:0 0 14px; line-height:1.9; font-size:.88rem;">
+                        <strong>⚠️ کارهای پزشکانِ این کلینیک که به کلینیک دیگری نسبت داده شده‌اند (در این فاکتور نمی‌آیند):</strong>
+                        <ul style="margin:8px 0 0; padding-inline-start:18px;">
+                            <?php foreach ($mismatched as $mc): ?>
+                                <li>
+                                    <a href="view_case.php?id=<?= (int) $mc['id'] ?>" target="_blank">کیس #<?= (int) $mc['id'] ?></a>
+                                    — <?= htmlspecialchars($mc['patient_name'] ?? '') ?>
+                                    — پزشک: <?= htmlspecialchars($mc['doctor_name'] ?? '—') ?>
+                                    — کلینیکِ ثبت‌شده: <?= htmlspecialchars($mc['clinic_name'] ?? 'بدون کلینیک') ?>
+                                </li>
+                            <?php endforeach; ?>
+                        </ul>
+                        <div style="margin-top:6px;">
+                            اگر اشتباه است، از دکمهٔ «ویرایش کیس» در فهرست کیس‌ها کلینیک کیس را اصلاح کنید.
+                            <a href="cases.php?clinic_id=<?= (int) $clinicId ?>" style="color:#92400e;">دیدن کیس‌های همین کلینیک در فهرست</a>
+                        </div>
+                    </div>
+                <?php endif; ?>
                 <div class="preview-box">
                     <form id="preview-form" method="post" action="">
                         <input type="hidden" name="clinic_id" value="<?= $clinicId ?>">

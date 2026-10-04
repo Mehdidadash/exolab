@@ -67,6 +67,8 @@ foreach ($rows as $r) {
             'status'          => $statusKey,
             'status_label'    => $statusMeta['label'],
             'needs_scan_body' => (int) ($r['needs_scan_body'] ?? 0),
+            'scan_body_type_id' => (int) ($r['scan_body_type_id'] ?? 0),
+            'scan_body_type_name' => (string) ($r['scan_body_type_name'] ?? ''),
             'address'         => (string) ($r['address'] ?? ''),
             'phone'           => (string) ($r['phone'] ?? ''),
             'notes'           => (string) ($r['notes'] ?? ''),

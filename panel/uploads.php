@@ -74,14 +74,66 @@ $upLinkLabels = function (int $uploadId): array {
 
 panel_layout_start('آپلود فایل');
 ?>
+<?php
+// ─── پیام‌های نتیجهٔ عملیات (تغییر نام پوشه و ...) ───
+$upMsg = trim((string) ($_GET['msg'] ?? ''));
+$upErr = trim((string) ($_GET['error'] ?? ''));
+$upErrText = [
+    'invalid_folder' => 'پوشهٔ انتخابی معتبر نیست.',
+    'bad_name'       => 'نام وارد‌شده برای پوشه مجاز نیست (بدون / و \\ و کاراکتر کنترلی).',
+    'duplicate'      => 'پوشه‌ای با این نام از قبل وجود دارد.',
+    'notfound'       => 'پوشه‌ای با این نام یافت نشد.',
+][$upErr] ?? '';
+?>
+<?php if ($upMsg === 'renamed'): ?>
+    <p style="color:#166534; font-weight:bold;">
+        ✅ نام پوشه تغییر کرد<?= isset($_GET['n']) ? ' (' . toPersianDigits((string) (int) $_GET['n']) . ' فایل به‌روزرسانی شد)' : '' ?>.
+    </p>
+<?php endif; ?>
+<?php if ($upErrText !== ''): ?>
+    <p style="color:#b91c1c; font-weight:bold;">⚠️ <?= htmlspecialchars($upErrText) ?></p>
+<?php endif; ?>
 <div class="form-card" style="max-width:760px; margin:0 auto 24px;">
     <h3>آپلود فایل جدید</h3>
-    <p style="color:#555; margin:6px 0 12px;">معمولاً فایل ZIP یا RAR یا عکس. می‌توانید فایل را به یکی از کیس‌های خودتان وصل کنید یا بدون کیس آپلود کنید.</p>
+    <p style="color:#555; margin:6px 0 12px;">می‌توانید چند فایل را همزمان انتخاب کنید (ZIP/RAR/عکس/مدل سه‌بعدی). اگر چند فایل انتخاب کنید، می‌توانید همه را در یک فایل ZIP بسته‌بندی کنید. اتصال به کیس اختیاری است.</p>
     <form id="upload-form" enctype="multipart/form-data" style="margin-top:12px;">
         <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
         <div class="form-group">
-            <label for="upload-file">فایل</label>
-            <input type="file" id="upload-file" name="file" accept=".zip,.rar,.jpg,.jpeg,.png,.gif,.webp,.bmp,.stl,.ply,.stp,.step,.obj,.3mf" required>
+            <label for="upload-file">فایل‌ها (می‌توانید چند تا انتخاب کنید)</label>
+            <input type="file" id="upload-file" name="files[]" accept=".zip,.rar,.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.stl,.ply,.stp,.step,.obj,.3mf,.matrix4,.dentalProject,.iftScan,.dcm,.dicom,.txt,.xml,.html,.htm" multiple required>
+            <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
+                <button type="button" id="upload-pick-files" class="btn" style="background:#e0f2fe; color:#0369a1; padding:5px 12px;">🗂 انتخاب فایل</button>
+                <button type="button" id="upload-pick-folder" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; padding:5px 12px;">📁 انتخاب پوشه</button>
+            </div>
+            <input type="file" id="upload-folder" multiple hidden>
+            <small id="upload-file-hint" style="display:block; margin-top:6px; color:#525252;"></small>
+            <small style="display:block; margin-top:4px; color:#64748b; line-height:1.8;">
+                می‌توانید یک <b>پوشه</b> را با همهٔ محتویات و زیرپوشه‌هایش انتخاب کنید (یا پوشه را با ماوس داخل صفحه رها کنید).
+                ساختار پوشه‌ها در فهرست فایل‌ها حفظ می‌شود.
+                اگر فایل‌ها را به یک کیس متصل کنید و داخل پوشه باشند، نام هر فایل خودکار با
+                <b>شماره کیس_سایه_نام بیمار_شماره قبض_</b> شروع می‌شود.
+            </small>
+            <div id="upload-folder-list" style="display:none; margin-top:8px; max-height:170px; overflow:auto; border:1px solid #e2e8f0; border-radius:8px; padding:6px;"></div>
+        </div>
+        <div class="form-group">
+            <?php // نوع فایل — همان گزینه‌های صفحهٔ کیس/مشاهدهٔ کیس تا نام‌گذاری خودکار یکسان کار کند ?>
+            <label for="upload-file-type">نوع فایل</label>
+            <select id="upload-file-type" name="file_type">
+                <?php foreach (caseFileTypeConfig()['options'] as $ftKey => $ftLabel): ?>
+                    <option value="<?= $ftKey ?>" <?= $ftKey === caseFileTypeDefault($user) ? 'selected' : '' ?>><?= $ftLabel ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; margin-top:4px; color:#64748b;">
+                اگر «طراحی نهایی» باشد و کیس را انتخاب کنید، نام هر فایل خودکار با
+                <b>شماره کیس_سایه_نام بیمار_شماره قبض_</b> شروع می‌شود.
+            </small>
+        </div>
+        <div class="form-group" id="upload-zip-group" style="display:none;">
+            <label style="display:flex; align-items:center; gap:8px; font-weight:400; cursor:pointer;">
+                <input type="checkbox" id="upload-zip" checked>
+                بسته‌بندی همهٔ فایل‌های انتخاب‌شده در یک فایل ZIP
+            </label>
+            <small style="display:block; margin-top:6px; color:#525252;">مثل صفحهٔ کیس‌ها/مشاهدهٔ کیس: همهٔ فایل‌ها در یک ZIP با نام خوانا ذخیره می‌شوند.</small>
         </div>
         <div class="form-group">
             <label for="upload-case">اتصال به کیس (اختیاری)</label>
@@ -109,128 +161,81 @@ panel_layout_start('آپلود فایل');
 
 <h3>فایل‌های من</h3>
 <div class="form-card" style="margin-top:12px;">
-    <?php if (empty($uploads)): ?>
-        <p class="empty">هنوز فایلی آپلود نکرده‌اید.</p>
-    <?php else: ?>
-        <table class="display datatable" style="width:100%">
-            <thead>
-            <tr>
-                <th>فایل</th>
-                <th>کیس‌های متصل</th>
-                <th>توضیحات</th>
-                <th>حجم</th>
-                <th>تاریخ</th>
-                <th>عملیات</th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($uploads as $u):
-                $myLinkCases = $upLinkLabels((int) $u['id']);
-                $myCanManage = is_admin() || (int) $u['user_id'] === (int) $user['id'];
-                ?>
-                <tr>
-                    <td><?= htmlspecialchars($u['original_name']) ?></td>
-                    <td>
-                        <?php foreach ($myLinkCases as $cid => $clabel): ?>
-                            <span style="display:inline-flex; align-items:center; gap:4px; background:#e0f2fe; color:#0369a1; border-radius:6px; padding:2px 6px; margin:1px; font-size:0.85rem;">
-                                <a href="view_case.php?id=<?= $cid ?>" style="text-decoration:none; color:#0369a1;"><?= $clabel ?></a>
-                                <?php if ($myCanManage): ?><a href="#" class="js-unlink-upl" data-upload="<?= (int) $u['id'] ?>" data-case="<?= $cid ?>" style="text-decoration:none; color:#b91c1c; font-weight:bold;" title="حذف اتصال از این کیس">✕</a><?php endif; ?>
-                            </span>
-                        <?php endforeach; ?>
-                        <?php if (!$myLinkCases): ?>—<?php endif; ?>
-                        <?php if ($myCanManage && !empty($upAttachList)):
-                            $myAvail = array_values(array_filter($upAttachList, fn($c) => !isset($myLinkCases[(int) $c['id']]))); ?>
-                            <?php if ($myAvail): ?>
-                                <div style="margin-top:5px; display:flex; gap:4px; align-items:center;">
-                                    <select class="js-upl-case-sel" data-upload="<?= (int) $u['id'] ?>" style="padding:4px 6px; font-size:0.85rem; max-width:210px;">
-                                        <option value="">اتصال به کیس…</option>
-                                        <?php foreach ($myAvail as $c): ?>
-                                            <option value="<?= (int) $c['id'] ?>">#<?= (int) $c['id'] ?> - <?= htmlspecialchars($c['patient_name'] ?: '') ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                    <button type="button" class="btn js-upl-link-btn" data-upload="<?= (int) $u['id'] ?>" style="padding:3px 8px; font-size:0.85rem; background:#0F172A; color:#fff;">اتصال</button>
-                                </div>
-                            <?php endif; ?>
-                        <?php endif; ?>
-                    </td>
-                    <td style="white-space:pre-wrap; max-width:260px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
-                    <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
-                    <td><?= toJalaliDateTimeFormatted($u['created_at']) ?></td>
-                    <td class="actions" style="white-space:nowrap;">
-                        <a class="btn" href="serve_user_upload.php?id=<?= (int) $u['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:4px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
-                        <a class="btn" href="download_user_upload.php?id=<?= (int) $u['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">دانلود</a>
-                        <?php if ((int) $u['user_id'] === (int) $user['id']): ?>
-                        <form method="post" action="delete_user_upload.php" style="display:inline;">
-                            <?= csrf_field() ?>
-                            <input type="hidden" name="id" value="<?= (int) $u['id'] ?>">
-                            <button class="btn" style="background:#fee2e2; color:#991b1b; padding:4px 10px;">حذف</button>
-                        </form>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-    <?php endif; ?>
+    <?php
+    // ─── «نمای Details» فایل‌های من (شبیه Windows Explorer) ───
+    // هر ردیف: نام | حجم | نوع | تاریخ | عملیات. پوشه‌ها گروه می‌شوند و با یک کلیک باز/بسته می‌شوند.
+    // دکمه‌ها فقط اگر کاربر مجاز باشد ساخته می‌شوند؛ چون ستونِ عملیات هم‌تراز است،
+    // نبودِ دکمه‌ها چیدمان بقیهٔ ردیف‌ها را به‌هم نمی‌زند.
+    $myFileRows = [];
+    foreach ($uploads as $u) {
+        $canDelete = ((int) $u['user_id'] === (int) $user['id']);
+        $acts = '<a class="btn" href="serve_user_upload.php?id=' . (int) $u['id'] . '" target="_blank"'
+              . ' style="background:#e0f2fe; color:#0369a1; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>'
+              . '<a class="btn" href="download_user_upload.php?id=' . (int) $u['id'] . '"'
+              . ' style="background:#E5E7EB; color:#0F172A; text-decoration:none;">دانلود</a>';
+        if ($canDelete) {
+            $acts .= '<form method="post" action="delete_user_upload.php">' . csrf_field()
+                   . '<input type="hidden" name="id" value="' . (int) $u['id'] . '">'
+                   . '<button class="btn" style="background:#fee2e2; color:#991b1b;">حذف</button></form>';
+        }
+        $myFileRows[] = [
+            'id'       => (int) $u['id'],
+            'name'     => (string) $u['original_name'],
+            'rel_path' => $u['rel_path'] ?? null,
+            'size'     => $u['size'] ?? null,
+            'date'     => $u['created_at'] ?? null,
+            'ext'      => strtolower((string) pathinfo((string) $u['original_name'], PATHINFO_EXTENSION)),
+            'actions'  => $acts,
+        ];
+    }
+    require_once __DIR__ . '/../includes/file_details_view.php';
+    renderFileDetailsView($myFileRows, [
+        'empty'         => 'هنوز فایلی آپلود نکرده‌اید.',
+        'folder_rename' => ['action' => 'rename_upload_folder.php', 'all' => 0],
+        'folder_download_action' => 'download_upload_folder.php?folder=__FOLDER__',
+    ]);
+    ?>
 </div>
-
 <?php if ($canViewAllUploads && !empty($allUploads)): ?>
 <h3 style="margin-top:28px;">همه فایل‌ها (کتابخانهٔ مشترک)</h3>
 <div class="form-card" style="margin-top:12px;">
-    <table class="display datatable" style="width:100%">
-        <thead>
-        <tr>
-            <th>فایل</th>
-            <th>آپلودکننده</th>
-            <th>کیس‌های متصل</th>
-            <th>توضیحات</th>
-            <th>حجم</th>
-            <th>تاریخ</th>
-            <th>عملیات</th>
-        </tr>
-        </thead>
-        <tbody>
-        <?php foreach ($allUploads as $u):
-            $allLinkCases = $upLinkLabels((int) $u['id']);
-            $allCanManage = is_admin();
-            ?>
-            <tr>
-                <td><?= htmlspecialchars($u['original_name']) ?></td>
-                <td><?= htmlspecialchars($u['uploader_name'] ?: '—') ?></td>
-                <td>
-                    <?php foreach ($allLinkCases as $cid => $clabel): ?>
-                        <span style="display:inline-flex; align-items:center; gap:4px; background:#e0f2fe; color:#0369a1; border-radius:6px; padding:2px 6px; margin:1px; font-size:0.85rem;">
-                            <a href="view_case.php?id=<?= $cid ?>" style="text-decoration:none; color:#0369a1;"><?= $clabel ?></a>
-                            <?php if ($allCanManage): ?><a href="#" class="js-unlink-upl" data-upload="<?= (int) $u['id'] ?>" data-case="<?= $cid ?>" style="text-decoration:none; color:#b91c1c; font-weight:bold;" title="حذف اتصال از این کیس">✕</a><?php endif; ?>
-                        </span>
-                    <?php endforeach; ?>
-                    <?php if (!$allLinkCases): ?>—<?php endif; ?>
-                    <?php if ($allCanManage && !empty($upAttachList)):
-                        $allAvail = array_values(array_filter($upAttachList, fn($c) => !isset($allLinkCases[(int) $c['id']]))); ?>
-                        <?php if ($allAvail): ?>
-                            <div style="margin-top:5px; display:flex; gap:4px; align-items:center;">
-                                <select class="js-upl-case-sel" data-upload="<?= (int) $u['id'] ?>" style="padding:4px 6px; font-size:0.85rem; max-width:190px;">
-                                    <option value="">اتصال به کیس…</option>
-                                    <?php foreach ($allAvail as $c): ?>
-                                        <option value="<?= (int) $c['id'] ?>">#<?= (int) $c['id'] ?> - <?= htmlspecialchars($c['patient_name'] ?: '') ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                                <button type="button" class="btn js-upl-link-btn" data-upload="<?= (int) $u['id'] ?>" style="padding:3px 8px; font-size:0.85rem; background:#0F172A; color:#fff;">اتصال</button>
-                            </div>
-                        <?php endif; ?>
-                    <?php endif; ?>
-                </td>
-                <td style="white-space:pre-wrap; max-width:220px;"><?= htmlspecialchars($u['description'] ?? '') ?: '—' ?></td>
-                <td><?= $u['size'] ? toPersianDigits(round((int)$u['size'] / 1024)) . ' KB' : '—' ?></td>
-                <td><?= toJalaliDateTimeFormatted($u['created_at']) ?></td>
-                <td class="actions" style="white-space:nowrap;">
-                    <a class="btn" href="serve_user_upload.php?id=<?= (int) $u['id'] ?>" target="_blank" style="background:#e0f2fe; color:#0369a1; padding:4px 8px; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>
-                    <a class="btn" href="download_user_upload.php?id=<?= (int) $u['id'] ?>" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">دانلود</a>
-                </td>
-            </tr>
-        <?php endforeach; ?>
-        </tbody>
-    </table>
+    <?php
+    // ─── «نمای Details» کتابخانهٔ مشترک ───
+    // مثل «فایل‌های من»: نام | حجم | نوع | تاریخ | عملیات، با پوشه‌های تاشو.
+    // مدیرها روی همهٔ فایل‌ها دکمه دارند؛ دیگران فقط روی فایل‌های خودشان.
+    $allFileRows = [];
+    foreach ($allUploads as $u) {
+        $isMine   = ((int) $u['user_id'] === (int) $user['id']);
+        $canTouch = is_admin() || $isMine;
+        $acts = '<a class="btn" href="serve_user_upload.php?id=' . (int) $u['id'] . '" target="_blank"'
+              . ' style="background:#e0f2fe; color:#0369a1; text-decoration:none;" title="باز کردن / پیش‌نمایش">باز کردن</a>'
+              . '<a class="btn" href="download_user_upload.php?id=' . (int) $u['id'] . '"'
+              . ' style="background:#E5E7EB; color:#0F172A; text-decoration:none;">دانلود</a>';
+        if ($canTouch) {
+            $acts .= '<form method="post" action="delete_user_upload.php">' . csrf_field()
+                   . '<input type="hidden" name="id" value="' . (int) $u['id'] . '">'
+                   . '<button class="btn" style="background:#fee2e2; color:#991b1b;">حذف</button></form>';
+        }
+        $allFileRows[] = [
+            'id'       => (int) $u['id'],
+            'name'     => (string) $u['original_name'],
+            'rel_path' => $u['rel_path'] ?? null,
+            'size'     => $u['size'] ?? null,
+            'date'     => $u['created_at'] ?? null,
+            'ext'      => strtolower((string) pathinfo((string) $u['original_name'], PATHINFO_EXTENSION)),
+            'meta'     => (string) ($u['uploader_name'] ?? ''),
+            'actions'  => $acts,
+        ];
+    }
+    if (!function_exists('renderFileDetailsView')) {
+        require_once __DIR__ . '/../includes/file_details_view.php';
+    }
+    renderFileDetailsView($allFileRows, [
+        'empty'         => 'فایلی در کتابخانه نیست.',
+        'folder_rename' => ['action' => 'rename_upload_folder.php', 'all' => 1],
+        'folder_download_action' => 'download_upload_folder.php?folder=__FOLDER__&all=1',
+    ]);
+    ?>
 </div>
 <?php endif; ?>
 <script>
@@ -246,6 +251,32 @@ panel_layout_start('آپلود فایل');
             .catch(function(){ cb({success:false}); });
     }
     document.addEventListener('click', function(e){
+        // ─── تغییر نام پوشه (نمای Details) ───
+        // نامِ جدید را می‌پرسیم و سپس در همان صفحه ارسال می‌کنیم (بدون مودالِ اضافه).
+        var ren = e.target.closest && e.target.closest('.js-fl-rename');
+        if (ren) {
+            e.preventDefault();
+            var folder = ren.getAttribute('data-folder') || '';
+            var action = ren.getAttribute('data-action') || 'rename_upload_folder.php';
+            var scopeAll = ren.getAttribute('data-scope-all') === '1';
+            var name = window.prompt('نام جدید برای پوشهٔ «' + folder + '»:', folder);
+            if (name === null) return;                       // انصراف
+            name = String(name).trim();
+            if (name === '' || name === folder) return;      // بی‌تغییر
+            var f = document.createElement('form');
+            f.method = 'POST';
+            f.action = action;
+            var fields = { folder: folder, new_name: name, _csrf_token: csrf };
+            if (scopeAll) fields.all = '1';
+            Object.keys(fields).forEach(function(k){
+                var inp = document.createElement('input');
+                inp.type = 'hidden'; inp.name = k; inp.value = fields[k];
+                f.appendChild(inp);
+            });
+            document.body.appendChild(f);
+            f.submit();
+            return;
+        }
         var unl = e.target.closest && e.target.closest('.js-unlink-upl');
         if (unl) {
             e.preventDefault();
@@ -270,21 +301,176 @@ panel_layout_start('آپلود فایل');
     var form = document.getElementById('upload-form');
     if (!form) return;
     var csrf = '<?= htmlspecialchars($csrf_token) ?>';
+    var fileInput = document.getElementById('upload-file');
+    var folderInput = document.getElementById('upload-folder');
+    var hintEl = document.getElementById('upload-file-hint');
+    var listEl = document.getElementById('upload-folder-list');
+    var zipGroup = document.getElementById('upload-zip-group');
+    var FOLDER_MAX = <?= (int) uploadFolderMaxFiles() ?>;
+    // فایل‌های انتخاب‌شده (شامل مسیر نسبی) — منبع حقیقت هنگام ارسال
+    var picked = [];
+    // انتخاب پوشه با webkitdirectory
+    if (folderInput && 'webkitdirectory' in folderInput) { folderInput.webkitdirectory = true; folderInput.setAttribute('webkitdirectory', ''); }
+
+    function fa(n){ return String(n).replace(/\d/g, function(d){ return '۰۱۲۳۴۵۶۷۸۹'[+d]; }); }
+    function fmtSize(b){
+        if (!(b > 0)) return '۰';
+        var u = ['B','KB','MB','GB'];
+        var i = Math.min(u.length-1, Math.floor(Math.log(b)/Math.log(1024)));
+        var n = b / Math.pow(1024,i);
+        return (i===0 || n>=10 ? Math.round(n) : n.toFixed(1)) + ' ' + u[i];
+    }
+    function cleanRel(p){
+        p = String(p||'').replace(/\\/g,'/');
+        var out = [];
+        p.split('/').forEach(function(seg){
+            seg = seg.replace(/[\u0000-\u001F\u007F]/g,'').replace(/^[.\s]+|[.\s]+$/g,'');
+            if (seg && seg !== '.' && seg !== '..') out.push(seg);
+        });
+        return out.join('/');
+    }
+    var ALLOWED = <?= json_encode(['zip','rar','pdf','jpg','jpeg','png','gif','webp','bmp','stl','ply','stp','step','obj','3mf','matrix4','dentalproject','iftscan','dcm','dicom','txt','xml','html','htm']) ?>;
+    function validExt(name){ return ALLOWED.indexOf((name.split('.').pop()||'').toLowerCase()) !== -1; }
+
+    function addFiles(fileList){
+        var bad = [], added = 0, folders = {};
+        for (var i = 0; i < fileList.length; i++) {
+            var f = fileList[i];
+            if (!validExt(f.name)) { bad.push(f.name); continue; }
+            var rel = cleanRel(f.webkitRelativePath || f._rel || '');
+            var dup = picked.some(function(x){ return x.file.name === f.name && x.file.size === f.size && x.rel === rel; });
+            if (dup) continue;
+            picked.push({ file: f, rel: rel });
+            if (rel) folders[rel.split('/')[0]] = 1;
+            added++;
+        }
+        if (bad.length) alert('این فرمت‌ها مجاز نیستند:\n' + bad.join('\n') + '\n\nفرمت‌های مجاز: ' + ALLOWED.join(', '));
+        if (picked.length > FOLDER_MAX) alert('⚠️ تعداد فایل‌ها (' + picked.length + ') از حد مجاز (' + FOLDER_MAX + ') بیشتر است؛ پوشه را به بخش‌های کوچک‌تر تقسیم کنید.');
+        render(folders);
+        return added;
+    }
+    function render(folders){
+        folders = folders || {};
+        if (hintEl) {
+            var nFolder = picked.filter(function(p){ return p.rel && p.rel.indexOf('/') !== -1; }).length;
+            hintEl.textContent = picked.length
+                ? (fa(picked.length) + ' فایل انتخاب شده است' + (nFolder ? ' (' + fa(nFolder) + ' فایل داخل پوشه)' : ''))
+                : '';
+        }
+        if (listEl) {
+            if (!picked.length) { listEl.style.display = 'none'; listEl.innerHTML = ''; }
+            else {
+                listEl.style.display = 'block';
+                listEl.innerHTML = '';
+                picked.forEach(function(p, idx){
+                    var row = document.createElement('div');
+                    row.style.cssText = 'display:flex; gap:8px; align-items:center; padding:3px 6px; border-bottom:1px solid #f1f5f9; font-size:.78rem;';
+                    var nm = document.createElement('span');
+                    nm.style.cssText = 'flex:1; direction:ltr; text-align:left; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+                    nm.textContent = p.rel || p.file.name;
+                    var sz = document.createElement('span');
+                    sz.style.cssText = 'color:#64748b; white-space:nowrap;';
+                    sz.textContent = fmtSize(p.file.size);
+                    var rm = document.createElement('button');
+                    rm.type = 'button'; rm.textContent = '✕'; rm.title = 'حذف';
+                    rm.style.cssText = 'border:none; background:none; color:#dc2626; cursor:pointer; font-size:.9rem; line-height:1;';
+                    rm.addEventListener('click', function(){ picked.splice(idx,1); render(); });
+                    row.appendChild(nm); row.appendChild(sz); row.appendChild(rm);
+                    listEl.appendChild(row);
+                });
+            }
+        }
+        if (zipGroup) zipGroup.style.display = (picked.length > 1) ? 'block' : 'none';
+    }
+
+    var pickFilesBtn = document.getElementById('upload-pick-files');
+    var pickFolderBtn = document.getElementById('upload-pick-folder');
+    if (pickFilesBtn) pickFilesBtn.addEventListener('click', function(){ fileInput.click(); });
+    if (pickFolderBtn) pickFolderBtn.addEventListener('click', function(){ folderInput.click(); });
+    if (fileInput) fileInput.addEventListener('change', function(){ addFiles(fileInput.files); fileInput.value = ''; });
+    if (folderInput) folderInput.addEventListener('change', function(){ addFiles(folderInput.files); folderInput.value = ''; });
+
+    // پوشه را می‌توان با ماوس هم روی فرم رها کرد
+    ['dragover','drop'].forEach(function(evt){
+        form.addEventListener(evt, function(e){
+            if (evt === 'dragover') { e.preventDefault(); return; }
+            e.preventDefault();
+            var dt = e.dataTransfer;
+            if (!dt) return;
+            var entries = [];
+            if (dt.items) {
+                Array.prototype.slice.call(dt.items).forEach(function(it){
+                    if (it.kind !== 'file') return;
+                    var en = (typeof it.webkitGetAsEntry === 'function') ? it.webkitGetAsEntry() : null;
+                    if (en) entries.push(en);
+                });
+            }
+            if (!entries.some(function(en){ return en && en.isDirectory; })) {
+                if (dt.files && dt.files.length) addFiles(dt.files);
+                return;
+            }
+            var collected = [];
+            (function readEntry(entry, prefix, done){
+                if (!entry) { done(); return; }
+                if (entry.isFile) {
+                    entry.file(function(f){
+                        try { Object.defineProperty(f, '_rel', { value: cleanRel(prefix + entry.name), writable:true, configurable:true }); } catch(err) { f._rel = cleanRel(prefix + entry.name); }
+                        collected.push(f); done();
+                    }, function(){ done(); });
+                } else if (entry.isDirectory) {
+                    var reader = entry.createReader(), all = [];
+                    (function batch(){
+                        reader.readEntries(function(list){
+                            if (!list.length) {
+                                var i = 0;
+                                (function next(){ if (i >= all.length) { done(); return; } readEntry(all[i++], prefix + entry.name + '/', next); })();
+                                return;
+                            }
+                            for (var k = 0; k < list.length; k++) all.push(list[k]);
+                            batch();
+                        }, function(){ done(); });
+                    })();
+                } else { done(); }
+            });
+            var idx = 0;
+            (function walk(){
+                if (idx >= entries.length) { if (collected.length) addFiles(collected); return; }
+                readEntry(entries[idx++], '', walk);
+            })();
+        });
+    });
+
     form.addEventListener('submit', function(e){
         e.preventDefault();
         var msgEl = document.getElementById('upload-msg');
-        var input = document.getElementById('upload-file');
         var caseSel = document.getElementById('upload-case');
         var progressWrap = document.getElementById('upload-progress');
         var bar = document.getElementById('upload-bar');
         var pct = document.getElementById('upload-percent');
-        if (!input || !input.files.length) { if (msgEl) { msgEl.textContent = 'فایلی انتخاب نشده است.'; msgEl.style.color = '#b91c1c'; } return; }
+        if (!picked.length) { if (msgEl) { msgEl.textContent = 'فایلی انتخاب نشده است.'; msgEl.style.color = '#b91c1c'; } return; }
+
         var fd = new FormData();
         fd.append('_csrf_token', csrf);
         fd.append('case_id', caseSel ? caseSel.value : '');
-        fd.append('file', input.files[0]);
+        // نوع فایل — برای نام‌گذاری خودکارِ یکسان با صفحهٔ کیس‌ها/مشاهدهٔ کیس
+        var typeEl = document.getElementById('upload-file-type');
+        if (typeEl) fd.append('file_type', typeEl.value);
         var descInput = document.getElementById('upload-description');
         if (descInput && descInput.value.trim()) fd.append('description', descInput.value.trim());
+        var zipEl = document.getElementById('upload-zip');
+        var useZip = !!(zipEl && zipEl.checked && picked.length > 1);
+        if (useZip) fd.append('compress', '1');
+        // نام پوشهٔ ریشه (اولین بخش مسیر) برای نام‌گذاری ZIP و گروه‌بندی
+        var rootName = '';
+        for (var k = 0; k < picked.length; k++) {
+            if (picked[k].rel && picked[k].rel.indexOf('/') !== -1) { rootName = picked[k].rel.split('/')[0]; break; }
+        }
+        if (rootName) fd.append('folder_name', rootName);
+        picked.forEach(function(p){
+            fd.append('files[]', p.file);
+            fd.append('rel_paths[]', p.rel || '');
+        });
+
         var xhr = new XMLHttpRequest();
         xhr.open('POST', 'upload_user_file.php', true);
         xhr.setRequestHeader('X-CSRF-Token', csrf);
@@ -301,11 +487,12 @@ panel_layout_start('آپلود فایل');
         };
         xhr.onload = function(){
             var resp = null;
-            try { resp = JSON.parse(xhr.responseText); } catch(e){}
+            try { resp = JSON.parse(xhr.responseText); } catch(err){}
             if (xhr.status === 200 && resp && resp.success) {
                 if (bar) bar.style.width = '100%';
                 if (pct) pct.textContent = '100%';
-                if (msgEl) { msgEl.textContent = 'فایل با موفقیت آپلود شد.'; msgEl.style.color = '#166534'; }
+                var n = resp.uploaded || picked.length;
+                if (msgEl) { msgEl.textContent = 'آپلود انجام شد (' + n + ' فایل' + (resp.zipped ? ' — یک فایل ZIP' : '') + ').'; msgEl.style.color = '#166534'; }
                 setTimeout(function(){ location.reload(); }, 800);
             } else {
                 if (progressWrap) progressWrap.style.display = 'none';

@@ -7,7 +7,11 @@ require_admin();
 
 use Morilog\Jalali\Jalalian;
 
-$labs = db()->query("SELECT id, full_name FROM users WHERE role IN ('outsource_lab','partner_lab','customer_lab','lab') AND active=1 ORDER BY full_name")->fetchAll();
+// گیرندگانِ برون‌سپاری از یک منبعِ واحد می‌آیند تا با فرم کیس و لیست نرخ‌ها
+// هم‌خوان باشد. قبلاً این‌جا فقط نقش‌های لابراتواری هاردکد شده بود و مدیرانِ
+// شعبهٔ همکار (branch_admin) که واقعاً گیرندهٔ کار بودند، در این لیست نبودند →
+// فاکتور برون‌سپاری برایشان هیچ کیسی نمی‌آورد.
+$labs = getAllLabs();
 $message = '';
 $generatedInvoiceId = null;
 
@@ -252,7 +256,7 @@ panel_layout_start('صدور فاکتور برون‌سپاری');
                 <option value="">انتخاب لابراتوار...</option>
                 <?php foreach ($labs as $lab): ?>
                     <option value="<?= $lab['id'] ?>" <?= $lab['id'] == $labId ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($lab['full_name']) ?>
+                        <?= htmlspecialchars($lab['full_name']) ?><?= !empty($lab['branch_name']) ? ' (' . htmlspecialchars($lab['branch_name']) . ')' : '' ?>
                     </option>
                 <?php endforeach; ?>
             </select>

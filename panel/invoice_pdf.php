@@ -136,6 +136,25 @@ $currentDoctor = null;
 foreach ($invoiceItems as $item) {
     $type = $item['price_title'] ?: $item['item_title'] ?: '—';
     $description = $item['item_description'] ?: $item['item_title'];
+
+    // در فاکتورهای کلینیک/لابراتوار، نام پزشک یک‌بار در سرصفحهٔ گروهِ همان پزشک
+    // نمایش داده می‌شود؛ پس تکرارِ آن در ستون «شرح» هر ردیف لازم نیست و حذف می‌شود.
+    // (فقط پیشوندِ «نام پزشک - » از ابتدای شرح برداشته می‌شود؛ اگر نامی مطابق نبود،
+    //  شرح دست‌نخورده می‌ماند.)
+    if ($isGroupedInvoice && $description !== null && $description !== '') {
+        $descDoctor = trim((string) ($item['case_doctor_name'] ?? ''));
+        if ($descDoctor !== '') {
+            $description = preg_replace(
+                '/^' . preg_quote($descDoctor, '/') . '\s*[-–—]\s*/u',
+                '',
+                (string) $description
+            );
+        }
+    }
+    if (trim((string) $description) === '') {
+        $description = $type;
+    }
+
     $patient = $item['patient_name'] ?: '—';
     $quantity = toPersianDigits(number_format($item['quantity'], 0));
     $amount = (float)$item['total_amount'];
@@ -151,10 +170,6 @@ foreach ($invoiceItems as $item) {
         if ($groupDoctor !== $currentDoctor) {
             $currentDoctor = $groupDoctor;
             $itemsRowsHtml .= '<tr><td colspan="6" style="background:#E5E7EB; color:#0F172A; font-weight:bold; padding:6px 10px;">پزشک: ' . htmlspecialchars($groupDoctor, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td></tr>';
-        }
-        // For lab_out show a marker
-        if (($item['case_type'] ?? '') === 'lab_out') {
-            $description = 'برونسپاری - ' . $description;
         }
     }
 

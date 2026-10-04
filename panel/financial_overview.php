@@ -257,8 +257,13 @@ if ($startDate !== '' && $endDate !== '') {
         ],
         'clinic' => [
             'label' => 'کلینیک',
-            'select' => "cl.full_name",
-            'join' => "LEFT JOIN users doc ON c.doctor_id = doc.id LEFT JOIN users cl ON doc.clinic_id = cl.id",
+            'select' => "COALESCE(cl.full_name, cl2.full_name)",
+            // اولویت: کلینیکِ صریحِ خودِ کیس، وگرنه کلینیکِ اصلیِ پزشک
+            // (عضویت‌های چندگانهٔ پزشک در جدول user_clinics در این گزارشِ تجمیعی لحاظ نمی‌شود
+            //  تا یک کیس دو بار در دو کلینیک شمرده نشود.)
+            'join' => "LEFT JOIN users doc ON c.doctor_id = doc.id
+                       LEFT JOIN users cl ON c.clinic_id = cl.id
+                       LEFT JOIN users cl2 ON cl2.id = doc.clinic_id",
         ],
     ];
 
@@ -445,6 +450,50 @@ if ($startDate !== '' && $endDate !== '') {
     $serviceCounts = $stmt->fetchAll();
 }
 
+// ─── بدهی پزشکان / کلینیک‌ها / لابراتوارها (تب «بدهی‌ها») ───
+// «بدهی» = مبلغ فاکتورهای پرداخت‌نشده منهای پرداخت‌های جزئیِ ثبت‌شده (خالص).
+// انواع فاکتور از شمارهٔ فاکتور تشخیص داده می‌شود (مثل financial_overview و invoice_pdf):
+//   INV-CLN → کلینیک، INV-LAB → لابراتوار، بقیه → پزشک.
+// توجه: این گزارش مستقل از بازهٔ تاریخ است (تصویر لحظه‌ایِ بدهی‌ها).
+$debtRows = [];
+$debtTotals = ['doctor' => 0.0, 'clinic' => 0.0, 'lab' => 0.0];
+$debtCounts = ['doctor' => 0, 'clinic' => 0, 'lab' => 0];
+// محدودیتِ شعبه: مدیر کل (نقش admin) همهٔ شعبه‌ها را می‌بیند؛ مدیرِ شعبه فقط شعبهٔ خودش.
+// (فاکتورهای کلینیک/لابراتوارِ قدیمی بدون شعبه‌اند و با فیلتر شعبه از چشم می‌افتادند.)
+$debtPartyBranchCond = is_root_admin()
+    ? ''
+    : " AND COALESCE(i.branch_id, (SELECT u2.branch_id FROM users u2 WHERE u2.id = i.doctor_id)) = " . (int) $bid;
+$debtSql = "SELECT CASE
+                   WHEN i.invoice_number LIKE 'INV-CLN%' THEN 'clinic'
+                   WHEN i.invoice_number LIKE 'INV-LAB%' THEN 'lab'
+                   ELSE 'doctor' END AS kind,
+               i.doctor_id,
+               COALESCE(u.full_name, i.doctor_name, '—') AS party,
+               COUNT(*) AS invoice_count,
+               COALESCE(SUM(i.total_amount), 0) AS invoiced,
+               COALESCE(SUM(COALESCE(paid.applied, 0)), 0) AS paid_amount,
+               COALESCE(SUM(i.total_amount - COALESCE(paid.applied, 0)), 0) AS debt
+        FROM doctor_invoices i
+        LEFT JOIN users u ON u.id = i.doctor_id
+        LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied FROM doctor_payment_invoices GROUP BY invoice_id) paid
+               ON paid.invoice_id = i.id
+        WHERE i.payment_status <> 'paid'{$debtPartyBranchCond}
+        GROUP BY kind, i.doctor_id, party
+        HAVING debt > 0
+        ORDER BY debt DESC";
+try {
+    $debtRows = db()->query($debtSql)->fetchAll();
+    foreach ($debtRows as $r) {
+        $k = $r['kind'];
+        $debtTotals[$k] = ($debtTotals[$k] ?? 0) + (float) $r['debt'];
+        $debtCounts[$k] = ($debtCounts[$k] ?? 0) + (int) $r['invoice_count'];
+    }
+} catch (\Throwable $e) {
+    // اگر جدول پرداخت‌های جزئی هنوز ساخته نشده باشد، گزارش نباید صفحه را بشکند
+    $debtRows = [];
+}
+$debtTotalAll = array_sum($debtTotals);
+
 panel_layout_start('بررسی وضعیت درآمد و هزینه');
 ?>
 <div style="margin-bottom: 18px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; align-items: center;">
@@ -496,6 +545,7 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
 <div style="display:flex; gap:0; margin-bottom:20px; border-bottom:2px solid #e5e7eb; flex-wrap:wrap;">
     <button type="button" id="fin-tab-overview" class="fin-tab" onclick="switchFinTab('overview')" style="background:#0F172A; color:#fff; border:none; padding:10px 20px; font-weight:700; cursor:pointer; border-radius:8px 8px 0 0;">خلاصه و نمودار ماهانه</button>
     <button type="button" id="fin-tab-cases" class="fin-tab" onclick="switchFinTab('cases')" style="background:#E5E7EB; color:#0F172A; border:none; padding:10px 20px; font-weight:700; cursor:pointer; border-radius:8px 8px 0 0;">بر اساس کیس (نمودار دایره‌ای)</button>
+    <button type="button" id="fin-tab-debts" class="fin-tab" onclick="switchFinTab('debts')" style="background:#E5E7EB; color:#0F172A; border:none; padding:10px 20px; font-weight:700; cursor:pointer; border-radius:8px 8px 0 0;">🧾 بدهی پزشکان، کلینیک‌ها و لابراتوارها<?= $debtTotalAll > 0 ? ' (' . formatAmountToman($debtTotalAll) . ')' : '' ?></button>
 </div>
 
 <div id="fin-pane-overview">
@@ -678,6 +728,86 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
     <?php endif; ?>
 </div>
 
+<!-- ═══ تب: بدهی پزشکان / کلینیک‌ها / لابراتوارها ═══ -->
+<div id="fin-pane-debts" style="display:none;">
+    <?php
+    $debtGroups = [
+        'doctor' => ['label' => 'پزشکان',      'color' => '#0ea5e9', 'empty' => 'پزشک بدهکاری وجود ندارد.'],
+        'clinic' => ['label' => 'کلینیک‌ها',    'color' => '#8b5cf6', 'empty' => 'کلینیک بدهکاری وجود ندارد.'],
+        'lab'    => ['label' => 'لابراتوارها',  'color' => '#14b8a6', 'empty' => 'لابراتوار بدهکاری وجود ندارد.'],
+    ];
+    ?>
+    <p style="margin:0 0 14px; font-size:0.85rem; color:#525252;">
+        بدهی = مبلغ <b>فاکتورهای پرداخت‌نشده</b> منهای پرداخت‌های جزئیِ ثبت‌شده (خالص). این جدول مستقل از بازهٔ تاریخِ بالای صفحه است
+        (تصویر لحظه‌ایِ بدهی‌ها). برای ثبت پرداخت: «مالی → دریافتی».
+    </p>
+
+    <div style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:18px;">
+        <?php foreach ($debtGroups as $k => $g): ?>
+        <div style="flex:1; min-width:180px; background:#fff; border:1px solid #e5e7eb; border-right:4px solid <?= $g['color'] ?>; border-radius:12px; padding:14px 16px;">
+            <div style="font-size:0.85rem; color:#525252;">بدهی <?= htmlspecialchars($g['label']) ?></div>
+            <div style="font-size:1.25rem; font-weight:bold; color:<?= $debtTotals[$k] > 0 ? '#b91c1c' : '#166534' ?>; margin-top:6px;"><?= formatAmountToman($debtTotals[$k]) ?> <small style="font-size:0.7rem;">تومان</small></div>
+            <small style="color:#6b7280;"><?= toPersianDigits($debtCounts[$k]) ?> فاکتور پرداخت‌نشده</small>
+        </div>
+        <?php endforeach; ?>
+        <div style="flex:1; min-width:180px; background:<?= $debtTotalAll > 0 ? '#fef2f2' : '#f0fdf4' ?>; border:1px solid <?= $debtTotalAll > 0 ? '#fecaca' : '#bbf7d0' ?>; border-radius:12px; padding:14px 16px;">
+            <div style="font-size:0.85rem; color:#525252;">جمع کل بدهی‌ها</div>
+            <div style="font-size:1.25rem; font-weight:bold; color:<?= $debtTotalAll > 0 ? '#b91c1c' : '#166534' ?>; margin-top:6px;"><?= formatAmountToman($debtTotalAll) ?> <small style="font-size:0.7rem;">تومان</small></div>
+            <small style="color:#6b7280;"><a href="invoices.php">مشاهدهٔ فاکتورها</a></small>
+        </div>
+    </div>
+
+    <?php foreach ($debtGroups as $k => $g): ?>
+        <?php $rows = array_values(array_filter($debtRows, function ($r) use ($k) { return $r['kind'] === $k; })); ?>
+        <div class="form-card" style="margin-bottom:18px;">
+            <h4 style="margin-top:0;">بدهی <?= htmlspecialchars($g['label']) ?></h4>
+            <?php if (empty($rows)): ?>
+                <p class="empty"><?= htmlspecialchars($g['empty']) ?></p>
+            <?php else: ?>
+            <div class="table-scroll">
+                <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+                    <thead>
+                        <tr style="background:#f8fafc;">
+                            <th style="text-align:right; padding:8px; border-bottom:1px solid #e5e7eb;">نام</th>
+                            <th style="text-align:center; padding:8px; border-bottom:1px solid #e5e7eb;">فاکتور پرداخت‌نشده</th>
+                            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">مبلغ فاکتورها</th>
+                            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">پرداخت‌شده</th>
+                            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">بدهی خالص</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($rows as $r): ?>
+                        <tr>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9;">
+                                <?php if ($k === 'doctor' && (int) $r['doctor_id'] > 0): ?>
+                                    <a href="doctor_view.php?id=<?= (int) $r['doctor_id'] ?>"><?= htmlspecialchars($r['party']) ?></a>
+                                <?php elseif ($k === 'clinic' && (int) $r['doctor_id'] > 0): ?>
+                                    <a href="cases.php?clinic_id=<?= (int) $r['doctor_id'] ?>" title="کیس‌های این کلینیک"><?= htmlspecialchars($r['party']) ?></a>
+                                <?php else: ?>
+                                    <?= htmlspecialchars($r['party']) ?>
+                                <?php endif; ?>
+                            </td>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:center;"><?= toPersianDigits((int) $r['invoice_count']) ?></td>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left;"><?= formatAmountToman((float) $r['invoiced']) ?></td>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; color:#166534;"><?= formatAmountToman((float) $r['paid_amount']) ?></td>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; font-weight:bold; color:#b91c1c;"><?= formatAmountToman((float) $r['debt']) ?></td>
+                        </tr>
+                        <?php endforeach; ?>
+                        <tr style="font-weight:bold; background:#f8fafc;">
+                            <td style="padding:8px;">جمع</td>
+                            <td style="padding:8px; text-align:center;"><?= toPersianDigits($debtCounts[$k]) ?></td>
+                            <td style="padding:8px; text-align:left;"><?= formatAmountToman(array_sum(array_map(function ($r) { return (float) $r['invoiced']; }, $rows))) ?></td>
+                            <td style="padding:8px; text-align:left; color:#166534;"><?= formatAmountToman(array_sum(array_map(function ($r) { return (float) $r['paid_amount']; }, $rows))) ?></td>
+                            <td style="padding:8px; text-align:left; color:#b91c1c;"><?= formatAmountToman($debtTotals[$k]) ?></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <?php endif; ?>
+        </div>
+    <?php endforeach; ?>
+</div>
+
 <!-- Interactive chart tooltip -->
 <div id="chart-tooltip" style="display:none; position:fixed; z-index:99999; pointer-events:none; background:#0F172A; color:#fff; border-radius:8px; padding:8px 12px; font-size:0.85rem; box-shadow:0 6px 18px rgba(0,0,0,0.25); max-width:260px;"></div>
 
@@ -693,12 +823,17 @@ function togglePeriodType(){
 function switchFinTab(tab){
     var ov = document.getElementById('fin-pane-overview');
     var cs = document.getElementById('fin-pane-cases');
+    var db = document.getElementById('fin-pane-debts');
     var tbO = document.getElementById('fin-tab-overview');
     var tbC = document.getElementById('fin-tab-cases');
+    var tbD = document.getElementById('fin-tab-debts');
     if (ov) ov.style.display = (tab === 'overview') ? '' : 'none';
     if (cs) cs.style.display = (tab === 'cases') ? '' : 'none';
+    if (db) db.style.display = (tab === 'debts') ? '' : 'none';
     if (tbO) { tbO.style.background = (tab === 'overview') ? '#0F172A' : '#E5E7EB'; tbO.style.color = (tab === 'overview') ? '#fff' : '#0F172A'; }
     if (tbC) { tbC.style.background = (tab === 'cases') ? '#0F172A' : '#E5E7EB'; tbC.style.color = (tab === 'cases') ? '#fff' : '#0F172A'; }
+    if (tbD) { tbD.style.background = (tab === 'debts') ? '#0F172A' : '#E5E7EB'; tbD.style.color = (tab === 'debts') ? '#fff' : '#0F172A'; }
+    try { if (tab === 'debts') { var el = document.getElementById('fin-tab-debts'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } } catch(e){}
 }
 function switchPieDim(dim){
     document.querySelectorAll('.pie-dim-pane').forEach(function(p){ p.style.display = 'none'; });

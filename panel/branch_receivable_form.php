@@ -16,6 +16,36 @@ $invoiceDate = toJalaliDateFormatted($invoice['invoice_date'] ?? date('Y-m-d'));
 $periodLabel = (string) ($invoice['period_label'] ?? '');
 $notes = (string) ($invoice['notes'] ?? '');
 
+// کیس‌هایی که می‌توان به این فاکتور اضافه کرد (همهٔ ماه‌ها، فاکتورنشده).
+// این همان قابلیتی است که فاکتور پزشک/طراح دارد: افزودن کیس از ماه‌های دیگر.
+$partnerBranchId = (int) ($invoice['partner_branch_id'] ?? 0);
+$availableCases = getBranchReceivableAvailableCases($invoiceId, $partnerBranchId ?: null);
+
+// ردیف‌های «یتیم»: آیتمی که کیسش دیگر در سیستم نیست (بعد از پاک شدن کیس).
+// این‌ها نباید نرخ‌شان صفر شود؛ نرخ ذخیره‌شده را نگه می‌داریم.
+$itemCaseIds = array_values(array_filter(array_map(function ($it) { return (int) ($it['case_id'] ?? 0); }, $items)));
+$existingCaseIds = [];
+if (!empty($itemCaseIds)) {
+    $ph = implode(',', array_fill(0, count($itemCaseIds), '?'));
+    $cs = db()->prepare("SELECT id FROM cases WHERE id IN ($ph)");
+    $cs->execute($itemCaseIds);
+    $existingCaseIds = array_map('intval', array_column($cs->fetchAll(), 'id'));
+}
+$orphanCaseIds = array_flip(array_diff($itemCaseIds, $existingCaseIds));
+
+// ماه‌های فاکتور از تاریخِ دریافت خودِ کیس‌ها استخراج می‌شود (روش فاکتور پزشک).
+// اگر بعداً کیسی از ماه دیگری اضافه شود، همین‌جا خودبه‌خود دیده می‌شود.
+$caseMonthsPhrase = invoiceItemsMonthPart($items, $invoice['invoice_date'] ?? null);
+
+$flash = '';
+if (isset($_GET['ok'])) {
+    $flash = '<div style="margin-bottom:16px; padding:14px 18px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; color:#166534;">تغییرات با موفقیت ذخیره شد.</div>';
+} elseif (isset($_GET['added'])) {
+    $flash = '<div style="margin-bottom:16px; padding:14px 18px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:8px; color:#1e40af;">' . (int) $_GET['added'] . ' کیس به فاکتور اضافه شد.</div>';
+} elseif (isset($_GET['error']) && $_GET['error'] === 'nopick') {
+    $flash = '<div style="margin-bottom:16px; padding:14px 18px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; color:#92400e;">هیچ کیسی انتخاب نشده بود.</div>';
+}
+
 panel_layout_start('ویرایش فاکتور طلب از شعبه');
 ?>
 <link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
@@ -28,9 +58,7 @@ panel_layout_start('ویرایش فاکتور طلب از شعبه');
     </div>
 </div>
 
-<?php if (isset($_GET['ok'])): ?>
-    <div style="margin-bottom:16px; padding:14px 18px; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; color:#166534;">تغییرات با موفقیت ذخیره شد.</div>
-<?php endif; ?>
+<?= $flash ?>
 
 <form method="post" action="save_branch_receivable.php">
     <?= csrf_field() ?>
@@ -51,52 +79,36 @@ panel_layout_start('ویرایش فاکتور طلب از شعبه');
         <div class="form-group">
             <label>بازه (برچسب)</label>
             <input type="text" name="period_label" value="<?= htmlspecialchars($periodLabel) ?>" placeholder="مثلاً مرداد ۱۴۰۵">
+            <small style="color:#525252;">
+                اگر کیسی از ماه دیگری به فاکتور اضافه شود، ماهِ آن خودکار از تاریخ کیس‌ها استخراج و در فاکتور نشان داده می‌شود.
+            </small>
         </div>
         <div class="form-group">
             <label>یادداشت‌ها</label>
             <textarea name="notes" rows="3"><?= htmlspecialchars($notes) ?></textarea>
         </div>
 
+        <?php if ($caseMonthsPhrase !== ''): ?>
+        <div style="margin:14px 0; padding:10px 14px; background:#f0f9ff; border:1px solid #bae6fd; border-radius:8px; color:#075985; font-size:0.88rem;">
+            <strong>ماه‌های این فاکتور (از تاریخ کیس‌ها):</strong> <?= htmlspecialchars($caseMonthsPhrase) ?>
+            <?php if ($periodLabel !== '' && $caseMonthsPhrase !== $periodLabel): ?>
+                <br><span style="color:#0369a1;">برچسب ثبت‌شده: «<?= htmlspecialchars($periodLabel) ?>» — در فاکتور، ماه‌های واقعی کیس‌ها نشان داده می‌شود.</span>
+            <?php endif; ?>
+        </div>
+        <?php endif; ?>
+
         <h4 style="margin:22px 0 10px;">آیتم‌های فاکتور</h4>
         <p style="color:#6b7280; font-size:0.85rem;">تعداد و نرخ را ویرایش کنید؛ با تیک «حذف» ردیف از فاکتور حذف و کیس آن برای صدور مجدد آزاد می‌شود. جمع کل و وضعیت پرداخت پس از ذخیره دوباره محاسبه می‌شود.</p>
 
-        <?php if (empty($items)): ?>
-            <p class="empty">این فاکتور آیتمی ندارد.</p>
-        <?php else: ?>
-        <table style="width:100%; border-collapse:collapse; font-size:0.9rem; margin-top:8px;">
-            <thead>
-            <tr>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;"># کیس</th>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">بیمار</th>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">پزشک</th>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">خدمت</th>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">تعداد</th>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:right;">نرخ (تومان)</th>
-                <th style="border:1px solid #e5e7eb; background:#f3f4f6; padding:8px; text-align:center;">حذف</th>
-            </tr>
-            </thead>
-            <tbody>
-            <?php foreach ($items as $it):
-                $iid = (int) $it['id']; ?>
-            <tr data-row="<?= $iid ?>">
-                <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= (int) ($it['case_id'] ?? 0) ?: '—' ?></td>
-                <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= htmlspecialchars($it['patient_name'] ?? '—') ?></td>
-                <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= htmlspecialchars($it['doctor_name'] ?? '—') ?></td>
-                <td style="border:1px solid #e5e7eb; padding:6px 8px;"><?= htmlspecialchars($it['service_title'] ?? '—') ?></td>
-                <td style="border:1px solid #e5e7eb; padding:6px 8px;">
-                    <input type="number" class="row-qty" name="items[<?= $iid ?>][qty]" value="<?= (int) ($it['quantity'] ?? 1) ?>" min="1" step="1" style="width:70px;">
-                </td>
-                <td style="border:1px solid #e5e7eb; padding:6px 8px;">
-                    <input type="number" class="row-unit" name="items[<?= $iid ?>][unit]" value="<?= round((float) ($it['unit_rate'] ?? 0)) ?>" min="0" step="1" style="width:130px;">
-                </td>
-                <td style="border:1px solid #e5e7eb; padding:6px 8px; text-align:center;">
-                    <input type="checkbox" class="row-remove" name="items[<?= $iid ?>][remove]" value="1" title="حذف این ردیف">
-                </td>
-            </tr>
-            <?php endforeach; ?>
-            </tbody>
-        </table>
-        <?php endif; ?>
+        <?php
+        renderInvoiceItemsEditor($items, [
+            'mode'            => 'edit',
+            'invoice_id'      => $invoiceId,
+            'orphan_case_ids' => $orphanCaseIds,
+            'empty_message'   => 'این فاکتور آیتمی ندارد.',
+            'table_id'        => 'receivable-items-edit',
+        ]);
+        ?>
 
         <div style="margin-top:18px; display:flex; gap:12px; align-items:center;">
             <button type="submit" class="btn" style="background:#06B6D4; color:#fff;">ذخیره تغییرات</button>
@@ -105,19 +117,31 @@ panel_layout_start('ویرایش فاکتور طلب از شعبه');
     </div>
 </form>
 
+<!-- ─── افزودن کیس از ماه‌های دیگر (مثل فاکتور پزشک/طراح) ─── -->
+<div class="form-card" style="margin-top:22px;">
+    <h4 style="margin:0 0 6px;">افزودن کیس از ماه‌های دیگر</h4>
+    <p style="color:#6b7280; font-size:0.85rem; margin-bottom:12px;">
+        کیس‌های برون‌سپاری‌شده از <strong><?= htmlspecialchars($invoice['partner_branch_name'] ?? 'این شعبه') ?></strong>
+        که هنوز در هیچ فاکتور طلبی نیامده‌اند (بدون محدودیت ماه). انتخاب کنید و «افزودن به فاکتور» را بزنید.
+    </p>
+
+    <?php
+    renderInvoiceItemsEditor($availableCases, [
+        'mode'          => 'add',
+        'form_action'   => 'add_branch_receivable_cases.php',
+        'invoice_id'    => $invoiceId,
+        'empty_message' => 'کیس فاکتورنشدهٔ دیگری از این شعبه وجود ندارد.',
+        'table_id'      => 'receivable-items-add',
+    ]);
+    ?>
+</div>
+
 <script>
 (function () {
     if (window.persianDatepicker) {
         window.persianDatepicker('#invoice_date', { format: 'YYYY/MM/DD', autoClose: true });
     }
-    document.querySelectorAll('tr[data-row]').forEach(function (tr) {
-        var rm = tr.querySelector('.row-remove');
-        if (rm) {
-            rm.addEventListener('change', function () {
-                tr.style.opacity = rm.checked ? '0.4' : '1';
-            });
-        }
-    });
 })();
 </script>
+<?php invoiceItemsEditorScript(); ?>
 <?php panel_layout_end(); ?>

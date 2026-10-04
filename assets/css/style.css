@@ -594,13 +594,22 @@ table {
 
 th,
 td {
-    padding: 14px 12px;
-    border: 1px solid #e4e8f0;
+    padding: 9px 10px;
+    /* خطوط جداکنندهٔ پررنگ‌تر تا ردیف‌ها به‌راحتی از هم تفکیک شوند
+       (قبلاً #e4e8f0 بود و روی مانیتورهای بزرگ خیلی کم‌رنگ دیده می‌شد). */
+    border: 1px solid #cbd5e1;
+}
+
+/* راه‌راهِ ملایم ردیف‌ها: خواندنِ جدول‌های بلند (لیست کیس‌ها) را راحت‌تر می‌کند. */
+tbody tr:nth-child(even) {
+    background: #f8fafc;
 }
 
 th {
-    background: #f2f6ff;
+    background: #e8eefb;
+    border-bottom: 2px solid #94a3b8;
     text-align: right;
+    font-weight: 700;
 }
 
 .actions a,
@@ -627,12 +636,16 @@ th {
     border: 1px solid #f1c2c2;
 }
 
-/* Read-only teeth chart (view_case) */
+/* Read-only teeth chart (view_case)
+   روی مانیتورهای بزرگ، هر نیم‌فک عرضِ مساوی می‌گیرد و دندان‌ها داخلش پخش می‌شوند تا
+   نمودار تمام عرضِ کارت را پر کند (قبلاً نیمهٔ چپ فقط به‌اندازهٔ محتوایش جا می‌گرفت و
+   نیمهٔ راستِ صفحه خالی می‌ماند). */
 .case-teeth-chart {
     direction: ltr;
     display: flex;
     flex-direction: column;
     gap: 6px;
+    width: 100%;
 }
 .case-teeth-chart .ctc-arch-label {
     text-align: center;
@@ -645,22 +658,301 @@ th {
     align-items: flex-end;
     justify-content: center;
     gap: 6px;
+    width: 100%;
 }
 .case-teeth-chart .ctc-half {
     display: flex;
-    align-items: flex-end;
+    align-items: flex-start;
+    justify-content: space-around;
+    flex: 1 1 0;
+    min-width: 0;
 }
+.case-teeth-chart .ctc-half > span {
+    /* دندان‌ها در عرضِ نیم‌فک پخش می‌شوند و روی صفحهٔ کوچک جمع می‌شوند.
+       position:relative لازم است تا اسپنِ اتصال (absolute) نسبت به خودِ دندان
+       لنگر بیندازد — درست مثل .case-tooth-slot در پیکرِ فرمِ کیس. */
+    flex: 0 1 auto;
+    position: relative;
+}
+/* اسپن اتصال: دقیقاً هم‌مرکز با دایرهٔ دندان (وسطِ ۲۶px → top:5px).
+   چون position:absolute است، ارتفاع ردیف و تراز عمودی دندان‌ها را به‌هم نمی‌زند.
+   این همان هندسهٔ `.case-bridge-key` در پیکرِ فرمِ کیس است. */
+.case-teeth-chart .ctc-bridge {
+    position: absolute;
+    top: 5px;
+    right: -6px;
+    width: 11px;
+    height: 16px;
+    border: 1px solid #94a3b8;
+    border-radius: 3px;
+    box-sizing: border-box;
+    z-index: 3;
+}
+.case-teeth-chart .ctc-bridge.is-active {
+    border-color: #b45309;
+}
+/* خطِ وسطِ قوس: کوتاه و بالامرتب (مثل `.case-teeth-picker__midline`)، و
+   اتصالِ میان‌خط داخلِ خودش می‌نشیند تا روی خط نیفتد. */
 .case-teeth-chart .ctc-midline {
+    position: relative;
     width: 2px;
-    height: 34px;
+    height: 20px;
+    align-self: flex-start;
     background: #cbd5e1;
-    margin: 0 3px;
+    margin: 0 6px;
+    flex: 0 0 auto;
 }
+/* کلیدِ اتصالِ میان‌خط (۱۱–۲۱ و ۴۱–۳۱): وسطِ خط، کمی پایین‌تر از انتهای خط */
+.case-teeth-chart .ctc-midline .ctc-bridge {
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    top: 22px;
+}
+/* در صفحه‌های باریک که نیم‌فک‌ها روی هم می‌روند، خطِ وسط معنا ندارد */
+@media (max-width: 640px) {
+    .case-teeth-chart .ctc-midline {
+        height: 14px;
+    }
+    .case-teeth-chart .ctc-midline .ctc-bridge {
+        top: 16px;
+    }
+}
+
+/* ── آیکون‌های فیلدهای فرم (کنارِ برچسب) ──
+   SVGهای inline از includes/icons.php با fill="currentColor" می‌آیند،
+   پس رنگ/اندازه از همین‌جا کنترل می‌شود. بدون فونت و بدون CDN. */
+.fi {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 auto;
+    vertical-align: -3px;
+    color: #64748b;
+    display: inline-block;
+}
+/* برچسبی که آیکون دارد: آیکون و متن هم‌تراز */
+label > .fi,
+.form-group > label > .fi {
+    margin-inline-end: 6px;
+    color: #475569;
+}
+/* وقتی کاربر روی خودِ فیلد فوکوس می‌کند، آیکونِ برچسبش پررنگ‌تر شود */
+.form-group:focus-within > label > .fi {
+    color: #0891b2;
+}
+/* اندازه‌های جایگزین */
+.fi-lg { width: 19px; height: 19px; vertical-align: -4px; }
+.fi-sm { width: 13px; height: 13px; vertical-align: -2px; }
+/* گروه‌بندیِ بصریِ فیلدهای فرم کیس با عنوانِ بخش‌دار و آیکون */
+.form-section-title {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-weight: 700;
+    font-size: .88rem;
+    color: #0f172a;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 6px 10px;
+    margin: 4px 0 2px;
+}
+.form-section-title .fi { color: #0891b2; }
 
 /* Generic horizontal-scroll wrapper for tables that must not overflow the page */
 .table-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+}
+
+/* ── نمای «Details» فایل‌ها (شبیه Windows Explorer) ──
+   درختِ پوشه/فایل با ستون‌های هم‌تراز: نام | حجم | نوع | تاریخ | عملیات.
+   به‌جای ردیف‌های درهمِ تودرتو، هر سطح تورفتگیِ مشخص دارد و سرستون‌ها ثابت‌اند
+   تا چشم بتواند ستون‌ها را دنبال کند. */
+.fl-details {
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #fff;
+    font-size: .85rem;
+}
+.fl-details__head,
+.fl-row {
+    display: grid;
+    grid-template-columns: minmax(180px, 1fr) 90px 110px 140px auto;
+    align-items: center;
+    gap: 8px;
+}
+.fl-details__head {
+    background: #e8eefb;
+    border-bottom: 2px solid #94a3b8;
+    font-weight: 700;
+    color: #1e293b;
+    padding: 7px 10px;
+    white-space: nowrap;
+}
+.fl-details__head span { overflow: hidden; text-overflow: ellipsis; }
+.fl-row {
+    padding: 5px 10px;
+    border-bottom: 1px solid #e2e8f0;
+    color: #1f2937;
+}
+.fl-row:last-child { border-bottom: none; }
+.fl-row:hover { background: #f1f5f9; }
+/* ردیفِ پوشه: پس‌زمینهٔ ملایم + نامِ پررنگ */
+.fl-row--folder { background: #f8fafc; font-weight: 700; }
+.fl-row--folder.is-open { background: #eff6ff; }
+/* تورفتگیِ فایل‌های داخلِ پوشه (یک سطح) */
+.fl-row--child { background: #fff; }
+.fl-row--child .fl-name { padding-inline-start: 18px; }
+/* ستونِ نام: آیکون + متن، با برشِ طولانی‌ها */
+.fl-name {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.fl-name__txt {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fl-name__txt--ltr { direction: ltr; text-align: left; }
+/* دکمهٔ تا کردنِ پوشه */
+.fl-caret {
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #0369a1;
+    border-radius: 5px;
+    width: 20px; height: 20px;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+    flex: 0 0 auto;
+    font-size: .7rem;
+}
+.fl-caret:hover { background: #e0f2fe; }
+.fl-caret[aria-expanded="true"] { background: #dbeafe; }
+/* ستون‌های عددی/متادیتا: خاکستری و بدون شکستن خط */
+.fl-meta { color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fl-size { text-align: center; }
+/* ستونِ عملیات: دکمه‌ها در یک ردیف بدون پرشِ چیدمان */
+.fl-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    justify-content: flex-end;
+    /* دکمه‌ها به‌هم نمی‌چسبند: هم‌ترازیِ راست و فاصلهٔ یکنواخت حتی وقتی
+       بعضی دکمه‌ها به‌خاطر نداشتن دسترسی رندر نمی‌شوند. */
+    min-width: 0;
+    flex-wrap: nowrap;
+}
+.fl-actions form { display: inline-flex; margin: 0; }
+.fl-actions .btn, .fl-actions button, .fl-actions a {
+    padding: 3px 8px;
+    font-size: .78rem;
+    white-space: nowrap;
+}
+/* برچسبِ کوچکِ «حجم کل پوشه» */
+.fl-badge {
+    background: #cffafe;
+    color: #155e75;
+    border-radius: 999px;
+    padding: 1px 9px;
+    font-size: .74rem;
+    font-weight: 400;
+}
+@media (max-width: 900px) {
+    /* روی صفحه‌های باریک، ستون‌های متادیتا کنارِ نام می‌روند */
+    .fl-details__head { display: none; }
+    .fl-row {
+        grid-template-columns: 1fr auto;
+        row-gap: 2px;
+        padding: 8px 10px;
+    }
+    .fl-row .fl-meta { grid-column: 1 / -1; }
+}
+
+/* ── جدول آیتم‌های فاکتور (کامپوننت مشترک: includes/invoice_items_table.php) ──
+   نام کلاس عمداً با .invoice-items-table (فرم فاکتور پزشک) فرق دارد تا
+   عرض‌های nth-child آن فرم روی این جدول اثر نگذارد.
+   عرض ستون‌ها با کلاس داده می‌شود تا در هر دو حالت (ویرایش/افزودن) و
+   با DataTables درست بماند. */
+.invoice-rows-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+}
+.invoice-rows-table th,
+.invoice-rows-table td {
+    border: 1px solid #e5e7eb;
+    padding: 6px 8px;
+    vertical-align: middle;
+}
+.invoice-rows-table thead th {
+    background: #f3f4f6;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+/* عرض ستون‌ها — برای اینکه در DataTables هم ثابت بماند */
+.invoice-rows-table .col-pick    { width: 44px; }
+.invoice-rows-table .col-case    { width: 78px; }
+.invoice-rows-table .col-date    { width: 108px; white-space: nowrap; }
+.invoice-rows-table .col-patient { width: 16%;  min-width: 130px; }
+.invoice-rows-table .col-doctor  { width: 14%;  min-width: 110px; }
+.invoice-rows-table .col-service { min-width: 160px; }
+.invoice-rows-table .col-qty     { width: 76px; }
+.invoice-rows-table .col-rate    { width: 132px; white-space: nowrap; }
+.invoice-rows-table .col-amount  { width: 130px; white-space: nowrap; font-weight: 700; }
+.invoice-rows-table .col-remove  { width: 56px; }
+
+/* ورودی‌های داخل سلول باید کامل و بدون سرریز جا شوند */
+.invoice-rows-table .row-qty,
+.invoice-rows-table .row-unit {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 5px 6px;
+    font-size: 0.85rem;
+    text-align: left;
+}
+.invoice-rows-table .row-unit { font-weight: 600; }
+.invoice-rows-table .js-pick-all,
+.invoice-rows-table .js-pick-case,
+.invoice-rows-table .row-remove {
+    width: 17px;
+    height: 17px;
+    cursor: pointer;
+    accent-color: #06b6d4;
+}
+
+/* روی موبایل، جدول اسکرول افقی بگیرد و ستون‌های متنی کوچک نشوند */
+@media (max-width: 640px) {
+    .table-scroll .invoice-rows-table {
+        display: table;
+        min-width: 820px;
+    }
+    .invoice-rows-table th,
+    .invoice-rows-table td {
+        padding: 5px 6px;
+    }
+}
+
+/* وقتی جدول DataTable شده: پوشش‌دهنده اسکرول و هدر چسبان */
+.dataTables_wrapper {
+    width: 100%;
+}
+.dataTables_wrapper .dataTables_scrollBody,
+.dataTables_wrapper .table-scroll {
+    overflow-x: auto;
+}
+.invoice-rows-table.dataTable {
+    table-layout: auto;
+    margin: 0 !important;
+}
+.invoice-rows-table.dataTable thead th {
+    white-space: nowrap;
 }
 
 /* Invoice items table (invoice_form.php) – fixed layout so every input fills its
@@ -851,3 +1143,107 @@ th {
     .shade-picker .shade-group { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; align-items: center; }
     .shade-picker .shade-swatch { flex: 0 0 auto; width: 100%; height: 34px; font-size: 0.6rem; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   منوی موبایل — بهبودهای لمسی و حالت landscape
+   ──────────────────────────────────────────────────────────────────────────
+   دو مشکل روی گوشی:
+   ۱) منوی کشویی «مالی» زیرمنوی بلندی دارد (پرداخت‌ها / فاکتورها / قیمت‌ها /
+      حساب‌ها + ۹ لینک). چون همهٔ گروه‌ها در یک ستون‌اند، تا وقتی «مالی» باز است
+      بقیهٔ گزینه‌ها (مثل «بررسی درآمد و هزینه») پایین‌تر از دید می‌روند و کاربر
+      باید اسکرول کند. ⇢ منو روی گوشی تمام‌صفحه می‌شود و خودش اسکرول می‌گیرد،
+      ارتفاع لمسیِ هر آیتم بزرگ‌تر می‌شود، و گروهِ باز خودش را به بالای دید می‌آورد.
+   ۲) در حالت landscape ارتفاع صفحه کم است و .brand (لوگو 72px + نام) نصف
+      ارتفاع را می‌خورد. ⇢ در landscape لوگو و نام کوچک می‌شوند و .brand و
+      .site-nav در یک ردیف جمع‌وجور می‌نشینند.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* نوارِ منوی موبایل: از منوی کشویی بلند به پنلِ تمام‌صفحه با اسکرول مستقل */
+@media (max-width: 768px) {
+    .site-header .container { padding-top: 10px; padding-bottom: 10px; }
+
+    .site-nav.mobile-open {
+        /* حداکثر ارتفاع = ارتفاع دید منهای هدرِ چسبان، تا خودِ پنل اسکرول شود و
+           صفحهٔ زیرین جابه‌جا نشود. */
+        max-height: calc(100vh - 64px);
+        max-height: calc(100dvh - 64px);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding-bottom: 14px;
+    }
+
+    /* آیتم‌های لمسی با ارتفاع راحت (هدف لمس ≥ ۴۴px) */
+    .site-nav.mobile-open .nav-link,
+    .site-nav.mobile-open .nav-group-toggle {
+        padding: 13px 14px;
+        font-size: 1rem;
+        border-radius: 10px;
+    }
+
+    /* لینک‌های زیرمنو هم ارتفاع لمسی کافی داشته باشند */
+    .site-nav.mobile-open .nav-group-menu a {
+        padding: 11px 12px;
+        border-radius: 8px;
+        display: block;
+    }
+
+    /* گروهی که باز شد، بلافاصله زیر همان دکمه بماند و فاصلهٔ اضافه نگیرد */
+    .site-nav.mobile-open .nav-group.open { margin-bottom: 2px; }
+
+    /* برچسب‌های بخش (پرداخت‌ها / فاکتورها / قیمت‌ها / حساب‌ها) تودرتو ولی خوانا */
+    .site-nav.mobile-open .menu-label {
+        padding: 8px 12px 4px;
+        font-size: .78rem;
+    }
+}
+
+/* ── حالت landscape گوشی/تبلتِ کوتاه ──
+   ارتفاع کم است، پس هدر باید نازک باشد: لوگو و نام .brand کوچک می‌شوند و در
+   همان ردیفِ .site-nav می‌نشینند (بدون شکستن به ردیف دوم). */
+@media (max-height: 560px) and (orientation: landscape) {
+    .site-header .container {
+        flex-wrap: nowrap;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 0;
+    }
+
+    .brand {
+        flex: 0 1 auto;
+        min-width: 0;
+        gap: 6px;
+    }
+
+    .brand .site-logo {
+        height: 34px;
+        width: auto;
+    }
+
+    /* نام کاربر در landscape جای می‌گیرد ولی کوتاه می‌شود */
+    .brand > span {
+        font-size: .82rem;
+        max-width: 34vw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .menu-toggle { padding: 2px; }
+    .menu-toggle img { width: 26px; height: 26px; }
+
+    /* منو در این حالت یک ردیف کم‌ارتفاع و اسکرول‌دار است */
+    .site-nav.mobile-open {
+        max-height: calc(100vh - 46px);
+        max-height: calc(100dvh - 46px);
+        margin-top: 6px;
+        gap: 2px;
+    }
+    .site-nav.mobile-open .nav-link,
+    .site-nav.mobile-open .nav-group-toggle {
+        padding: 9px 12px;
+        font-size: .92rem;
+    }
+    .site-nav.mobile-open .nav-group-menu a { padding: 8px 11px; }
+}
+

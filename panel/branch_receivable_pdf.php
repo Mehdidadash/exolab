@@ -15,7 +15,13 @@ $items = getBranchReceivableItems($invoiceId);
 
 $partnerName = $invoice['partner_branch_name'] ?? 'شعبه همکار';
 $periodLabel = $invoice['period_label'] ?? '';
-$invoiceTitle = 'فاکتور طلب از شعبه همکار — ' . $partnerName . ($periodLabel ? ' — ' . $periodLabel : '');
+// ─── عنوان فاکتور ───
+// مثل فاکتور پزشک (panel/invoice_pdf.php)، ماه‌ها از تاریخِ دریافت خودِ کیس‌ها
+// استخراج می‌شوند. پس اگر بعداً کیسی از ماه دیگری اضافه شود، همین‌جا خودبه‌خود
+// دیده می‌شود («مرداد و شهریور ۱۴۰۵») — بدون ستون اضافه در دیتابیس.
+$caseMonths = invoiceItemsMonthPart($items, $invoice['invoice_date'] ?? null);
+$periodPart = $caseMonths !== '' ? $caseMonths : $periodLabel;
+$invoiceTitle = 'فاکتور طلب از شعبه همکار — ' . $partnerName . ($periodPart ? ' — ' . $periodPart : '');
 
 // ─── Build items rows ───
 $itemsRowsHtml = '';
@@ -27,13 +33,14 @@ foreach ($items as $item) {
         '<td>' . htmlspecialchars($item['patient_name'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($item['doctor_name'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($item['service_title'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
+        '<td>' . (!empty($item['received_date']) ? toJalaliDateFormatted($item['received_date']) : '—') . '</td>' .
         '<td>' . toPersianDigits((int) $item['quantity']) . '</td>' .
         '<td>' . formatAmountToman((float) $item['unit_rate']) . '</td>' .
         '<td>' . formatAmountToman($amount) . '</td>' .
         '</tr>';
 }
 if ($itemsRowsHtml === '') {
-    $itemsRowsHtml = '<tr><td colspan="6">بدون آیتم</td></tr>';
+    $itemsRowsHtml = '<tr><td colspan="7">بدون آیتم</td></tr>';
 }
 
 // ---- تعداد هر خدمت به تفکیک (خلاصه زیر فاکتور) ----
@@ -138,7 +145,7 @@ $html = <<<HTML
                     <p style="margin: 5px 0;">
                         <span class="info-label">نام:</span> {$partnerName}<br>
                         <span class="info-label">طلبکار:</span> {$myBranchName}<br>
-                        <span class="info-label">بازه:</span> {$periodLabel}
+                        <span class="info-label">بازه:</span> {$periodPart}
                     </p>
                 </div>
             </td>
@@ -153,6 +160,7 @@ $html = <<<HTML
                     <th>بیمار</th>
                     <th>پزشک</th>
                     <th>خدمت</th>
+                    <th>تاریخ کیس</th>
                     <th>تعداد</th>
                     <th>نرخ برون‌سپاری (تومان)</th>
                     <th>جمع (تومان)</th>
@@ -161,7 +169,7 @@ $html = <<<HTML
             <tbody>
                 {$itemsRowsHtml}
                 <tr class="total-row">
-                    <td colspan="5">مبلغ کل</td>
+                    <td colspan="6">مبلغ کل</td>
                     <td>{$invoiceTotal} تومان</td>
                 </tr>
             </tbody>

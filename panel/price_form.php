@@ -80,6 +80,24 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
                 <option value="1" <?= !empty($price['hide_on_site']) ? 'selected' : '' ?>>نمایش داده نشود (فقط داخلی)</option>
             </select>
         </div>
+        <div class="form-group">
+            <label>ویژگی‌های خدمت</label>
+            <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:center; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 12px;">
+                <label style="display:flex; align-items:center; gap:6px; font-weight:400;" title="اگر تیک را بردارید، کیسِ این خدمت به‌صورت پیش‌فرض بدون طراح ثبت می‌شود">
+                    <input type="checkbox" name="design_required" value="1" style="width:auto;" <?= !isset($price['design_required']) || !empty($price['design_required']) ? 'checked' : '' ?>>
+                    نیازمند طراحی
+                </label>
+                <label style="display:flex; align-items:center; gap:6px; font-weight:400;" title="مثل اباتمنت کره‌ای/اروپایی و فیکسچر ایمپلنت">
+                    <input type="checkbox" name="requires_scan_body" value="1" style="width:auto;" <?= !empty($price['requires_scan_body']) ? 'checked' : '' ?>>
+                    🧩 نیازمند انتخاب «نوع اسکن‌بادی»
+                </label>
+            </div>
+            <small style="display:block; color:#525252; margin-top:6px; line-height:1.9;">
+                با تیکِ «نیازمند انتخاب نوع اسکن‌بادی»، در فرم ثبت و ویرایش کیس یک فیلد اضافه باز می‌شود که از بین
+                انواع تعریف‌شده در <a href="scan_body_types.php">انواع و کتابخانه اسکن‌بادی</a> یکی انتخاب می‌شود.
+                برای خدماتِ دیگری هم که در آینده نیاز داشتند، همین تیک را بزنید.
+            </small>
+        </div>
         <button type="submit"><?= $editing ? 'بروزرسانی' : 'ذخیره' ?></button>
     </form>
 </div>

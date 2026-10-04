@@ -34,16 +34,23 @@ $total = 0.0;
 foreach ($items as $item) {
     $amount = (float) $item['total_amount'];
     $total += $amount;
+    // خدمت به‌صورت اختصاری (short_name) و تاریخ دریافتِ کیس
+    $svcShort = trim((string) ($item['service_short'] ?? ''));
+    if ($svcShort === '') $svcShort = (string) ($item['service_title'] ?? '—');
+    if ($svcShort === '') $svcShort = '—';
+    $recvRaw = !empty($item['case_received_date']) ? $item['case_received_date'] : ($item['received_date'] ?? null);
+    $recvDateJalali = $recvRaw ? toJalaliDateFormatted($recvRaw) : '—';
     $itemsRowsHtml .= '<tr>' .
         '<td>' . htmlspecialchars($item['patient_name'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($item['doctor_name'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
-        '<td>' . htmlspecialchars($item['service_title'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
+        '<td>' . htmlspecialchars($svcShort, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
+        '<td>' . htmlspecialchars($recvDateJalali, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . toPersianDigits((int) $item['quantity']) . '</td>' .
         '<td>' . formatAmountToman($amount) . '</td>' .
         '</tr>';
 }
 if ($itemsRowsHtml === '') {
-    $itemsRowsHtml = '<tr><td colspan="5">بدون آیتم</td></tr>';
+    $itemsRowsHtml = '<tr><td colspan="6">بدون آیتم</td></tr>';
 }
 
 // ---- تعداد هر خدمت به تفکیک (خلاصه زیر فاکتور) — تخفیف‌ها به‌صورت یک ردیفِ جمع ----
@@ -156,6 +163,7 @@ $html = <<<HTML
                     <th>بیمار</th>
                     <th>پزشک</th>
                     <th>خدمت</th>
+                    <th>تاریخ دریافت</th>
                     <th>تعداد</th>
                     <th>جمع (تومان)</th>
                 </tr>
@@ -163,7 +171,7 @@ $html = <<<HTML
             <tbody>
                 {$itemsRowsHtml}
                 <tr class="total-row">
-                    <td colspan="4">مبلغ کل</td>
+                    <td colspan="5">مبلغ کل</td>
                     <td>{$invoiceTotal} تومان</td>
                 </tr>
             </tbody>

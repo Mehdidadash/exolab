@@ -44,14 +44,18 @@ if ($entityType === 'clinic') {
 }
 
 if ($action === 'remove') {
-    $upd = db()->prepare("UPDATE users SET {$col} = NULL WHERE id = ?");
-    $upd->execute([$doctorId]);
-} else {
-    // Assign: a doctor belongs to at most ONE clinic and at most ONE lab,
-    // so moving to a new clinic clears the previous clinic (and vice versa).
     if ($col === 'clinic_id') {
-        $upd = db()->prepare('UPDATE users SET clinic_id = ? WHERE id = ?');
-        $upd->execute([$entityId, $doctorId]);
+        // حذف عضویتِ همین کلینیک (اگر کلینیک اصلی بود، یکی از عضویت‌های دیگر جانشین می‌شود)
+        removeUserFromClinic($doctorId, $entityId);
+    } else {
+        $upd = db()->prepare('UPDATE users SET lab_id = NULL WHERE id = ?');
+        $upd->execute([$doctorId]);
+    }
+} else {
+    // Assign: یک پزشک می‌تواند عضو چند کلینیک باشد (عضویت اضافه می‌شود)،
+    // ولی فقط یک لابراتوار دارد.
+    if ($col === 'clinic_id') {
+        addUserToClinic($doctorId, $entityId);
     } else {
         $upd = db()->prepare('UPDATE users SET lab_id = ? WHERE id = ?');
         $upd->execute([$entityId, $doctorId]);

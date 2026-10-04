@@ -26,6 +26,7 @@ if (!$canManage && !$isDoctor) {
 
 $types    = scanAppointmentTypes();
 $statuses = scanAppointmentStatuses();
+$scanBodyTypes = getScanBodyTypes();   // انواع اسکن‌بادی فعال (برای فیلد فرم نوبت)
 
 // پزشکان (برای فیلتر و فرم) — برای پزشک فقط خودش
 $doctors = [];
@@ -170,7 +171,7 @@ panel_layout_start('نوبت اسکن');
                     <td><?= htmlspecialchars((string) ($a['patient_name'] ?: ($a['case_patient'] ?? '—'))) ?></td>
                     <td><?= !empty($a['case_id']) ? '<a href="view_case.php?id=' . (int) $a['case_id'] . '">#' . (int) $a['case_id'] . '</a>' : '—' ?></td>
                     <td><span style="background:<?= htmlspecialchars($tMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 7px; font-size:.78rem;"><?= $tMeta['icon'] ?> <?= htmlspecialchars($tMeta['label']) ?></span></td>
-                    <td style="text-align:center;"><?= !empty($a['needs_scan_body']) ? '<span style="background:#fef3c7; color:#92400e; border-radius:6px; padding:2px 7px; font-weight:700;">🧩 بله</span>' : '—' ?></td>
+                    <td><?= !empty($a['needs_scan_body']) ? '<span style="background:#fef3c7; color:#92400e; border-radius:6px; padding:2px 7px; font-weight:700;">🧩 ' . (!empty($a['scan_body_type_name']) ? htmlspecialchars((string) $a['scan_body_type_name']) : 'بله') . '</span>' : '—' ?></td>
                     <td><span style="background:<?= htmlspecialchars($sMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 7px; font-size:.78rem;"><?= htmlspecialchars($sMeta['label']) ?></span></td>
                     <td style="max-width:200px; white-space:normal;"><?= htmlspecialchars((string) ($a['address'] ?? '')) ?: '—' ?></td>
                     <td style="white-space:nowrap;">
@@ -263,6 +264,21 @@ panel_layout_start('نوبت اسکن');
                         <label for="sa-body" style="margin:0;">🧩 اسکن‌بادی باید همراه برده شود (کیس ایمپلنت)</label>
                     </div>
                 </div>
+                <div class="fg" id="sa-body-type-wrap" style="grid-column:1/-1; display:none;">
+                    <label for="sa-body-type">نوع اسکن‌بادی *</label>
+                    <select id="sa-body-type">
+                        <option value="">— انتخاب کنید —</option>
+                        <?php foreach ($scanBodyTypes as $bt): ?>
+                            <option value="<?= (int) $bt['id'] ?>"><?= htmlspecialchars((string) $bt['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small style="color:#64748b;">
+                        نوع/سیستم اسکن‌بادی مورد نیاز برای این نوبت.
+                        <?php if (is_admin()): ?>
+                            <a href="scan_body_types.php" target="_blank">مدیریت انواع اسکن‌بادی</a>
+                        <?php endif; ?>
+                    </small>
+                </div>
                 <div class="fg" style="grid-column:1/-1;">
                     <label for="sa-title">عنوان/موضوع (اختیاری)</label>
                     <input type="text" id="sa-title" placeholder="مثلاً: اسکن فک بالا + بادی">
@@ -328,6 +344,16 @@ panel_layout_start('نوبت اسکن');
             .then(function(r){ return r.json().catch(function(){ return { success:false, message:'پاسخ نامعتبر سرور' }; }); });
     }
 
+    // ─── نوع اسکن‌بادی: فقط وقتی «اسکن‌بادی لازم است» تیک خورده باشد نمایش داده می‌شود ───
+    function toggleBodyType(){
+        var cb  = document.getElementById('sa-body');
+        var wrap = document.getElementById('sa-body-type-wrap');
+        if (!cb || !wrap) return;
+        var on = !!cb.checked;
+        wrap.style.display = on ? 'flex' : 'none';
+        if (!on) { var sel = document.getElementById('sa-body-type'); if (sel) sel.value = ''; }
+    }
+
     // ─── مودال ───
     var modal = document.getElementById('sa-modal');
     function openModal(id, prefill){
@@ -352,9 +378,11 @@ panel_layout_start('نوبت اسکن');
                 if (prefill.patient) document.getElementById('sa-patient').value = prefill.patient;
                 if (prefill.type) document.getElementById('sa-type').value = prefill.type;
                 if (prefill.needs_scan_body) document.getElementById('sa-body').checked = true;
+                if (prefill.scan_body_type_id) document.getElementById('sa-body-type').value = prefill.scan_body_type_id;
             }
             document.getElementById('sa-status').value = 'scheduled';
         }
+        toggleBodyType();
         modal.style.display = 'flex';
     }
     function closeModal(){ if (modal) modal.style.display = 'none'; }
@@ -435,6 +463,8 @@ panel_layout_start('نوبت اسکن');
     });
     var newBtn = document.getElementById('sa-new');
     if (newBtn) newBtn.addEventListener('click', function(){ openModal(null, { date: new Date() }); });
+    var bodyCb = document.getElementById('sa-body');
+    if (bodyCb) bodyCb.addEventListener('change', toggleBodyType);
 
     // ثبت فرم
     var form = document.getElementById('sa-form');
@@ -457,7 +487,8 @@ panel_layout_start('نوبت اسکن');
             address:     document.getElementById('sa-address').value,
             title:       document.getElementById('sa-title').value,
             notes:       document.getElementById('sa-notes').value,
-            needs_scan_body: document.getElementById('sa-body').checked ? 1 : 0
+            needs_scan_body: document.getElementById('sa-body').checked ? 1 : 0,
+            scan_body_type_id: document.getElementById('sa-body').checked ? (document.getElementById('sa-body-type').value || '') : ''
         };
         post('save_scan_appointment.php', payload).then(function(r){
             if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = 'ذخیرهٔ نوبت'; }
@@ -502,6 +533,8 @@ panel_layout_start('نوبت اسکن');
         document.getElementById('sa-title').value = ev.title || '';
         document.getElementById('sa-notes').value = p.notes || '';
         document.getElementById('sa-body').checked = !!p.needs_scan_body;
+        document.getElementById('sa-body-type').value = p.scan_body_type_id || '';
+        toggleBodyType();
         if (p.case_id) loadCaseInfo();
     }
 
@@ -543,7 +576,7 @@ panel_layout_start('نوبت اسکن');
         var html = '<div class="sa-ev">'
             + '<div class="t">' + faDigits(esc(time)) + (who ? ' — ' + esc(who) : '') + '</div>';
         if (line2.length) html += '<div>' + line2.join(' · ') + '</div>';
-        if (p.needs_scan_body) html += '<div><span class="b">🧩 اسکن‌بادی</span></div>';
+        if (p.needs_scan_body) html += '<div><span class="b">🧩 اسکن‌بادی' + (p.scan_body_type_name ? ': ' + esc(p.scan_body_type_name) : '') + '</span></div>';
         if (p.status === 'done') html += '<div>✅ انجام شد</div>';
         if (p.status === 'canceled') html += '<div>✖ لغو شد</div>';
         html += '</div>';
@@ -649,7 +682,8 @@ panel_layout_start('نوبت اسکن');
                     doctor_id: p.doctor_id || '', case_id: p.case_id || '', patient_name: p.patient_name || '',
                     appt_type: p.appt_type || 'scan', status: p.status || 'scheduled',
                     phone: p.phone || '', address: p.address || '', notes: p.notes || '',
-                    needs_scan_body: p.needs_scan_body ? 1 : 0
+                    needs_scan_body: p.needs_scan_body ? 1 : 0,
+                    scan_body_type_id: p.needs_scan_body ? (p.scan_body_type_id || '') : ''
                 }).then(function(r){
                     if (!r || !r.success) { arg.revert(); alert((r && r.message) || 'جابه‌جایی ذخیره نشد.'); }
                     else { refreshCalendar(); }
@@ -667,7 +701,8 @@ panel_layout_start('نوبت اسکن');
                     doctor_id: p.doctor_id || '', case_id: p.case_id || '', patient_name: p.patient_name || '',
                     appt_type: p.appt_type || 'scan', status: p.status || 'scheduled',
                     phone: p.phone || '', address: p.address || '', notes: p.notes || '',
-                    needs_scan_body: p.needs_scan_body ? 1 : 0
+                    needs_scan_body: p.needs_scan_body ? 1 : 0,
+                    scan_body_type_id: p.needs_scan_body ? (p.scan_body_type_id || '') : ''
                 }).then(function(r){
                     if (!r || !r.success) { arg.revert(); alert((r && r.message) || 'تغییر مدت ذخیره نشد.'); }
                     else { refreshCalendar(); }

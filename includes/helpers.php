@@ -2,6 +2,12 @@
 
 require_once __DIR__ . '/icons.php';
 
+// لایهٔ ۱ و ۳: رجیستری انواع فاکتور + جدول مشترک آیتم‌ها.
+// این دو فایل هیچ وابستگی سنگینی ندارند و توابعشان با function_exists محافظت شده‌اند،
+// پس بارگذاریشان برای همهٔ صفحات بی‌خطر است و همه‌جا در دسترس خواهند بود.
+require_once __DIR__ . '/invoice_types.php';
+require_once __DIR__ . '/invoice_items_table.php';
+
 function toPersianDigits($input) {
     $numbers = ['0','1','2','3','4','5','6','7','8','9'];
     $persian = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
@@ -67,11 +73,15 @@ function renderTeethChart($teeth) {
             . '<span style="font-size:9px;color:#475569;">' . $t . '</span>'
             . '</span>';
     };
+    // اسپنِ اتصال (bridge key): مثل پیکرِ فرمِ کیس، دقیقاً هم‌مرکز با دایرهٔ دندان‌ها
+    // (وسطِ ارتفاعِ دایرهٔ ۲۶px → top:5px) تا «اتصال» بین خودِ دندان‌ها دیده شود،
+    // نه زیرِ شماره‌ها. چون position:absolute است، ارتفاعِ ردیف را تغییر نمی‌دهد.
     $bridgeHtml = function ($a, $b) use ($bridges) {
         $active = isset($bridges[min($a, $b) . '-' . max($a, $b)]);
         $bg = $active ? '#d97706' : '#ffffff';
         $bd = $active ? '#b45309' : '#94a3b8';
-        return '<span style="display:inline-block;width:11px;height:16px;border:1px solid ' . $bd . ';border-radius:3px;background:' . $bg . ';margin:0 1px;align-self:flex-end;"></span>';
+        return '<span class="ctc-bridge' . ($active ? ' is-active' : '') . '"'
+            . ' style="border-color:' . $bd . ';background:' . $bg . ';"></span>';
     };
     $halfHtml = function ($quad) use ($toothHtml, $bridgeHtml) {
         $h = '';
@@ -83,11 +93,14 @@ function renderTeethChart($teeth) {
     };
     $archHtml = function ($quads) use ($halfHtml, $bridgeHtml) {
         $firstHalf = $halfHtml($quads[0]);
-        // Cross-midline bridge between the central incisors (11-21, 41-31)
-        $firstHalf .= $bridgeHtml($quads[0][count($quads[0]) - 1], $quads[1][0]);
+        // اتصال میان‌خط (سانترال‌ها: ۱۱–۲۱ و ۴۱–۳۱) مثل پیکرِ فرمِ کیس **داخلِ خطِ وسط**
+        // قرار می‌گیرد (نه به‌عنوان فرزندِ نیم‌فک). همان راه‌حلِ .case-bridge-key--midline
+        // خطِ وسط کوتاه و بالامرتب است و کلیدِ اتصال با top ثابت پایین‌ترش می‌نشیند،
+        // پس روی خط نمی‌افتد و دقیقاً بین دو سانترال وسط می‌ماند.
+        $crossKey = $bridgeHtml($quads[0][count($quads[0]) - 1], $quads[1][0]);
         return '<div class="ctc-row">'
             . '<div class="ctc-half">' . $firstHalf . '</div>'
-            . '<div class="ctc-midline"></div>'
+            . '<div class="ctc-midline">' . $crossKey . '</div>'
             . '<div class="ctc-half">' . $halfHtml($quads[1]) . '</div>'
             . '</div>';
     };
@@ -413,6 +426,246 @@ function uploadLimits(): array {
 }
 
 /**
+ * سقف تعداد فایل‌هایی که کاربر می‌تواند در یک «آپلود پوشه» انتخاب کند.
+ * (هم در JS برای هشدار زودهنگام و هم در سرور برای رد کردن استفاده می‌شود.)
+ */
+function uploadFolderMaxFiles(): int {
+    return 300;
+}
+
+/**
+ * پاک‌سازی «مسیر نسبیِ» فایل داخل پوشهٔ آپلودشده.
+ *
+ * ورودی نمونه:  'اسکن فک بالا/تصاویر/a.png'   یا   'folder\\sub\\b.stl'
+ * خروجی: مسیری با جداکنندهٔ '/'، بدون بک‌اسلش، بدون «.» و «..»، بدون بخش خالی،
+ * بدون کاراکتر کنترلی، بدون اسلش ابتدایی/انتهایی — یا null اگر مسیر بی‌اعتبار باشد.
+ *
+ * نکته: فقط برای «نمایش و گروه‌بندی» استفاده می‌شود؛ فایل‌ها همیشه با نام
+ * تصادفیِ تخت روی سرور ذخیره می‌شوند، پس این مسیر هرگز به فایل‌سیستم نمی‌رسد.
+ */
+function sanitizeRelPath(?string $path, int $maxLen = 480): ?string {
+    $path = (string) $path;
+    if ($path === '') {
+        return null;
+    }
+    // جداکننده‌ها → '/'
+    $path = str_replace(['\\', "\0"], ['/', ''], $path);
+    $path = str_replace("\r", '', $path);
+    $parts = [];
+    foreach (explode('/', $path) as $seg) {
+        $seg = trim($seg);
+        // حذف کاراکترهای کنترلی و اسلش‌های تکراری/تهی
+        $seg = preg_replace('/[\x00-\x1F\x7F]+/u', '', $seg);
+        $seg = trim((string) $seg, " \t.");
+        if ($seg === '' || $seg === '.' || $seg === '..') {
+            continue;
+        }
+        // جلوگیری از پیشوندهای خطرناک ویندوزی (C: و …)
+        $seg = str_replace(':', '_', $seg);
+        if (mb_strlen($seg) > 120) {
+            $seg = mb_substr($seg, 0, 120);
+        }
+        $parts[] = $seg;
+    }
+    if (empty($parts)) {
+        return null;
+    }
+    $rel = implode('/', $parts);
+    if (mb_strlen($rel) > $maxLen) {
+        $rel = mb_substr($rel, 0, $maxLen);
+    }
+    return $rel;
+}
+
+/**
+ * «پوشهٔ ریشه» یک مسیر نسبی (اولین بخش) و «بقیهٔ مسیر».
+ * برای ساختِ درخت در نمایش فایل‌ها استفاده می‌شود.
+ * خروجی: ['root' => 'اسکن فک بالا', 'rest' => 'تصاویر/a.png'] یا null.
+ */
+function relPathRoot(?string $relPath): ?array {
+    $rel = sanitizeRelPath($relPath);
+    if ($rel === null) {
+        return null;
+    }
+    $pos = strpos($rel, '/');
+    if ($pos === false) {
+        return ['root' => $rel, 'rest' => ''];
+    }
+    return ['root' => substr($rel, 0, $pos), 'rest' => substr($rel, $pos + 1)];
+}
+
+/**
+ * آیا این فایل «عضو یک پوشهٔ آپلودشده» است؟ (یعنی rel_path دارد و حداقل دو بخش)
+ * فایل‌های تکی و بایگانی‌های ZIP ساخته‌شده از پوشه، عضوِ درخت محسوب نمی‌شوند.
+ */
+function isFolderUploadFile(?string $relPath): bool {
+    $rel = sanitizeRelPath($relPath);
+    return $rel !== null && strpos($rel, '/') !== false;
+}
+
+/**
+ * پیشوندِ نام فایل برای «فایل‌های داخل پوشهٔ طراحی نهایی»:
+ *   {شماره کیس}_{سایه}_{نام بیمار}_{شماره قبض}
+ * (به‌صورت خودکار هنگام آپلود به ابتدای نام هر فایلِ داخل پوشه اضافه می‌شود.)
+ * اگر هیچ جزئی معتبری نباشد، رشتهٔ خالی برمی‌گردد (یعنی نام‌گذاری انجام نشود).
+ *
+ * @param array       $caseRow ردیف کیس (id, patient_name, shade, receipt_number)
+ * @param string|null $suffix  جزء اختیاری که بعد از شمارهٔ قبض و پیش از نام اصلی می‌آید
+ */
+function caseFileNamingPrefix(array $caseRow, ?string $suffix = null): string {
+    $caseId  = trim((string) ($caseRow['id'] ?? ''));
+    $shade   = trim((string) ($caseRow['shade'] ?? ''));
+    // نام بیمار: فینگلیش، فاصله → '-' (چون داخل نام فایل و لینک دانلود استفاده می‌شود)
+    $patient = trim((string) persian_to_finglish($caseRow['patient_name'] ?? ''));
+    $patient = trim((string) preg_replace('/\s+/u', '-', $patient), '-');
+    $receipt = trim((string) ($caseRow['receipt_number'] ?? ''));
+
+    $parts = array_filter([$caseId, $shade, $patient, $receipt], fn($p) => $p !== '');
+    if ($suffix !== null && $suffix !== '') {
+        $parts[] = $suffix;
+    }
+    if (empty($parts)) {
+        return '';
+    }
+    $prefix = implode('_', $parts);
+    // پاکسازی نهایی: فقط کاراکترهای امنِ نام فایل
+    $prefix = (string) preg_replace('/[<>:"\/\\\\|?*\x00-\x1F]+/u', '-', $prefix);
+    $prefix = (string) preg_replace('/-{2,}/', '-', $prefix);
+    return trim($prefix, " _-.");
+}
+
+/**
+ * افزودن پیشوندِ نام‌گذاری به یک نام فایل — بدون دوباره‌کاری اگر از قبل پیشوند دارد.
+ *   addCaseFilePrefix('scan.stl', '1252_A2_Fatemeh-Khani_14')
+ *      → '1252_A2_Fatemeh-Khani_14_scan.stl'
+ */
+function addCaseFilePrefix(string $fileName, string $prefix): string {
+    // نام فایل باید تخت باشد (اسلش/بک‌اسلش داخل نام مجاز نیست)
+    $fileName = trim(basename(str_replace('\\', '/', $fileName)));
+    if ($prefix === '' || $fileName === '') {
+        return $fileName;
+    }
+    if ($fileName === $prefix || str_starts_with($fileName, $prefix . '_')) {
+        return $fileName;   // از قبل پیشوند دارد → دوباره اضافه نکن
+    }
+    // محدودیت طول ستون original_name (varchar 255): در صورت نیاز، بدنهٔ نام را کوتاه کن
+    if (mb_strlen($prefix . '_' . $fileName) > 250) {
+        $ext  = pathinfo($fileName, PATHINFO_EXTENSION);
+        $base = pathinfo($fileName, PATHINFO_FILENAME);
+        $room = 250 - mb_strlen($prefix) - 1 - ($ext !== '' ? mb_strlen($ext) + 1 : 0);
+        if ($room > 1) {
+            $fileName = mb_substr($base, 0, $room) . ($ext !== '' ? '.' . $ext : '');
+        }
+    }
+    return $prefix . '_' . $fileName;
+}
+
+/**
+ * ★ نقطهٔ واحدِ نام‌گذاری خودکار فایل‌های کیس ★
+ *
+ * همهٔ مسیرهای آپلود (صفحهٔ کیس‌ها، مشاهدهٔ کیس، کتابخانه) باید **فقط** از این
+ * تابع استفاده کنند تا نام‌گذاری در همه‌جا یکسان بماند و هرگز از هم دور نشود.
+ *
+ * @param int         $caseId   شناسهٔ کیس
+ * @param string|null $fileType نوع فایل (فقط 'final_design' پیشوند می‌گیرد)
+ * @return string پیشوند آماده (یا '' اگر نام‌گذاری لازم نیست)
+ */
+function caseFilePrefixForUpload(int $caseId, ?string $fileType): string
+{
+    if ($fileType !== 'final_design') {
+        return '';
+    }
+    $st = db()->prepare('SELECT id, patient_name, shade, receipt_number FROM cases WHERE id = ? LIMIT 1');
+    $st->execute([$caseId]);
+    $row = $st->fetch();
+    return $row ? caseFileNamingPrefix($row) : '';
+}
+
+/**
+ * ★ نقطهٔ واحدِ ساختِ نام نمایشیِ فایلِ کیس ★
+ *
+ * پیشوند را (در صورت لزوم) اضافه می‌کند و یکتا می‌سازد. همهٔ مسیرهای آپلود
+ * باید از این تابع استفاده کنند تا نتیجه همیشه یکسان باشد.
+ *
+ * @param int         $caseId     شناسهٔ کیس
+ * @param string      $fileName   نام اصلیِ فایل
+ * @param string|null $fileType   نوع فایل
+ * @param bool        $isInFolder آیا فایل داخل یک پوشهٔ آپلودشده است؟
+ */
+function caseFileDisplayName(int $caseId, string $fileName, ?string $fileType, bool $isInFolder = false): string
+{
+    $prefix = caseFilePrefixForUpload($caseId, $fileType);
+    if ($prefix === '') {
+        return uniqueCaseFileName($caseId, $fileName);
+    }
+    return uniqueCaseFileName($caseId, addCaseFilePrefix(basename($fileName), $prefix));
+}
+
+/**
+ * ساختِ یک فایل ZIP از مجموعه‌ای فایل و برگرداندن مسیر آن.
+ *
+ * @param array    $files   هر عضو: ['path' => مسیر واقعی روی دیسک, 'name' => نام داخل ZIP]
+ * @param string   $zipPath مسیر کاملِ خروجی ZIP (روی دیسک)
+ * @param string[] $errors  کدهای خطا در صورت شکست به این آرایه اضافه می‌شوند
+ * @return bool true اگر فایل ZIP با حداقل یک عضو ساخته شد
+ */
+function buildZipFromFiles(array $files, string $zipPath, array &$errors = []): bool
+{
+    if (!class_exists('ZipArchive')) {
+        $errors[] = 'zip_unsupported';
+        return false;
+    }
+    $zip = new ZipArchive();
+    if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+        $errors[] = 'zip_open_failed';
+        return false;
+    }
+    $used  = [];
+    $added = 0;
+    foreach ($files as $f) {
+        $path = (string) ($f['path'] ?? '');
+        if ($path === '' || !is_file($path)) {
+            continue;
+        }
+        $name = str_replace('\\', '/', (string) ($f['name'] ?? basename($path)));
+        $name = ltrim((string) preg_replace('#/+#', '/', $name), '/');
+        // حذف بخش‌های خطرناک مسیر (ZIP Slip)
+        $safe = [];
+        foreach (explode('/', $name) as $seg) {
+            $seg = trim((string) preg_replace('/[\x00-\x1F]+/u', '', $seg));
+            if ($seg === '' || $seg === '.' || $seg === '..') {
+                continue;
+            }
+            $safe[] = $seg;
+        }
+        $name = implode('/', $safe);
+        if ($name === '') {
+            $name = basename($path);
+        }
+        // جلوگیری از نام تکراری داخل ZIP
+        if (isset($used[$name])) {
+            $pi  = pathinfo($name);
+            $dir = ($pi['dirname'] ?? '') !== '.' ? $pi['dirname'] . '/' : '';
+            $i = 1;
+            do {
+                $name = $dir . $pi['filename'] . " ($i)." . ($pi['extension'] ?? '');
+                $i++;
+            } while (isset($used[$name]));
+        }
+        $used[$name] = true;
+        $zip->addFile($path, $name);
+        $added++;
+    }
+    $zip->close();
+    if ($added === 0) {
+        @unlink($zipPath);
+        $errors[] = 'no_files_to_zip';
+        return false;
+    }
+    return true;
+}
+
+/**
  * پیام فارسیِ قابل‌فهم برای کدهای خطای آپلود (فایل‌های کیس / آپلودهای کاربر).
  * کدها در upload_case_files.php ساخته می‌شوند: upload_error_{idx}_{phpCode} و …
  */
@@ -436,10 +689,18 @@ function uploadErrorLabel(string $code): string {
     if (str_starts_with($code, 'move_failed')) {
         return 'انتقال فایل روی سرور ناموفق بود (دسترسی پوشه را بررسی کنید).';
     }
+    if ($code === 'folder_too_many_files') {
+        return 'تعداد فایل‌های پوشه از حد مجاز (' . toPersianDigits((string) uploadFolderMaxFiles()) . ' فایل در هر ارسال) بیشتر است؛ پوشه را به بخش‌های کوچک‌تر تقسیم کنید.';
+    }
+    if ($code === 'invalid_file_name') {
+        return 'نام یکی از فایل‌ها نامعتبر است (نام فایل را کوتاه‌تر یا ساده‌تر کنید).';
+    }
     return match ($code) {
         'db_insert_error'   => 'فایل روی سرور ذخیره شد اما ثبت آن در دیتابیس ناموفق بود.',
         'cannot_create_dir' => 'ساخت پوشهٔ آپلود ناموفق بود (دسترسی پوشه را بررسی کنید).',
         'zip_open_failed'   => 'ساخت فایل ZIP ناموفق بود؛ بدون ZIP دوباره تلاش کنید.',
+        'zip_failed'        => 'بستهٔ ZIP ساخته نشد (احتمالاً حجم/دسترسی)؛ بدون ZIP دوباره تلاش کنید.',
+        'no_compressible_files' => 'هیچ فایلِ مجازی برای بسته‌بندی پیدا نشد؛ فقط پوشه‌های خالی انتخاب شده‌اند.',
         default             => 'خطا: ' . $code,
     };
 }
@@ -486,6 +747,13 @@ function caseFileBadge(?string $fileType, string $ext): string {
         'png' => ['تصویر/کنترل', '#fef9c3', '#854d0e'], 'gif' => ['تصویر/کنترل', '#fef9c3', '#854d0e'],
         'webp' => ['تصویر/کنترل', '#fef9c3', '#854d0e'], 'bmp' => ['تصویر/کنترل', '#fef9c3', '#854d0e'],
         'zip' => ['بایگانی', '#f3f4f6', '#374151'], 'rar' => ['بایگانی', '#f3f4f6', '#374151'],
+        'pdf' => ['PDF', '#fee2e2', '#991b1b'],
+        // فایل‌های خروجیِ دستگاه‌های اسکن (ورودی پزشک)
+        'matrix4' => ['فایل اسکنر', '#cffafe', '#155e75'], 'dentalproject' => ['فایل اسکنر', '#cffafe', '#155e75'],
+        'iftscan' => ['فایل اسکنر', '#cffafe', '#155e75'], 'dcm' => ['فایل اسکنر', '#cffafe', '#155e75'],
+        'dicom' => ['فایل اسکنر', '#cffafe', '#155e75'],
+        'txt' => ['متنی', '#f3f4f6', '#374151'], 'xml' => ['متنی', '#f3f4f6', '#374151'],
+        'html' => ['HTML طراحی', '#ede9fe', '#5b21b6'], 'htm' => ['HTML طراحی', '#ede9fe', '#5b21b6'],
     ];
     $t = $map[strtolower((string) $ext)] ?? ['سایر', '#f3f4f6', '#374151'];
     return '<span style="background:' . $t[1] . '; color:' . $t[2] . '; border-radius:6px; padding:0 6px; white-space:nowrap;">' . $t[0] . '</span>';
@@ -735,7 +1003,7 @@ function log_case_activity(int $caseId, string $action, ?string $details = null)
 /** ردیف‌های لاگ یک کیس (جدیدترین اول). */
 function getCaseActivityLog(int $caseId): array
 {
-    $stmt = db()->prepare('SELECT l.*, u.full_name AS user_name FROM case_activity_log l LEFT JOIN users u ON u.id = l.user_id WHERE l.case_id = ? ORDER BY l.id DESC LIMIT 500');
+    $stmt = db()->prepare('SELECT l.*, u.full_name AS user_name, u.role AS user_role FROM case_activity_log l LEFT JOIN users u ON u.id = l.user_id WHERE l.case_id = ? ORDER BY l.id DESC LIMIT 500');
     $stmt->execute([$caseId]);
     return $stmt->fetchAll();
 }

@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "jscheck",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"storage\\_jscheck.py",
+				"panel\\cases.php"
+			]
+		}
+	]
+}

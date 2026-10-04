@@ -56,5 +56,17 @@ if (!userCanViewCase($id, $user, $case)) {
     exit;
 }
 
+// کاربران بیرونی (پزشک/کلینیک/لابراتوار) نباید شناسهٔ طراح و لابراتوارهای مرتبط با کیس را
+// ببینند (اطلاعات داخلی است). فرم‌های ویرایش فقط برای کاربران داخلی رندر می‌شوند.
+if (isExternalCaseViewer($user)) {
+    foreach (['designer_id', 'lab_id', 'outsourced_lab_id', 'outsourced_service_id', 'outsourced_qty', 'outsourced_rate'] as $k) {
+        unset($case[$k]);
+    }
+    // وضعیتِ «ارسال به لاب همکار» هم داخلی است → «در حال انجام» نمایش داده می‌شود.
+    if (isset($case['status_name'])) {
+        $case['status_name'] = visibleStatusName((string) $case['status_name'], $user);
+    }
+}
+
 $case['received_date'] = toJalaliDateFormatted($case['received_date']);
 echo json_encode(['success' => true, 'case' => $case], JSON_UNESCAPED_UNICODE);

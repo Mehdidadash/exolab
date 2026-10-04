@@ -47,7 +47,7 @@ if ($dashCanAppts):
                         <span><?= toPersianDigits(substr((string) $da['start_time'], 0, 5)) ?><?= !empty($da['end_time']) ? ' تا ' . toPersianDigits(substr((string) $da['end_time'], 0, 5)) : '' ?></span>
                         <span style="background:<?= htmlspecialchars($dtMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 8px; font-size:.78rem;"><?= $dtMeta['icon'] ?> <?= htmlspecialchars($dtMeta['label']) ?></span>
                         <?php if (!empty($da['needs_scan_body'])): ?>
-                            <span style="background:#fef3c7; color:#92400e; border-radius:6px; padding:2px 8px; font-size:.78rem; font-weight:700;">🧩 اسکن‌بادی بردار</span>
+                            <span style="background:#fef3c7; color:#92400e; border-radius:6px; padding:2px 8px; font-size:.78rem; font-weight:700;">🧩 اسکن‌بادی بردار<?= !empty($da['scan_body_type_name']) ? ': ' . htmlspecialchars((string) $da['scan_body_type_name']) : '' ?></span>
                         <?php endif; ?>
                         <span style="background:<?= htmlspecialchars($dsMeta['color']) ?>; color:#fff; border-radius:6px; padding:2px 8px; font-size:.78rem;"><?= htmlspecialchars($dsMeta['label']) ?></span>
                         <?php if (!empty($da['doctor_name'])): ?><span style="font-size:.86rem; color:#334155;">👨‍⚕️ <?= htmlspecialchars((string) $da['doctor_name']) ?></span><?php endif; ?>
@@ -89,7 +89,9 @@ if ($role === 'admin' || $role === 'branch_admin') {
     if (!$branchScoped) {
         $stats['doctors'] = $runStat("SELECT COUNT(*) FROM users WHERE role='doctor' AND active=1");
         $stats['cases'] = $runStat('SELECT COUNT(*) FROM cases');
-        $stats['active_cases'] = $runStat("SELECT COUNT(*) FROM cases WHERE status_id != 4");
+        // «کیس فعال» = همهٔ کیس‌ها منهای «تحویل شد» (۴) و «لغو شد» (۵).
+        // (نامِ وضعیت‌ها فارسی است — با نامِ انگلیسی نمی‌شد تشخیص داد.)
+        $stats['active_cases'] = $runStat("SELECT COUNT(*) FROM cases WHERE status_id NOT IN (4, 5)");
         $stats['total_invoices'] = $runStat('SELECT COUNT(*) FROM doctor_invoices');
         $stats['unpaid_invoices'] = $runStat("SELECT COUNT(*) FROM doctor_invoices WHERE payment_status='unpaid'");
         $stats['monthly_revenue'] = $runStat("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE payment_status='paid' AND invoice_date BETWEEN ? AND ?", [$curMonthFrom, $curMonthTo]);
@@ -104,7 +106,7 @@ if ($role === 'admin' || $role === 'branch_admin') {
         $invBase = 'FROM doctor_invoices i WHERE ' . $invBr['sql'];
 
         $stats['cases'] = $runStat($caseCountSql, $caseScope['params']);
-        $stats['active_cases'] = $runStat($caseCountSql . ' AND c.status_id != 4', $caseScope['params']);
+        $stats['active_cases'] = $runStat($caseCountSql . ' AND c.status_id NOT IN (4, 5)', $caseScope['params']);
         $stats['total_invoices'] = $runStat('SELECT COUNT(*) ' . $invBase, $invBr['params']);
         $stats['unpaid_invoices'] = $runStat("SELECT COUNT(*) {$invBase} AND i.payment_status='unpaid'", $invBr['params']);
         $stats['monthly_revenue'] = $runStat("SELECT COALESCE(SUM(i.total_amount), 0) {$invBase} AND i.payment_status='paid' AND i.invoice_date BETWEEN ? AND ?", array_merge($invBr['params'], [$curMonthFrom, $curMonthTo]));
@@ -186,7 +188,12 @@ if ($role === 'admin' || $role === 'branch_admin') {
     $stmt->execute([$user['id']]);
     $totalCases = $stmt->fetchColumn();
 
-    $stmt2 = db()->prepare("SELECT COALESCE(SUM(total_amount), 0) FROM doctor_invoices WHERE doctor_id = ? AND payment_status = 'unpaid'");
+    // بدهی پزشک = فاکتورهای پرداخت‌نشده منهای پرداخت‌های جزئیِ ثبت‌شده (خالص)
+    $stmt2 = db()->prepare("SELECT COALESCE(SUM(i.total_amount - COALESCE(paid.applied, 0)), 0)
+        FROM doctor_invoices i
+        LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied FROM doctor_payment_invoices GROUP BY invoice_id) paid
+               ON paid.invoice_id = i.id
+        WHERE i.doctor_id = ? AND i.payment_status = 'unpaid'");
     $stmt2->execute([$user['id']]);
     $totalDebt = $stmt2->fetchColumn();
     ?>
@@ -214,6 +221,10 @@ if ($role === 'admin' || $role === 'branch_admin') {
         <div class="card">
             <h3>پرداخت‌ها</h3>
             <a class="btn" href="payments.php">مشاهده</a>
+        </div>
+        <div class="card">
+            <h3>پروفایل من</h3>
+            <a class="btn" href="my_profile.php">ویرایش مشخصات و رمز عبور</a>
         </div>
     </div>
     <?php

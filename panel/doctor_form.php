@@ -65,6 +65,25 @@ panel_layout_start($editing ? 'ویرایش پزشک' : 'افزودن پزشک �
                 اگر این پزشک مالک کلینیک است یا زیرمجموعه یک کلینیک/پزشک دیگر می‌شود، این گزینه را مشخص کنید.
             </small>
         </div>
+        <?php $docMemberClinics = $editing ? getUserClinicIds((int) $doctor['id']) : []; ?>
+        <div class="form-group">
+            <label>عضویت در کلینیک‌های دیگر (پزشکی که در چند کلینیک کار می‌کند)</label>
+            <div style="display:flex; flex-wrap:wrap; gap:10px; background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:10px;">
+                <?php $docAllClinics = getAllClinics(); ?>
+                <?php if (empty($docAllClinics)): ?>
+                    <span style="color:#64748b;">کلینیکی ثبت نشده است.</span>
+                <?php else: foreach ($docAllClinics as $cl): ?>
+                    <label style="display:inline-flex; align-items:center; gap:6px; font-weight:400; cursor:pointer;">
+                        <input type="checkbox" name="clinic_ids[]" value="<?= (int) $cl['id'] ?>"
+                            <?= in_array((int) $cl['id'], array_map('intval', $docMemberClinics), true) ? 'checked' : '' ?>>
+                        <?= htmlspecialchars($cl['full_name']) ?>
+                    </label>
+                <?php endforeach; endif; ?>
+            </div>
+            <small style="display:block; margin-top:6px; color:#525252;">
+                هر کلینیکی که این پزشک در آن کار می‌کند را علامت بزنید. (مثال: پزشکی که در دو کلینیک فعالیت می‌کند.)
+            </small>
+        </div>
 
         <div class="form-group">
             <label for="lab_id">لابراتوار زیرمجموعه (اختیاری)</label>
