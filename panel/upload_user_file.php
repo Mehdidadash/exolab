@@ -87,7 +87,7 @@ if (empty($files)) {
 
 $allowed = ['zip', 'rar', 'pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'stl', 'ply', 'stp', 'step', 'obj', '3mf',
     // فایل‌های خروجیِ دستگاه‌های اسکن
-    'matrix4', 'dentalproject', 'iftscan', 'dcm', 'dicom', 'txt', 'xml',
+    'matrix4', 'dentalproject', 'iftscan', 'constructioninfo', 'dcm', 'dicom', 'txt', 'xml',
     // گزارش/طراحی HTML (هنگام نمایش به‌صورت متن سرو می‌شود تا اسکریپت اجرا نشود)
     'html', 'htm'];
 foreach ($files as $f) {

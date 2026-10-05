@@ -523,9 +523,9 @@ panel_layout_start('مدیریت کیس‌ها');
                     <button type="button" id="cf-add-group" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0;">＋ افزودن گروه فایل دیگر</button>
                     <div id="cf-formats" style="margin-top:8px; font-size:.8rem; color:#64748b; line-height:1.8;">
                         فرمت‌های مجاز: <b>STL، PLY، STP، STEP، OBJ، 3MF</b> (اسکن/مدل سه‌بعدی) ·
-                        <b>matrix4، dentalProject، iftScan</b> (فایل دستگاهٔ اسکن) ·
+                        <b>matrix4، dentalProject، iftScan، constructionInfo، DCM، DICOM</b> (فایل دستگاهٔ اسکن) ·
                         <b>JPG، JPEG، PNG، GIF، WEBP، BMP</b> (تصویر) ·
-                        <b>RAR، ZIP</b> (بایگانی) · <b>PDF</b>
+                        <b>RAR، ZIP</b> (بایگانی) · <b>PDF</b> · <b>TXT، XML، HTML</b>
                     </div>
                     <div id="case-files-progress" style="display:none; margin-top:10px;">
                         <div style="display:flex; justify-content:space-between; align-items:center; font-size:.82rem; color:#333; margin-bottom:4px;">
@@ -589,7 +589,7 @@ panel_layout_start('مدیریت کیس‌ها');
         var TYPE_OPTIONS = <?= json_encode(caseFileTypeConfig()['options'], JSON_UNESCAPED_UNICODE) ?>;
         var TYPE_DEFAULT = <?= json_encode(caseFileTypeDefault($user)) ?>;
         var ALLOWED = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'rar', 'zip', 'pdf',
-            'matrix4', 'dentalproject', 'iftscan', 'dcm', 'dicom', 'txt', 'xml', 'html', 'htm'];
+            'matrix4', 'dentalproject', 'iftscan', 'constructioninfo', 'dcm', 'dicom', 'txt', 'xml', 'html', 'htm'];
         var ACCEPT = '.' + ALLOWED.join(',.');
         var host = document.getElementById('cf-groups');
         var groups = [];

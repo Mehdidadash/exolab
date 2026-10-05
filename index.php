@@ -1,6 +1,48 @@
 <?php
 // index.php
 
+/**
+ * محافظِ دیپلوی: روی هاست اگر بسته‌ی آپلود ناقص باشد (مثلاً پوشه‌ی panel/ یا فایل db.php
+ * آپلود نشده باشد) اینجا به‌جای Fatal error و صفحهٔ سفید/۵۰۰، یک پیام قابل‌فهم و
+ * قابل‌دیباگ نشان می‌دهیم. کاربر عادی فقط پیام ۵۰۳ می‌بیند؛ جزئیات مسیرها فقط برای
+ * مدیر (لاگین‌شده) نمایش داده می‌شود.
+ */
+$__requiredFiles = [
+    __DIR__ . '/panel/db.php',
+    __DIR__ . '/includes/helpers.php',
+];
+$__missingFiles = [];
+foreach ($__requiredFiles as $__f) {
+    if (!is_file($__f)) {
+        $__missingFiles[] = $__f;
+    }
+}
+
+if ($__missingFiles) {
+    error_log('index.php: missing required files: ' . implode(', ', $__missingFiles));
+    http_response_code(503);
+    @ini_set('display_errors', '0');
+    $__details = '';
+    require_once __DIR__ . '/panel/config.php';
+    require_once __DIR__ . '/panel/auth.php';
+    if (function_exists('is_admin') && is_admin()) {
+        $__details = '<ul style="text-align:left;direction:ltr;font-size:13px">'
+            . '<li>root = <code>' . htmlspecialchars(__DIR__) . '</code></li>'
+            . '<li>panel/ exists = <code>' . (is_dir(__DIR__ . '/panel') ? 'yes' : 'NO') . '</code></li>'
+            . '<li>missing = <code>' . htmlspecialchars(implode(' | ', $__missingFiles)) . '</code></li>'
+            . '</ul>';
+    }
+    echo '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">'
+        . '<title>سایت در دسترس نیست</title>'
+        . '<body style="font-family:Tahoma,sans-serif;background:#f7f7f9;margin:0;padding:60px 20px;text-align:center">'
+        . '<h1 style="color:#c0392b">⚠️ سایت موقتاً در دسترس نیست</h1>'
+        . '<p>نسخه‌ی برنامه روی سرور کامل نیست. لطفاً چند دقیقه بعد دوباره تلاش کنید.'
+        . ' در صورت ادامه، به پشتیبانی اطلاع دهید.</p>' . $__details
+        . '</body></html>';
+    exit;
+}
+unset($__requiredFiles, $__missingFiles, $__f, $__details);
+
 require_once __DIR__ . '/panel/db.php';
 require_once __DIR__ . '/includes/helpers.php';
 $prices = getPrices();

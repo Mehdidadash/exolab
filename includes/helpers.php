@@ -497,10 +497,18 @@ function relPathRoot(?string $relPath): ?array {
 /**
  * آیا این فایل «عضو یک پوشهٔ آپلودشده» است؟ (یعنی rel_path دارد و حداقل دو بخش)
  * فایل‌های تکی و بایگانی‌های ZIP ساخته‌شده از پوشه، عضوِ درخت محسوب نمی‌شوند.
+ *
+ * ⚠️ استثنا: اگر کاربر با فیلد «پوشه» در فرم آپلود، پوشهٔ جدیدی ساخته باشد
+ * (مثلاً «عکس‌ها») و فقط یک فایل داخلش ریخته باشد، rel_path آن تک‌بخشی است اما
+ * باید هم‌چنان داخل پوشه نمایش داده شود. پس تشخیص «عضویت در پوشه» را از روی
+ * فلگِ جداگانه می‌گیریم، نه فقط تعداد بخش‌ها.
  */
-function isFolderUploadFile(?string $relPath): bool {
+function isFolderUploadFile(?string $relPath, bool $inUserFolder = false): bool {
     $rel = sanitizeRelPath($relPath);
-    return $rel !== null && strpos($rel, '/') !== false;
+    if ($rel === null) {
+        return false;
+    }
+    return $inUserFolder || strpos($rel, '/') !== false;
 }
 
 /**
@@ -750,7 +758,8 @@ function caseFileBadge(?string $fileType, string $ext): string {
         'pdf' => ['PDF', '#fee2e2', '#991b1b'],
         // فایل‌های خروجیِ دستگاه‌های اسکن (ورودی پزشک)
         'matrix4' => ['فایل اسکنر', '#cffafe', '#155e75'], 'dentalproject' => ['فایل اسکنر', '#cffafe', '#155e75'],
-        'iftscan' => ['فایل اسکنر', '#cffafe', '#155e75'], 'dcm' => ['فایل اسکنر', '#cffafe', '#155e75'],
+        'iftscan' => ['فایل اسکنر', '#cffafe', '#155e75'], 'constructioninfo' => ['فایل اسکنر', '#cffafe', '#155e75'],
+        'dcm' => ['فایل اسکنر', '#cffafe', '#155e75'],
         'dicom' => ['فایل اسکنر', '#cffafe', '#155e75'],
         'txt' => ['متنی', '#f3f4f6', '#374151'], 'xml' => ['متنی', '#f3f4f6', '#374151'],
         'html' => ['HTML طراحی', '#ede9fe', '#5b21b6'], 'htm' => ['HTML طراحی', '#ede9fe', '#5b21b6'],

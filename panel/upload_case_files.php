@@ -68,7 +68,7 @@ $uploadDir = ensure_uploads_dir('cases/' . $caseId) . '/';
 
 $allowed = ['stl', 'ply', 'stp', 'step', 'obj', '3mf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'rar', 'zip', 'pdf',
     // فایل‌های خروجیِ دستگاه‌های اسکن که پزشک‌ها آپلود می‌کنند
-    'matrix4', 'dentalproject', 'iftscan', 'dcm', 'dicom', 'txt', 'xml',
+    'matrix4', 'dentalproject', 'iftscan', 'constructioninfo', 'dcm', 'dicom', 'txt', 'xml',
     // گزارش/طراحی HTML (هنگام نمایش به‌صورت متن سرو می‌شود تا اسکریپت اجرا نشود)
     'html', 'htm'];
 $errors = [];

@@ -838,22 +838,38 @@ label > .fi,
 /* ستون‌های عددی/متادیتا: خاکستری و بدون شکستن خط */
 .fl-meta { color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fl-size { text-align: center; }
-/* ستونِ عملیات: دکمه‌ها در یک ردیف بدون پرشِ چیدمان */
+/* ستونِ عملیات: دکمه‌ها در یک ردیف بدون پرشِ چیدمان
+   ── یکنواختی اندازهٔ دکمه‌ها ──
+   قبلاً اندازه به محتوای هر دکمه (ایموجی/text) و استایل inline وابسته بود، پس
+   ارتفاع‌ها و فونت‌ها ناهمگون می‌شد. حالا همهٔ دکمه‌ها یک ارتفاع و یک فونت ثابت
+   دارند و جای کافی بینشان هست. */
 .fl-actions {
     display: flex;
-    gap: 4px;
+    gap: 8px;
     align-items: center;
     justify-content: flex-end;
-    /* دکمه‌ها به‌هم نمی‌چسبند: هم‌ترازیِ راست و فاصلهٔ یکنواخت حتی وقتی
-       بعضی دکمه‌ها به‌خاطر نداشتن دسترسی رندر نمی‌شوند. */
     min-width: 0;
     flex-wrap: nowrap;
 }
 .fl-actions form { display: inline-flex; margin: 0; }
-.fl-actions .btn, .fl-actions button, .fl-actions a {
-    padding: 3px 8px;
+.fl-actions .btn,
+.fl-actions button,
+.fl-actions a {
+    /* همان اندازه و ارتفاع برای همه، مستقل از محتوا */
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    height: 28px;
+    padding: 0 9px;
     font-size: .78rem;
+    line-height: 1;
     white-space: nowrap;
+    border-radius: 7px;
+    /* فونت و وزن یکسان (استایل inline فقط رنگ را تعیین می‌کند) */
+    font-family: inherit;
+    font-weight: 600;
 }
 /* برچسبِ کوچکِ «حجم کل پوشه» */
 .fl-badge {
@@ -864,6 +880,192 @@ label > .fi,
     font-size: .74rem;
     font-weight: 400;
 }
+
+/* ── نوار ابزار پوشه (به سبک Windows Explorer / cPanel) ──
+   بالای لیست فایل‌ها: ساخت پوشه، باز/بستن همه، و نمایش مسیر مقصدِ آپلود. */
+.fl-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 7px 10px;
+    margin-bottom: 8px;
+    font-size: .84rem;
+}
+.fl-toolbar .btn {
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    font-size: .8rem;
+    font-weight: 600;
+    border-radius: 7px;
+    white-space: nowrap;
+}
+/* «مسیر» مقصد آپلود — شبیه نوار آدرس ویندوز */
+.fl-toolbar__path {
+    margin-inline-start: auto;
+    direction: ltr;
+    text-align: left;
+    background: #fff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: .78rem;
+    font-weight: 700;
+    color: #0f172a;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* ردیف‌های تودرتو: خط راهنمای عمودی برای دیدن سلسله‌مراتب */
+.fl-row--child { border-inline-start: 3px solid #e2e8f0; }
+
+/* ══════════════════════════════════════════════════════════════════
+   سلسله‌مراتبِ پوشه‌ها — کاربر باید فوراً بفهمد کدام پوشه زیرمجموعهٔ
+   کدام است. سه نشانهٔ هم‌زمان به‌کار می‌رود:
+     ۱) رنگِ پس‌زمینه (سطح ۰ تیره‌ترِ آبی → سطح ۳ روشن‌ترِ خاکستری)
+     ۲) اندازهٔ فونتِ نام (هر سطح ۱px کوچک‌تر)
+     ۳) خطِ اتصالِ عمودی + نُقُطهٔ تیرکِ افقی کنارِ زیرپوشه‌ها
+   ══════════════════════════════════════════════════════════════════ */
+
+/* هر پوشه = یک «بسته» شامل ردیفِ خودش + ظرفِ فرزندانش.
+   چیدمان تودرتو (نه لیستِ تخت) تا جمع‌کردنِ پوشهٔ والد
+   به‌طور طبیعی همهٔ زیرپوشه‌ها و فایل‌های تودرتو را پنهان کند. */
+.fl-folder-wrap { display: block; }
+.fl-folder-wrap > .fl-children { display: block; }
+
+/* ── خطِ اتصالِ عمودی: نشان می‌دهد فرزندان متعلق به پوشهٔ بالایی‌اند ── */
+.fl-children {
+    position: relative;
+    border-inline-start: 2px dashed #cbd5e1;
+    margin-inline-start: 14px;
+}
+
+/* ── نشانِ سطح («ریشه» / ۱ / ۲ / ...) ── */
+.fl-lvl {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 17px;
+    padding: 0 5px;
+    border-radius: 999px;
+    font-size: .62rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0;
+    background: #e2e8f0;
+    color: #475569;
+    border: 1px solid #cbd5e1;
+}
+.fl-lvl--root {
+    min-width: 34px;
+    background: #4f46e5;
+    color: #fff;
+    border-color: #4338ca;
+}
+.fl-row--folder[data-depth="1"] .fl-lvl { background: #dbeafe; color: #1e40af; border-color: #bfdbfe; }
+.fl-row--folder[data-depth="2"] .fl-lvl { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.fl-row--folder[data-depth="3"] .fl-lvl,
+.fl-row--folder[data-depth="4"] .fl-lvl,
+.fl-row--folder[data-depth="5"] .fl-lvl { background: #f8fafc; color: #64748b; border-color: #e2e8f0; opacity: .85; }
+
+/* آیکون پوشه — اندازه‌اش با عمق کم می‌شود */
+.fl-folder-ico { flex: 0 0 auto; font-size: 1em; line-height: 1; }
+.fl-row--folder[data-depth="0"] .fl-folder-ico { font-size: 1.05rem; }
+.fl-row--folder[data-depth="3"] .fl-folder-ico,
+.fl-row--folder[data-depth="4"] .fl-folder-ico,
+.fl-row--folder[data-depth="5"] .fl-folder-ico { opacity: .7; }
+
+/* برچسبِ «زیرپوشه» */
+.fl-badge--sub { background: #e0e7ff; color: #3730a3; }
+
+/* تیرکِ کنارِ فایل‌های داخل پوشه */
+.fl-tick { color: #94a3b8; flex: 0 0 auto; }
+
+/* ── تیرکِ افقی: از خطِ عمودی به هر فرزند ── */
+.fl-children > .fl-folder-wrap > .fl-row--folder::before,
+.fl-children > .fl-row--child::before {
+    content: "";
+    position: absolute;
+    inset-inline-start: -14px;
+    top: 50%;
+    width: 10px;
+    height: 2px;
+    background: #cbd5e1;
+}
+.fl-children > .fl-folder-wrap > .fl-row--folder,
+.fl-children > .fl-row--child { position: relative; }
+
+/* ── سطح ۰ (ریشه): پررنگ‌ترین و درشت‌ترین ── */
+.fl-row--folder[data-depth="0"] {
+    background: #e0e7ff;
+    color: #1e1b4b;
+    border-bottom: 1px solid #c7d2fe;
+}
+.fl-row--folder[data-depth="0"].is-open { background: #c7d2fe; }
+.fl-row--folder[data-depth="0"] .fl-name__txt { font-size: .9rem; font-weight: 800; }
+
+/* ── سطح ۱: آبیِ روشن ── */
+.fl-row--folder[data-depth="1"] {
+    background: #eef2ff;
+    color: #312e81;
+}
+.fl-row--folder[data-depth="1"].is-open { background: #dbeafe; }
+.fl-row--folder[data-depth="1"] .fl-name__txt { font-size: .84rem; font-weight: 700; }
+
+/* ── سطح ۲: خاکستریِ سردِ روشن ── */
+.fl-row--folder[data-depth="2"] {
+    background: #f1f5f9;
+    color: #334155;
+}
+.fl-row--folder[data-depth="2"].is-open { background: #e2e8f0; }
+.fl-row--folder[data-depth="2"] .fl-name__txt { font-size: .8rem; font-weight: 600; }
+
+/* ── سطح ۳ و پایین‌تر: محوترین و ریزترین (نشانهٔ عمقِ زیاد) ── */
+.fl-row--folder[data-depth="3"],
+.fl-row--folder[data-depth="4"],
+.fl-row--folder[data-depth="5"] {
+    background: #f8fafc;
+    color: #475569;
+    font-weight: 500;
+}
+.fl-row--folder[data-depth="3"].is-open,
+.fl-row--folder[data-depth="4"].is-open,
+.fl-row--folder[data-depth="5"].is-open { background: #f1f5f9; }
+.fl-row--folder[data-depth="3"] .fl-name__txt,
+.fl-row--folder[data-depth="4"] .fl-name__txt,
+.fl-row--folder[data-depth="5"] .fl-name__txt { font-size: .76rem; font-weight: 500; }
+.fl-row--folder[data-depth="3"] .fl-badge,
+.fl-row--folder[data-depth="4"] .fl-badge,
+.fl-row--folder[data-depth="5"] .fl-badge { opacity: .75; }
+
+/* ── نشانگرِ سطح: نوارِ رنگیِ باریک در ابتدای ردیفِ پوشه ── */
+.fl-row--folder { position: relative; }
+.fl-row--folder::after {
+    content: "";
+    position: absolute;
+    inset-inline-start: 0;
+    top: 0; bottom: 0;
+    width: 4px;
+}
+.fl-row--folder[data-depth="0"]::after { background: #4f46e5; }
+.fl-row--folder[data-depth="1"]::after { background: #6366f1; }
+.fl-row--folder[data-depth="2"]::after { background: #94a3b8; }
+.fl-row--folder[data-depth="3"]::after,
+.fl-row--folder[data-depth="4"]::after,
+.fl-row--folder[data-depth="5"]::after { background: #cbd5e1; }
+
+/* ── فایل‌های داخل پوشهٔ تودرتو: کمی ریزتر و خاکستری‌تر شوند ── */
+.fl-children .fl-children .fl-row--child { background: #fcfdff; }
+.fl-children .fl-children .fl-row--child .fl-name__txt { font-size: .82rem; color: #475569; }
 @media (max-width: 900px) {
     /* روی صفحه‌های باریک، ستون‌های متادیتا کنارِ نام می‌روند */
     .fl-details__head { display: none; }
@@ -873,6 +1075,12 @@ label > .fi,
         padding: 8px 10px;
     }
     .fl-row .fl-meta { grid-column: 1 / -1; }
+    /* تورفتگیِ کمتر تا در موبایل فضای نام باقی بماند */
+    .fl-children { margin-inline-start: 8px; }
+    .fl-children > .fl-folder-wrap > .fl-row--folder::before,
+    .fl-children > .fl-row--child::before { inset-inline-start: -8px; width: 6px; }
+    .fl-lvl { min-width: 17px; padding: 0 4px; font-size: .58rem; }
+    .fl-lvl--root { min-width: 28px; }
 }
 
 /* ── جدول آیتم‌های فاکتور (کامپوننت مشترک: includes/invoice_items_table.php) ──

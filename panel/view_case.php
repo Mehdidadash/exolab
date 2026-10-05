@@ -971,11 +971,22 @@ panel_layout_start('مشاهده کیس');
             </style>
             <strong>آپلود فایل</strong>
             <form id="case-upload-form" enctype="multipart/form-data" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
-                <input type="file" id="case-upload-input" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.rar,.zip,.pdf,.matrix4,.dentalProject,.iftScan,.dcm,.dicom,.txt,.xml,.html,.htm" multiple hidden>
+                <input type="file" id="case-upload-input" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.rar,.zip,.pdf,.matrix4,.dentalProject,.iftScan,.constructionInfo,.dcm,.dicom,.txt,.xml,.html,.htm" multiple hidden>
                 <?php // انتخاب پوشه: مرورگر خودِ پوشه را نمی‌فرستد بلکه همهٔ فایل‌های داخلش را با مسیر نسبی می‌دهد ?>
                 <input type="file" id="case-upload-folder-input" multiple hidden>
                 <button type="button" id="case-upload-pick-files" class="btn" style="background:#e0f2fe; color:#0369a1;">🗂 انتخاب فایل</button>
                 <button type="button" id="case-upload-pick-folder" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0;">📁 انتخاب پوشه</button>
+
+                <?php // ── پوشهٔ مقصد: مثل Windows Explorer / cPanel ──
+                // • «📁 پوشه جدید» یک پوشه می‌سازد (در ریشه یا داخل پوشهٔ انتخاب‌شده)
+                // • انتخابگرِ مسیر نشان می‌دهد فایل‌ها کجا می‌روند
+                // • دکمهٔ «xx» مسیر را به ریشه برمی‌گرداند ?>
+                <span class="vc-up-item" style="display:inline-flex; align-items:center; gap:6px;">
+                    <span class="vc-up-lbl">مقصد:</span>
+                    <span id="case-upload-dest" style="background:#eef2ff; color:#3730a3; border-radius:6px; padding:3px 9px; font-size:.8rem; font-weight:700;" title="فایل‌ها داخل این پوشه ذخیره می‌شوند">ریشهٔ کیس</span>
+                    <button type="button" id="case-upload-dest-root" class="btn" style="background:#E5E7EB; color:#0F172A; padding:2px 7px; font-size:.75rem;" title="بازگشت به ریشهٔ کیس">✕ ریشه</button>
+                </span>
+                <button type="button" id="case-upload-new-folder" class="btn" style="background:#fef3c7; color:#92400e; border:1px solid #fde68a;" title="ساخت پوشهٔ جدید در مقصد فعلی">📁 پوشه جدید</button>
 
                 <?php // ── یک ردیفِ فشرده: نوع فایل · ZIP · توضیحات ── ?>
                 <label class="vc-up-item" title="نوع فایل‌های این ارسال">
@@ -1026,7 +1037,20 @@ panel_layout_start('مشاهده کیس');
             var listEl      = document.getElementById('case-upload-folder-list');
             // فایل‌های انتخاب‌شده (شامل مسیر نسبی) — چون input.files با هر انتخاب خالی می‌شود
             var picked = [];
-            var ALLOWED = <?= json_encode(['stl','ply','stp','step','obj','3mf','jpg','jpeg','png','gif','webp','bmp','rar','zip','pdf','matrix4','dentalproject','iftscan','dcm','dicom','txt','xml','html','htm']) ?>;
+            var ALLOWED = <?= json_encode(['stl','ply','stp','step','obj','3mf','jpg','jpeg','png','gif','webp','bmp','rar','zip','pdf','matrix4','dentalproject','iftscan','constructioninfo','dcm','dicom','txt','xml','html','htm']) ?>;
+            // پوشه‌های موجود کیس (برای نمایش/پیشنهاد) — مقصد آپلود در
+            // window.__CASE_UPLOAD_DEST__ نگه داشته می‌شود (نوار مدیریت پوشه).
+            var EXISTING_FOLDERS = <?= json_encode(array_values($existingFolderRoots ?? []), JSON_UNESCAPED_UNICODE) ?>;
+            // پاک‌سازی مسیر پوشه: کاراکترهای کنترلی و اسلش‌های تکراری حذف می‌شوند.
+            // (نام هر سگمنت سمت سرور دوباره با sanitizeRelPath بررسی می‌شود.)
+            function cleanFolderName(v) {
+                return String(v || '')
+                    .replace(/[\u0000-\u001f\u007f]/g, '')
+                    .replace(/\/{2,}/g, '/')
+                    .replace(/^\/+|\/+$/g, '')
+                    .trim()
+                    .slice(0, 240);
+            }
 
             // انتخاب پوشه با webkitdirectory
             if (folderInput && 'webkitdirectory' in folderInput) {
@@ -1206,14 +1230,24 @@ panel_layout_start('مشاهده کیس');
                 if (sizeErr) { if (msgEl) { msgEl.textContent = '⚠️ ' + sizeErr; msgEl.style.color = '#b91c1c'; } showHelp('error'); return; }
                 var fd = new FormData();
                 fd.append('case_id', '<?= (int) $case['id'] ?>');
+                // ── پوشهٔ مقصد (از نوار مدیریت پوشه — به سبک Windows/cPanel) ──
+                // اگر کاربر روی «⬆ آپلود اینجا» یا «📁 پوشه جدید» زده باشد، مسیر در
+                // window.__CASE_UPLOAD_DEST__ است و فایل‌ها داخل آن می‌روند.
+                var userFolder = cleanFolderName(window.__CASE_UPLOAD_DEST__ || '');
                 picked.forEach(function(p){
                     fd.append('case_files[]', p.file);
-                    fd.append('rel_paths[]', p.rel || '');
+                    var rel = p.rel || '';
+                    if (userFolder) {
+                        rel = rel ? (userFolder + '/' + rel) : userFolder;
+                    }
+                    fd.append('rel_paths[]', rel);
                 });
                 // نام پوشهٔ ریشه (برای نام‌گذاری ZIP و گروه‌بندی در نمایش)
-                var rootName = '';
-                for (var k = 0; k < picked.length; k++) {
-                    if (isFolderFile(picked[k])) { rootName = picked[k].rel.split('/')[0]; break; }
+                var rootName = userFolder;
+                if (!rootName) {
+                    for (var k = 0; k < picked.length; k++) {
+                        if (isFolderFile(picked[k])) { rootName = picked[k].rel.split('/')[0]; break; }
+                    }
                 }
                 if (rootName) fd.append('folder_name', rootName);
                 var compressCb = document.getElementById('case-upload-compress');
@@ -1268,25 +1302,73 @@ panel_layout_start('مشاهده کیس');
         })();
         </script>
         <?php endif; ?>
-        <?php if (empty($files)): ?>
-            <p>هیچ فایلی آپلود نشده است.</p>
-        <?php else: ?>
-            <?php
-            // ── آماده‌سازی: جدا کردن فایل‌های «آپلود پوشه‌ای» از فایل‌های تکی ──
-            // فایل‌هایی که rel_path دارند (و حداقل دو بخش‌اند) عضو یک پوشهٔ آپلودشده هستند
-            // و در نمایش، زیر «گروه پوشه» می‌آیند؛ بقیه به‌صورت ردیفِ تکی می‌مانند.
-            $folderGroups = [];   // rootName => [files...]
-            $flatFiles = [];
+        <?php
+        // ── آماده‌سازی: جدا کردن فایل‌های «داخل پوشه» از فایل‌های تکی ──
+        // این بخش باید **قبل از** رندر نوار پوشه اجرا شود و به فایل‌ها وابسته نیست،
+        // چون باید برای کیسِ بدون فایل هم کار کند (تا کاربر بتواند پوشه بسازد).
+        $folderGroups = [];   // rootName => [files...]
+        $flatFiles = [];
+        $existingFolderRoots = [];
+        if (!empty($files)) {
             $imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
             foreach ($files as $f) {
                 $rp = relPathRoot($f['rel_path'] ?? null);
-                if ($rp && isFolderUploadFile($f['rel_path'] ?? null)) {
+                // پوشه است اگر: چندبخشی باشد، یا تک‌بخشی و بدون پسوند فایل
+                $isFolder = $rp && (
+                    $rp['rest'] !== ''
+                    || pathinfo($rp['root'], PATHINFO_EXTENSION) === ''
+                );
+                if ($isFolder) {
                     $folderGroups[$rp['root']][] = $f;
                 } else {
                     $flatFiles[] = $f;
                 }
             }
+            $existingFolderRoots = array_keys($folderGroups);
+            sort($existingFolderRoots, SORT_NATURAL | SORT_FLAG_CASE);
+        }
+        $imageExts = $imageExts ?? ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
 
+        // ── نوار ابزار پوشه (به سبک Windows Explorer / cPanel) ──
+        // ⚠️ این نوار **بیرون** از شرط «کیس فایل دارد؟» رندر می‌شود تا روی کیسِ
+        // خالی هم کاربر بتواند پوشهٔ جدید بسازد و بعد فایل داخلش بریزد.
+        // دسترسی: همان کسانی که اجازهٔ آپلود/ویرایش فایل دارند.
+        ?>
+        <?php if (has_role('admin') || has_permission('upload_files') || has_permission('upload_design_files') || has_permission('edit_cases') || is_designer_user($user)): ?>
+        <div class="fl-toolbar" id="case-files-toolbar"
+             data-case="<?= (int) $case['id'] ?>"
+             data-action-url="case_folder_action.php"
+             data-csrf="<?= htmlspecialchars($csrf_token) ?>">
+            <button type="button" class="btn js-fl-new-folder"
+                    style="background:#fef3c7; color:#92400e; border:1px solid #fde68a;"
+                    title="ساخت پوشهٔ جدید در ریشهٔ کیس">📁 پوشه جدید</button>
+            <button type="button" class="btn js-fl-expand-all" data-scope="#case-files-toolbar ~ .fl-details"
+                    style="background:#f1f5f9; color:#0f172a;" title="باز کردن همهٔ پوشه‌ها">⊞ باز کردن همه</button>
+            <button type="button" class="btn js-fl-collapse-all" data-scope="#case-files-toolbar ~ .fl-details"
+                    style="background:#f1f5f9; color:#0f172a;" title="بستن همهٔ پوشه‌ها">⊟ بستن همه</button>
+            <span class="fl-toolbar__path" id="case-files-path" title="پوشهٔ مقصد برای آپلود">
+                📂 ریشهٔ کیس
+            </span>
+            <span id="case-folder-msg" style="font-size:.8rem; font-weight:700;"></span>
+        </div>
+        <?php endif; ?>
+
+        <?php if (empty($files)): ?>
+            <p>هیچ فایلی آپلود نشده است.</p>
+            <?php
+            // لیست فایل‌ها خالی است. نوار پوشه و اسکریپت مشترک پایین‌تر (در بلوک else)
+            // رندر می‌شوند — ولی چون اینجا else اجرا نمی‌شود، اسکریپت را همین‌جا می‌آوریم.
+            renderFileDetailsView([], [
+                'empty'                  => 'برای این کیس فایلی آپلود نشده است. با «📁 پوشه جدید» شروع کنید یا فایل آپلود کنید.',
+                'folder_actions'         => '',
+                'folder_download_action' => '',
+                'folder_new'             => true,
+                'folder_upload'          => true,
+            ]);
+            ?>
+            <?php require __DIR__ . '/partials/case_folder_js.php'; ?>
+        <?php else: ?>
+            <?php
             /**
              * ساختِ HTML دکمه‌های عملیاتِ یک فایل — برای «نمای Details».
              * همهٔ دکمه‌ها از کلاس‌های موجود (file-load / file-image / file-action-*) استفاده
@@ -1297,13 +1379,18 @@ panel_layout_start('مشاهده کیس');
             $fileActionsHtml = function (array $f, ?string $subPath = null) use (
                 $imageExts, $user, $case, $canAppendNote
             ) {
-                $ext = strtolower(pathinfo($f['filename'], PATHINFO_EXTENSION));
-                $isImage = in_array($ext, $imageExts);
-                $fileUrl = 'serve_case_file.php?id=' . $f['id'] . '&n=' . rawurlencode($f['original_name']);
-                $fileDesc = trim((string) ($f['description'] ?? ''));
                 $out = '';
 
-                // ── «باز کردن»: تصویر / PDF / مدل سه‌بعدی ──
+                // ── «باز کردن»: تصویر / PDF / مدل سه‌بعدی / وب‌ویو exocad ──
+                // پسوند از «نامِ اصلی» گرفته می‌شود (نه از filename تصادفی) تا اگر نام
+                // تغییر کرد، نوع فایل همچنان درست تشخیص داده شود.
+                $ext = strtolower(pathinfo((string) ($f['original_name'] ?: $f['filename']), PATHINFO_EXTENSION));
+                $isImage = in_array($ext, $imageExts, true);
+                $isModel = in_array($ext, ['stl', 'ply'], true);
+                $isWebView = in_array($ext, ['html', 'htm', 'xhtml'], true);
+                $fileUrl = 'serve_case_file.php?id=' . $f['id'] . '&n=' . rawurlencode($f['original_name']);
+                $fileDesc = trim((string) ($f['description'] ?? ''));
+
                 if ($isImage) {
                     $out .= '<button class="btn file-image" data-file="' . htmlspecialchars($fileUrl) . '"'
                           . ' style="background:#e0f2fe; color:#0369a1;" title="' . htmlspecialchars($fileDesc !== '' ? $fileDesc : 'نمایش تصویر') . '">🖼 نمایش</button>';
@@ -1311,9 +1398,19 @@ panel_layout_start('مشاهده کیس');
                     $out .= '<a class="btn" href="' . htmlspecialchars($fileUrl) . '" target="_blank" rel="noopener"'
                           . ' style="background:#fee2e2; color:#991b1b; text-decoration:none;"'
                           . ' title="' . htmlspecialchars($fileDesc !== '' ? $fileDesc : 'باز کردن PDF') . '">📄 PDF</a>';
-                } else {
+                } elseif ($isWebView) {
+                    // خروجی exocad (FRAME/طراحی) — داخل iframe سندباکس رندر می‌شود
+                    $out .= '<button class="btn file-webview" data-file="' . htmlspecialchars($fileUrl) . '"'
+                          . ' data-name="' . htmlspecialchars($f['original_name']) . '"'
+                          . ' style="background:#ede9fe; color:#5b21b6;" title="' . htmlspecialchars($fileDesc !== '' ? $fileDesc : 'نمایش سه‌بعدی exocad') . '">🧊 نمایش سه‌بعدی</button>';
+                } elseif ($isModel) {
                     $out .= '<button class="btn file-load" data-file="' . htmlspecialchars($fileUrl) . '"'
-                          . ' style="background:#e0f2fe; color:#0369a1;" title="' . htmlspecialchars($fileDesc !== '' ? $fileDesc : 'باز کردن') . '">باز کردن</button>';
+                          . ' style="background:#e0f2fe; color:#0369a1;" title="' . htmlspecialchars($fileDesc !== '' ? $fileDesc : 'باز کردن مدل سه‌بعدی') . '">باز کردن</button>';
+                } else {
+                    // سایر فرمت‌ها (اسکنر/بایگانی/متنی) — دکمهٔ «باز کردن» همان دانلود است
+                    $out .= '<a class="btn" href="' . htmlspecialchars($fileUrl) . '" target="_blank" rel="noopener"'
+                          . ' style="background:#e0f2fe; color:#0369a1; text-decoration:none;"'
+                          . ' title="' . htmlspecialchars($fileDesc !== '' ? $fileDesc : 'باز کردن') . '">باز کردن</a>';
                 }
 
                 // ── دانلود (پزشک/کلینیک دکمهٔ دانلود ندارند) ──
@@ -1426,16 +1523,23 @@ panel_layout_start('مشاهده کیس');
             }
 
             $canDeleteFolder = has_permission('edit_cases') || has_permission('upload_files') || has_role('admin');
-            $folderActionsHtml = $canDeleteFolder
-                ? '<button type="button" class="btn js-vc-del-folder" style="background:#fee2e2; color:#991b1b;"'
-                  . ' data-case="' . (int) $case['id'] . '" data-folder="__FOLDER__" data-count="__COUNT__"'
-                  . ' title="حذف کل این پوشه و همهٔ فایل‌های داخلش">🗑 حذف پوشه</button>'
-                : '';
 
+            $folderActionsHtml = '';
+            if ($canDeleteFolder) {
+                $folderActionsHtml .=
+                    '<button type="button" class="btn js-vc-del-folder" style="background:#fee2e2; color:#991b1b;"'
+                  . ' data-case="' . (int) $case['id'] . '" data-folder="__FOLDER__" data-count="__COUNT__"'
+                  . ' title="حذف کل این پوشه و همهٔ فایل‌های داخلش">🗑 حذف</button>';
+            }
+
+            // ── نوار ابزار پوشه قبلاً (بیرون از این شرط) رندر شده است تا روی کیسِ
+            //    خالی هم کار کند. پس اینجا فقط لیست را می‌سازیم. ──
             renderFileDetailsView($fileRows, [
-                'empty'                  => 'برای این کیس فایلی آپلود نشده است.',
+                'empty'                  => 'برای این کیس فایلی آپلود نشده است. با «📁 پوشه جدید» شروع کنید یا فایل آپلود کنید.',
                 'folder_actions'         => $folderActionsHtml,
                 'folder_download_action' => 'download_case_folder.php?case=' . (int) $case['id'] . '&folder=__FOLDER__',
+                'folder_new'             => true,   // دکمهٔ «＋ زیرپوشه» روی هر پوشه
+                'folder_upload'          => true,   // دکمهٔ «⬆ آپلود اینجا» روی هر پوشه
             ]);
             ?>
 
@@ -1467,15 +1571,45 @@ panel_layout_start('مشاهده کیس');
                         <button id="view-front" class="btn" style="padding:4px 8px; font-size:0.8rem;">نمای جلو</button>
                         <button id="view-side" class="btn" style="padding:4px 8px; font-size:0.8rem;">نمای کنار</button>
                     </div>
-                    <div style="font-size:10px; color:#666; margin-top:4px; text-align:center;">کلیک+درگ = چرخش | اسکرول = زوم</div>
+                    <div style="font-size:10px; color:#666; margin-top:5px; text-align:center; line-height:1.7;">
+                        <b>کلیک راست + درگ</b> = چرخش<br>
+                        <b>هر دو کلیک با هم + درگ</b> = جابه‌جایی صحنه<br>
+                        <b>اسکرول</b> = زوم (روی محل نشانگر)<br>
+                        <b>کلیک وسط</b> = آن نقطه مرکز چرخش شود<br>
+                        <b>کلیدهای ↑↓←→</b> = جابه‌جایی صحنه<br>
+                        <span style="color:#94a3b8;">همان کنترل exocad 3.2</span>
+                    </div>
                 </div>
                 <div id="viewer-placeholder" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#9ca3af; font-size:1.1rem; pointer-events:none;">
                     روی فایل کلیک کنید تا نمایش داده شود
                 </div>
+                <?php // وضعیت بارگذاری/خطا — پایین نمایشگر، تا در صورت خالی ماندن معلوم باشد چرا ?>
+                <div id="viewer-status" style="display:none; position:absolute; right:8px; bottom:8px; background:rgba(255,255,255,0.95); border-radius:8px; padding:5px 10px; font-size:12px; z-index:1001;"></div>
             </div>
             <?php // بستن نمایشگر سه‌بعدی — مثل دکمهٔ «بستن تصویر» برای عکس‌ها ?>
             <div id="viewer-close-wrap" style="display:none; text-align:center; margin:8px 0 16px;">
                 <button id="close-3d-viewer" class="btn" style="background:#E5E7EB; color:#0F172A;">بستن مدل سه‌بعدی</button>
+            </div>
+
+            <?php // ── نمایشگر وب‌ویو exocad (خروجی FRAME/طراحی) ──
+            // این فایل‌ها HTML هستند و خودشان مدل را با JavaScript رندر می‌کنند.
+            // داخل iframe با sandbox رندر می‌شوند تا اسکریپتشان اجرا شود ولی به
+            // کوکی/دامنهٔ سایت دسترسی نداشته باشد. ?>
+            <div id="webview-wrap" style="display:none; margin-bottom:16px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:8px;">
+                    <div id="webview-title" style="font-weight:700; font-size:.9rem; color:#5b21b6;"></div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <a id="webview-open-tab" class="btn" href="#" target="_blank" rel="noopener"
+                           style="background:#ede9fe; color:#5b21b6; text-decoration:none;">↗ باز کردن در تب جدید</a>
+                        <button id="webview-close" class="btn" style="background:#E5E7EB; color:#0F172A;">بستن نمایش سه‌بعدی</button>
+                    </div>
+                </div>
+                <iframe id="webview-frame" title="نمایش سه‌بعدی exocad" sandbox="allow-scripts"
+                        style="width:100%; height:620px; border:1px solid #c4b5fd; border-radius:12px; background:#fff;"
+                        referrerpolicy="no-referrer"></iframe>
+                <div style="font-size:11px; color:#6b7280; margin-top:6px;">
+                    این فایل خروجی نرم‌افزار exocad است و مدل داخل خودش رندر می‌شود (اجرای اسکریپت در حالت سندباکس، بدون دسترسی به حساب شما).
+                </div>
             </div>
             <!-- Rename modal -->
             <style>
@@ -1574,12 +1708,31 @@ panel_layout_start('مشاهده کیس');
                 const scene = new THREE.Scene();
                 scene.background = new THREE.Color(0xf0f2f5);
 
-                const camera = new THREE.PerspectiveCamera(40, container.clientWidth / container.clientHeight, 0.1, 1000);
+                // ⚠️ کانتینر در ابتدا display:none است ⇒ clientWidth/clientHeight هر دو ۰
+                // می‌شوند. اگر دوربین با aspect = 0/0 = NaN ساخته شود، ماتریس تصویر برای
+                // همیشه خراب می‌ماند و **هیچ مدلی دیده نمی‌شود** (حتی بعد از نمایش کانتینر).
+                // پس اندازه‌ها با یک fallback امن گرفته می‌شوند و هنگام نمایش بازمحاسبه.
+                function viewerSize() {
+                    const w = container.clientWidth || container.offsetWidth || 900;
+                    const h = container.clientHeight || 520;
+                    return { w: w, h: Math.max(h, 1) };
+                }
+                const initSize = viewerSize();
+
+                const camera = new THREE.PerspectiveCamera(40, initSize.w / initSize.h, 0.1, 1000);
                 const renderer = new THREE.WebGLRenderer({ antialias: true });
                 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-                renderer.setSize(container.clientWidth, container.clientHeight);
+                renderer.setSize(initSize.w, initSize.h);
                 renderer.shadowMap.enabled = true;
                 container.appendChild(renderer.domElement);
+
+                // اندازهٔ واقعی را وقتی کانتینر نمایان شد بگیر (بار اول بی‌خطر است)
+                function resizeRenderer() {
+                    const s = viewerSize();
+                    camera.aspect = s.w / s.h;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(s.w, s.h);
+                }
 
                 // Lighting
                 const ambientLight = new THREE.AmbientLight(0x404060);
@@ -1597,10 +1750,8 @@ panel_layout_start('مشاهده کیس');
                 rimLight.position.set(0, -2, 2);
                 scene.add(rimLight);
 
-                // Ground grid
-                const gridHelper = new THREE.GridHelper(200, 20, 0x444444, 0x888888);
-                gridHelper.position.y = -20;
-                scene.add(gridHelper);
+                // Ground grid حذف شد — کاربر نیازی به خطوط کمکی ندارد و فضای دید را
+                // شلوغ می‌کرد. (اگر بعداً لازم شد، با GridHelper برگردانید.)
 
                 camera.position.set(100, 50, 100);
                 camera.lookAt(0, 0, 0);
@@ -1609,7 +1760,31 @@ panel_layout_start('مشاهده کیس');
                 let currentScale = 1;
                 const controls = new OrbitControls(camera, renderer.domElement);
                 controls.enableDamping = true;
-                controls.dampingFactor = 0.1;
+                controls.dampingFactor = 0.12;
+
+                // ── کنترل ماوس، عیناً مطابق exocad 3.2 ──
+                // منبع: wiki رسمی exocad («DentalCAD — overview» → Navigating in 3D Space):
+                //   • کلیک راست + درگ  ⇒ چرخش دور مرکز چرخش (پیش‌فرض: مرکز اشیای صحنه)
+                //   • اسکرول چرخ ماوس  ⇒ زوم (مرکز زوم = محل نشانگر ماوس)
+                //   • هر دو کلیک با هم + درگ ⇒ جابه‌جایی آزاد صحنه (pan)
+                //   • کلیک وسط (چرخ)   ⇒ آن نقطه مرکز چرخش جدید شود
+                //   • میان‌بر کلیدهای جهت‌دار ⇒ جابه‌جایی صحنه
+                controls.rotateSpeed = 0.8;
+                controls.zoomSpeed = 0.8;
+                controls.panSpeed = 0.8;
+                controls.enablePan = true;
+                controls.enableZoom = true;
+                controls.screenSpacePanning = true;
+                // چرخش فقط با کلیک راست؛ pan با هر دو کلیک (LEFT+PAN یعنی pan با درگ
+                // کلیک چپ هم فعال می‌شود، پس LEFT را ROTATE نگه می‌داریم و pan را
+                // جداگانه با کلیک چپ+راست هندل می‌کنیم — پایین‌تر).
+                controls.mouseButtons = {
+                    LEFT: null,                // کلیک چپ تنها کاری نمی‌کند (در exocad هم همین‌طور است)
+                    MIDDLE: null,              // کلیک وسط = تنظیم مرکز چرخش (دستی، پایین‌تر)
+                    RIGHT: THREE.MOUSE.ROTATE  // درگ با کلیک راست = چرخش
+                };
+                // لمس (تبلت/موبایل): یک انگشت = چرخش، دو انگشت = pan + زوم
+                controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
                 controls.minDistance = 5;
                 controls.maxDistance = 500;
                 controls.target.set(0, 0, 0);
@@ -1622,27 +1797,66 @@ panel_layout_start('مشاهده کیس');
                     return true;
                 }
 
+                // نمایش وضعیت روی خودِ نمایشگر — تا وقتی چیزی دیده نمی‌شود، بدانیم کجای
+                // زنجیره ایستاده است (بارگذاری / خطا / آماده). قبلاً شکست‌ها بی‌صدا بود.
+                function setStatus(msg, isError) {
+                    var el = document.getElementById('viewer-status');
+                    if (!el) return;
+                    el.textContent = msg || '';
+                    el.style.display = msg ? 'block' : 'none';
+                    el.style.color = isError ? '#b91c1c' : '#0369a1';
+                }
+
                 function centerMesh(mesh) {
                     mesh.geometry.computeBoundingBox();
                     const bbox = mesh.geometry.boundingBox;
                     const center = new THREE.Vector3();
                     bbox.getCenter(center);
+                    // مرکز مدل را به مبدأ منتقل کن (مدل‌های اسکنر مختصات بزرگ/دور دارند)
                     mesh.position.sub(center);
                     const size = new THREE.Vector3();
                     bbox.getSize(size);
                     const max = Math.max(size.x, size.y, size.z) || 1;
-                    currentScale = 80 / max;
+                    // یک اندازهٔ استاندارد برای همهٔ مدل‌ها تا دوربین همیشه درست قاب بگیرد
+                    const TARGET_SIZE = 80;
+                    currentScale = TARGET_SIZE / max;
                     mesh.scale.set(currentScale, currentScale, currentScale);
-                    // Auto-position camera
-                    const dist = max * 2.5;
+
+                    // ⚠️ دوربین باید بر اساس اندازهٔ «اسکیل‌شده» (TARGET_SIZE) محاسبه شود،
+                    // نه اندازهٔ خام مدل. قبلاً dist از maxِ خام حساب می‌شد و چون mesh
+                    // بعداً در مقیاس ۸۰ واحد بزرگ می‌شد، مدل کاملاً بیرون از قاب دوربین
+                    // می‌افتاد و صفحه خالی می‌ماند.
+                    const fovY = THREE.MathUtils.degToRad(camera.fov);
+                    // فاصله‌ای که مدل با حاشیهٔ ۳۰٪ کامل در قاب جا شود
+                    const margin = 1.3;
+                    const fitDist = (TARGET_SIZE * margin) / (2 * Math.tan(fovY / 2));
+                    const dist = Math.max(fitDist, TARGET_SIZE);
+
+                    // نسبت تصویر را هم دوباره تأیید کن (اگر کانتینر تازه نمایان شده)
+                    const s = viewerSize();
+                    if (!isFinite(camera.aspect) || camera.aspect <= 0 || Math.abs(camera.aspect - s.w / s.h) > 0.01) {
+                        camera.aspect = s.w / s.h;
+                        camera.updateProjectionMatrix();
+                    }
+
                     camera.position.set(dist * 0.7, dist * 0.4, dist);
+                    camera.near = Math.max(0.1, dist / 100);
+                    camera.far = dist * 100;
+                    camera.updateProjectionMatrix();
                     controls.target.set(0, 0, 0);
+                    controls.minDistance = TARGET_SIZE * 0.2;
+                    controls.maxDistance = dist * 6;
                     controls.update();
                 }
 
                 function loadFile(url) {
                     // Show the 3D viewer only when a model is actually selected
                     container.style.display = 'block';
+                    // ⚠️ مهم: حالا که کانتینر نمایان شده، اندازه‌اش واقعی است. اگر این کار
+                    // انجام نشود، دوربین با aspect=NaN و رندرر با ۰×۰ می‌ماند و مدل دیده
+                    // نمی‌شود. باید قبل از محاسبهٔ دوربین اجرا شود.
+                    resizeRenderer();
+                    setStatus('در حال بارگذاری…');
                     // دکمهٔ بستن هم همراه نمایشگر ظاهر می‌شود
                     var closeWrap = document.getElementById('viewer-close-wrap');
                     if (closeWrap) closeWrap.style.display = 'block';
@@ -1660,7 +1874,7 @@ panel_layout_start('مشاهده کیس');
 
                     function onGeometry(geometry, useVertexColors) {
                         if (!isGeometryValid(geometry)) {
-                            alert('خطا: هندسه فایل نامعتبر است.');
+                            setStatus('✗ هندسهٔ فایل نامعتبر است', true);
                             return;
                         }
                         geometry.computeVertexNormals();
@@ -1677,6 +1891,17 @@ panel_layout_start('مشاهده کیس');
                         centerMesh(mesh);
                         currentMesh = mesh;
                         scene.add(mesh);
+                        setStatus('✓ مدل بارگذاری شد (' + (geometry.attributes.position.count / 3).toLocaleString('en-US') + ' مثلث)');
+                    }
+
+                    function onLoadError(err) {
+                        // قبلاً خطا بی‌صدا بلعیده می‌شد و کاربر فقط صفحهٔ خالی می‌دید.
+                        console.error('3D load failed:', url, err);
+                        if (placeholder) {
+                            placeholder.style.display = 'flex';
+                            placeholder.textContent = 'بارگذاری مدل ناموفق بود — ' + (ext || 'ناشناخته');
+                        }
+                        setStatus('✗ بارگذاری ناموفق: ' + (typeof err === 'string' ? err : (err && err.message) || 'خطای شبکه'), true);
                     }
 
                     if (ext === 'stl') {
@@ -1684,13 +1909,15 @@ panel_layout_start('مشاهده کیس');
                         loader.load(url, function(geometry) {
                             const hasColors = geometry.attributes.color !== undefined;
                             onGeometry(geometry, hasColors);
-                        });
+                        }, undefined, onLoadError);
                     } else if (ext === 'ply') {
                         const loader = new PLYLoader();
                         loader.load(url, function(geometry) {
                             const hasColors = geometry.attributes.color !== undefined;
                             onGeometry(geometry, hasColors);
-                        });
+                        }, undefined, onLoadError);
+                    } else {
+                        onLoadError('پسوند پشتیبانی نمی‌شود: ' + ext);
                     }
                 }
 
@@ -1704,11 +1931,7 @@ panel_layout_start('مشاهده کیس');
 
                 // Handle resize
                 window.addEventListener('resize', function() {
-                    const w = container.clientWidth;
-                    const h = container.clientHeight;
-                    camera.aspect = w / h;
-                    camera.updateProjectionMatrix();
-                    renderer.setSize(w, h);
+                    resizeRenderer();
                 });
 
                 // Wire 3D file buttons
@@ -1717,6 +1940,134 @@ panel_layout_start('مشاهده کیس');
                         loadFile(btn.getAttribute('data-file'));
                     });
                 });
+
+                // ── رفتارهای اختصاصی exocad 3.2 ──
+                // این چهار رفتار در OrbitControls وجود ندارد و باید دستی پیاده شود:
+                //  ۱) چرخش با کلیک راست  ← با mouseButtons.RIGHT = ROTATE
+                //  ۲) «هر دو کلیک با هم» + درگ = جابه‌جایی آزاد
+                //  ۳) کلیک وسط = آن نقطه مرکز چرخش شود
+                //  ۴) کلیدهای جهت‌دار = جابه‌جایی صحنه
+                // ⚠️ مهم: OrbitControls با رویداد `pointerdown` کار می‌کند (نه mousedown).
+                // `pointerdown` **قبل از** `mousedown` صدا زده می‌شود، پس اگر بخواهیم
+                // mouseButtons را قبل از پردازش OrbitControls عوض کنیم، باید از فاز
+                // «capture» استفاده کنیم: addEventListener(..., true)
+                (function setupExocadMouse() {
+                    const el = renderer.domElement;
+                    let leftDown = false, rightDown = false;
+
+                    el.addEventListener('pointerdown', function (e) {
+                        if (e.button === 0) leftDown = true;
+                        if (e.button === 2) rightDown = true;
+
+                        if (leftDown && rightDown) {
+                            // «هر دو کلیک با هم» ⇒ pan آزاد (مثل exocad)
+                            // آخرین pointerdown که به OrbitControls می‌رسد، RIGHT است ⇒
+                            // پس RIGHT را PAN می‌کنیم تا state = PAN شود.
+                            controls.mouseButtons.RIGHT = THREE.MOUSE.PAN;
+                            controls.mouseButtons.LEFT = null;
+                        } else if (e.button === 1) {
+                            // کلیک وسط ⇒ آن نقطه مرکز چرخش جدید شود (به‌جای dolly پیش‌فرض)
+                            e.preventDefault();
+                            controls.mouseButtons.MIDDLE = null;
+                            setRotationCenterFromPointer(e);
+                        }
+                    }, true);
+
+                    el.addEventListener('pointerup', function (e) {
+                        if (e.button === 0) leftDown = false;
+                        if (e.button === 2) rightDown = false;
+                        if (!leftDown && !rightDown) {
+                            // بازگرداندن حالت عادی exocad (هم‌راستا با مقدار اولیهٔ بالا)
+                            controls.mouseButtons.RIGHT = THREE.MOUSE.ROTATE;
+                            controls.mouseButtons.LEFT = null;
+                            controls.mouseButtons.MIDDLE = null;
+                        }
+                    }, true);
+
+                    // منوی مرورگر روی کلیک راست باز نشود (چون کلیک راست = چرخش)
+                    el.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+
+                    // دکمهٔ وسط در مرورگر باعث اسکرول خودکار می‌شود — جلویش را بگیر
+                    el.addEventListener('auxclick', function (e) {
+                        if (e.button === 1) e.preventDefault();
+                    });
+
+                    // تبدیل مختصات نشانگر به نقطهٔ سه‌بعدی روی مدل و ست‌کردن آن به‌عنوان
+                    // «مرکز چرخش» — دقیقاً کار کلیک وسط در exocad.
+                    function setRotationCenterFromPointer(e) {
+                        if (!currentMesh) return;
+                        const rect = el.getBoundingClientRect();
+                        const ndc = new THREE.Vector2(
+                            ((e.clientX - rect.left) / rect.width) * 2 - 1,
+                            -((e.clientY - rect.top) / rect.height) * 2 + 1
+                        );
+                        const ray = new THREE.Raycaster();
+                        ray.setFromCamera(ndc, camera);
+                        const hit = ray.intersectObject(currentMesh, false);
+                        if (hit && hit.length) {
+                            controls.target.copy(hit[0].point);
+                            controls.update();
+                            setStatus('مرکز چرخش روی نقطهٔ کلیک‌شده تنظیم شد');
+                        } else {
+                            setStatus('روی مدل کلیک کنید تا مرکز چرخش تنظیم شود');
+                        }
+                    }
+
+                    // میان‌بر کلیدهای جهت‌دار برای جابه‌جایی صحنه (مثل exocad)
+                    window.addEventListener('keydown', function (e) {
+                        if (container.style.display === 'none') return;
+                        const tag = (e.target && e.target.tagName) || '';
+                        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+                        const step = controls.target.distanceTo(camera.position) * 0.05;
+                        const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+                        const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+                        let moved = true;
+                        switch (e.key) {
+                            case 'ArrowLeft':  controls.target.addScaledVector(right, -step); break;
+                            case 'ArrowRight': controls.target.addScaledVector(right,  step); break;
+                            case 'ArrowUp':    controls.target.addScaledVector(up,     step); break;
+                            case 'ArrowDown':  controls.target.addScaledVector(up,    -step); break;
+                            default: moved = false;
+                        }
+                        if (moved) { e.preventDefault(); controls.update(); }
+                    });
+                })();
+
+                // ── نمایشگر وب‌ویو exocad (خروجی FRAME/طراحی) ──
+                // فایل HTML را داخل iframe سندباکس می‌گذارد. sandbox="allow-scripts"
+                // اسکریپت رندر exocad را اجرا می‌کند ولی دسترسی به کوکی/دامنهٔ سایت نمی‌دهد.
+                function showWebView(url, name) {
+                    var wrap   = document.getElementById('webview-wrap');
+                    var frame  = document.getElementById('webview-frame');
+                    var title  = document.getElementById('webview-title');
+                    var tabLink = document.getElementById('webview-open-tab');
+                    if (!wrap || !frame) return;
+                    // لودِ مجدد اجباری: اگر همین آدرس قبلاً بارگذاری شده بود، دوباره رندر شود
+                    frame.src = 'about:blank';
+                    frame.src = url;
+                    if (title) title.textContent = '🧊 ' + (name || 'نمایش سه‌بعدی');
+                    if (tabLink) tabLink.href = url;
+                    wrap.style.display = 'block';
+                    // بقیهٔ نمایشگرها بسته شوند تا فقط یک نمای فعال باشد
+                    container.style.display = 'none';
+                    var cw = document.getElementById('viewer-close-wrap');
+                    if (cw) cw.style.display = 'none';
+                    var ic = document.getElementById('image-viewer-container');
+                    if (ic) ic.style.display = 'none';
+                    try { wrap.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}
+                }
+                function closeWebView() {
+                    var wrap  = document.getElementById('webview-wrap');
+                    var frame = document.getElementById('webview-frame');
+                    if (wrap) wrap.style.display = 'none';
+                    if (frame) frame.src = 'about:blank';
+                }
+                document.querySelectorAll('.file-webview').forEach(function(btn) {
+                    btn.addEventListener('click', function() {
+                        showWebView(btn.getAttribute('data-file'), btn.getAttribute('data-name'));
+                    });
+                });
+                document.getElementById('webview-close')?.addEventListener('click', closeWebView);
 
                 // ── دکمهٔ بستن مدل سه‌بعدی (مثل «بستن تصویر» برای عکس‌ها) ──
                 function close3DViewer() {
@@ -1736,44 +2087,29 @@ panel_layout_start('مشاهده کیس');
                 if (close3dBtn) close3dBtn.addEventListener('click', close3DViewer);
 
                 // Overlay controls
-                function rotateModel(axis, angle) {
-                    if (!currentMesh) return;
-                    const rad = THREE.MathUtils.degToRad(angle);
-                    const q = new THREE.Quaternion().setFromAxisAngle(axis, rad);
-                    currentMesh.quaternion.multiply(q);
-                }
-
-                document.getElementById('rot-left')?.addEventListener('click', function() {
-                    rotateModel(new THREE.Vector3(0, 1, 0), -15);
-                });
-                document.getElementById('rot-right')?.addEventListener('click', function() {
-                    rotateModel(new THREE.Vector3(0, 1, 0), 15);
-                });
-                document.getElementById('rot-up')?.addEventListener('click', function() {
-                    rotateModel(new THREE.Vector3(1, 0, 0), -15);
-                });
-                document.getElementById('rot-down')?.addEventListener('click', function() {
-                    rotateModel(new THREE.Vector3(1, 0, 0), 15);
-                });
                 document.getElementById('zoom-in')?.addEventListener('click', function() {
-                    camera.position.multiplyScalar(0.85);
-                    controls.update();
+                    zoomBy(0.85);
                 });
                 document.getElementById('zoom-out')?.addEventListener('click', function() {
-                    camera.position.multiplyScalar(1.15);
-                    controls.update();
+                    zoomBy(1.15);
                 });
-                document.getElementById('reset-view')?.addEventListener('click', function() {
-                    if (!currentMesh) return;
-                    currentMesh.quaternion.identity();
-                    const size = currentMesh.geometry.boundingBox ? 
-                        currentMesh.geometry.boundingBox.getSize(new THREE.Vector3()) : new THREE.Vector3(1,1,1);
-                    const max = Math.max(size.x, size.y, size.z) || 1;
-                    const dist = max * 2.5 / currentScale;
+                function zoomBy(factor) {
+                    const dir = camera.position.clone().sub(controls.target).multiplyScalar(factor);
+                    camera.position.copy(controls.target.clone().add(dir));
+                    controls.update();
+                }
+                function resetView() {
+                    // چرخش شیء + دوربین را به حالت اولیه برگردان
+                    if (currentMesh) currentMesh.quaternion.identity();
+                    const TARGET_SIZE = 80;
+                    const fovY = THREE.MathUtils.degToRad(camera.fov);
+                    const fitDist = (TARGET_SIZE * 1.3) / (2 * Math.tan(fovY / 2));
+                    const dist = Math.max(fitDist, TARGET_SIZE);
                     camera.position.set(dist * 0.7, dist * 0.4, dist);
                     controls.target.set(0, 0, 0);
                     controls.update();
-                });
+                }
+                document.getElementById('reset-view')?.addEventListener('click', resetView);
                 document.getElementById('view-top')?.addEventListener('click', function() {
                     const dist = camera.position.length();
                     camera.position.set(0, dist, 0.01);
@@ -1793,40 +2129,50 @@ panel_layout_start('مشاهده کیس');
                     controls.update();
                 });
 
-                // viewer overlay controls
-                function rotateAroundY(angle) {
-                    const pivot = controls.target.clone();
-                    const pos = camera.position.clone().sub(pivot);
-                    pos.applyAxisAngle(new THREE.Vector3(0,1,0), angle);
-                    camera.position.copy(pivot.clone().add(pos));
-                    camera.lookAt(pivot);
-                    controls.update();
+                // ── کنترل‌های روی نمایشگر ──
+                // ⚠️ نکتهٔ مهم: OrbitControls دوربین را «دور» هدف می‌چرخاند (orbit)، ولی
+                // نمی‌تواند شیء را حول محور خودش بچرخاند. قبلاً همین باعث می‌شد چرخش
+                // حول محور شیء به‌سختی/غیرقابل‌انجام باشد. حالا دکمه‌ها خودِ مش را
+                // می‌چرخانند (روش درست برای بررسی یک مدل دندانی).
+                function rotateModel(axis, deg) {
+                    if (!currentMesh) return;
+                    const rad = THREE.MathUtils.degToRad(deg);
+                    const q = new THREE.Quaternion().setFromAxisAngle(axis, rad);
+                    // ضرب از سمت راست ⇒ چرخش حول محور «محلیِ» خودِ شیء
+                    currentMesh.quaternion.multiply(q);
+                    currentMesh.updateMatrixWorld();
                 }
-                function rotateAroundX(angle) {
-                    const pivot = controls.target.clone();
-                    const pos = camera.position.clone().sub(pivot);
-                    pos.applyAxisAngle(new THREE.Vector3(1,0,0), angle);
-                    camera.position.copy(pivot.clone().add(pos));
-                    camera.lookAt(pivot);
-                    controls.update();
+                const ROT_STEP = 15;
+                document.getElementById('rot-left')?.addEventListener('click', function() {
+                    rotateModel(new THREE.Vector3(0, 1, 0), -ROT_STEP);
+                });
+                document.getElementById('rot-right')?.addEventListener('click', function() {
+                    rotateModel(new THREE.Vector3(0, 1, 0), ROT_STEP);
+                });
+                document.getElementById('rot-up')?.addEventListener('click', function() {
+                    rotateModel(new THREE.Vector3(1, 0, 0), -ROT_STEP);
+                });
+                document.getElementById('rot-down')?.addEventListener('click', function() {
+                    rotateModel(new THREE.Vector3(1, 0, 0), ROT_STEP);
+                });
+                // دکمه‌های «چرخش صفحه‌ای» (حول محور عمود بر صفحه — مثل چرخاندن کاغذ)
+                function setupExtraRot() {
+                    const host = document.getElementById('viewer-overlay');
+                    if (!host || document.getElementById('rot-roll-cw')) return;
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; gap:4px; margin-bottom:4px;';
+                    row.innerHTML =
+                        '<button id="rot-roll-cw" class="btn" style="padding:4px 8px; font-size:1rem;" title="چرخش صفحه‌ای (نزدیک‌شدن به دید)">⟳ صفحه</button>' +
+                        '<button id="rot-roll-ccw" class="btn" style="padding:4px 8px; font-size:1rem;" title="چرخش صفحه‌ای (برعکس)">⟲ صفحه</button>';
+                    host.insertBefore(row, host.children[1] || null);
+                    document.getElementById('rot-roll-cw').addEventListener('click', function() {
+                        rotateModel(new THREE.Vector3(0, 0, 1), -ROT_STEP);
+                    });
+                    document.getElementById('rot-roll-ccw').addEventListener('click', function() {
+                        rotateModel(new THREE.Vector3(0, 0, 1), ROT_STEP);
+                    });
                 }
-                function zoomBy(factor) {
-                    const dir = camera.position.clone().sub(controls.target).multiplyScalar(factor);
-                    camera.position.copy(controls.target.clone().add(dir));
-                    controls.update();
-                }
-                function resetView() {
-                    camera.position.set(0,0,100);
-                    controls.target.set(0,0,0);
-                    controls.update();
-                }
-                document.getElementById('rot-left').addEventListener('click', ()=> rotateAroundY(0.2));
-                document.getElementById('rot-right').addEventListener('click', ()=> rotateAroundY(-0.2));
-                document.getElementById('rot-up').addEventListener('click', ()=> rotateAroundX(0.15));
-                document.getElementById('rot-down').addEventListener('click', ()=> rotateAroundX(-0.15));
-                document.getElementById('zoom-in').addEventListener('click', ()=> zoomBy(0.8));
-                document.getElementById('zoom-out').addEventListener('click', ()=> zoomBy(1.25));
-                document.getElementById('reset-view').addEventListener('click', resetView);
+                setupExtraRot();
 
                 document.querySelectorAll('.file-action-rename').forEach(function(btn){
                     btn.addEventListener('click', function(){
@@ -2009,7 +2355,12 @@ panel_layout_start('مشاهده کیس');
                             });
                     });
                 });
+
+                // ═══ مدیریت پوشه ═══
+                // اسکریپت مشترک از فایل جدا می‌آید تا روی «کیس خالی» هم کار کند
+                // (قبلاً اینجا داخل بلوک else بود و روی کیسِ بدون فایل اجرا نمی‌شد).
             </script>
+            <?php require __DIR__ . '/partials/case_folder_js.php'; ?>
         <?php endif; ?>
 
         <?php

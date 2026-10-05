@@ -100,7 +100,7 @@ $upErrText = [
         <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
         <div class="form-group">
             <label for="upload-file">فایل‌ها (می‌توانید چند تا انتخاب کنید)</label>
-            <input type="file" id="upload-file" name="files[]" accept=".zip,.rar,.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.stl,.ply,.stp,.step,.obj,.3mf,.matrix4,.dentalProject,.iftScan,.dcm,.dicom,.txt,.xml,.html,.htm" multiple required>
+            <input type="file" id="upload-file" name="files[]" accept=".zip,.rar,.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.stl,.ply,.stp,.step,.obj,.3mf,.matrix4,.dentalProject,.iftScan,.constructionInfo,.dcm,.dicom,.txt,.xml,.html,.htm" multiple required>
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
                 <button type="button" id="upload-pick-files" class="btn" style="background:#e0f2fe; color:#0369a1; padding:5px 12px;">🗂 انتخاب فایل</button>
                 <button type="button" id="upload-pick-folder" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; padding:5px 12px;">📁 انتخاب پوشه</button>
@@ -329,7 +329,7 @@ $upErrText = [
         });
         return out.join('/');
     }
-    var ALLOWED = <?= json_encode(['zip','rar','pdf','jpg','jpeg','png','gif','webp','bmp','stl','ply','stp','step','obj','3mf','matrix4','dentalproject','iftscan','dcm','dicom','txt','xml','html','htm']) ?>;
+    var ALLOWED = <?= json_encode(['zip','rar','pdf','jpg','jpeg','png','gif','webp','bmp','stl','ply','stp','step','obj','3mf','matrix4','dentalproject','iftscan','constructioninfo','dcm','dicom','txt','xml','html','htm']) ?>;
     function validExt(name){ return ALLOWED.indexOf((name.split('.').pop()||'').toLowerCase()) !== -1; }
 
     function addFiles(fileList){
