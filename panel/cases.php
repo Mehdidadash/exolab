@@ -635,9 +635,20 @@ panel_layout_start('مدیریت کیس‌ها');
 
             var dz = document.createElement('div'); dz.className = 'cf-dropzone';
             var fileInput = document.createElement('input'); fileInput.type = 'file'; fileInput.className = 'cf-input'; fileInput.multiple = true; fileInput.accept = ACCEPT; fileInput.hidden = true;
-            var dirInput = document.createElement('input'); dirInput.type = 'file'; dirInput.className = 'cf-input-dir'; dirInput.multiple = true; dirInput.hidden = true;
-            // انتخاب پوشه: مرورگر پوشه و همهٔ محتویات بازگشتی را می‌دهد و مسیر هر فایل در webkitRelativePath است
-            if ('webkitdirectory' in dirInput) { dirInput.webkitdirectory = true; dirInput.setAttribute('webkitdirectory', ''); }
+            var dirInput = document.createElement('input'); dirInput.type = 'file'; dirInput.className = 'cf-input-dir'; dirInput.multiple = true;
+            // ⚠️ نکتهٔ کلیدی: اگر این input با `hidden` (یعنی display:none) باشد، کروم
+            // انتخابگرِ **پوشه** را باز نمی‌کند و بی‌صدا به انتخابگرِ فایل برمی‌گردد.
+            // (برای فایل مشکلی ندارد، ولی webkitdirectory به عنصرِ رندرشده نیاز دارد.)
+            // به‌جای display:none، عنصر را از دید پنهان می‌کنیم ولی رندرشده نگه می‌داریم.
+            dirInput.style.cssText = 'position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); border:0; padding:0; margin:-1px;';
+            // انتخاب پوشه: مرورگر پوشه و همهٔ محتویات بازگشتی را می‌دهد و مسیر هر فایل در webkitRelativePath است.
+            // چکِ `'webkitdirectory' in dirInput` غیرقابل‌اعتماد است، پس همیشه ست می‌کنیم.
+            try {
+                dirInput.webkitdirectory = true;
+            } catch (e) { /* مرورگرهای بدون پشتیبانی */ }
+            dirInput.setAttribute('webkitdirectory', '');
+            dirInput.setAttribute('directory', '');
+            dirInput.setAttribute('mozdirectory', '');
             var hint = document.createElement('div'); hint.className = 'cf-dz-hint'; hint.textContent = '📁 فایل‌ها را اینجا رها کنید (پوشه هم قابل رها کردن است)';
             var dzActions = document.createElement('div'); dzActions.className = 'cf-dz-actions';
             var pickBtn = document.createElement('button'); pickBtn.type = 'button'; pickBtn.className = 'cf-pick-files btn'; pickBtn.textContent = '🗂 انتخاب فایل';

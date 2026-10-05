@@ -105,7 +105,10 @@ $upErrText = [
                 <button type="button" id="upload-pick-files" class="btn" style="background:#e0f2fe; color:#0369a1; padding:5px 12px;">🗂 انتخاب فایل</button>
                 <button type="button" id="upload-pick-folder" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; padding:5px 12px;">📁 انتخاب پوشه</button>
             </div>
-            <input type="file" id="upload-folder" multiple hidden>
+            <?php // ⚠️ نباید با `hidden` پنهان شود؛ کروم در حالت display:none انتخابگرِ پوشه را
+            // باز نمی‌کند و بی‌صدا به انتخابگرِ فایل برمی‌گردد. «از دید پنهان ولی رندرشده». ?>
+            <input type="file" id="upload-folder" multiple
+                   style="position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); border:0; padding:0; margin:-1px;">
             <small id="upload-file-hint" style="display:block; margin-top:6px; color:#525252;"></small>
             <small style="display:block; margin-top:4px; color:#64748b; line-height:1.8;">
                 می‌توانید یک <b>پوشه</b> را با همهٔ محتویات و زیرپوشه‌هایش انتخاب کنید (یا پوشه را با ماوس داخل صفحه رها کنید).
@@ -310,7 +313,13 @@ $upErrText = [
     // فایل‌های انتخاب‌شده (شامل مسیر نسبی) — منبع حقیقت هنگام ارسال
     var picked = [];
     // انتخاب پوشه با webkitdirectory
-    if (folderInput && 'webkitdirectory' in folderInput) { folderInput.webkitdirectory = true; folderInput.setAttribute('webkitdirectory', ''); }
+    // ⚠️ `'webkitdirectory' in folderInput` روی کروم/اِج مدرن false است — همیشه ست می‌کنیم.
+    if (folderInput) {
+        try { folderInput.webkitdirectory = true; } catch (e) {}
+        folderInput.setAttribute('webkitdirectory', '');
+        folderInput.setAttribute('directory', '');
+        folderInput.setAttribute('mozdirectory', '');
+    }
 
     function fa(n){ return String(n).replace(/\d/g, function(d){ return '۰۱۲۳۴۵۶۷۸۹'[+d]; }); }
     function fmtSize(b){

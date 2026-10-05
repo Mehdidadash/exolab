@@ -26,6 +26,7 @@ foreach ($rows as $r) {
 header('Content-Type: application/json; charset=utf-8');
 echo json_encode([
     'count' => getUnreadNotificationCount($userId),
+    'important_count' => getUnreadImportantNotificationCount($userId),
     'max_id' => $maxId,
     'notifications' => array_map(function ($n) {
         return [
@@ -33,6 +34,7 @@ echo json_encode([
             'title' => $n['title'],
             'message' => $n['message'],
             'type' => $n['type'],
+            'important' => isImportantNotificationType($n['type']),
             'case_id' => $n['case_id'] ? (int) $n['case_id'] : null,
             'patient' => $n['patient_name'],
         ];

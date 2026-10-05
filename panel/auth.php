@@ -679,11 +679,17 @@ function panel_layout_start($title = 'پنل مدیریت') {
 
                 <a class="nav-link" href="logout.php">خروج</a>
             </nav>
-            <?php if ($user): $notifCount = getUnreadNotificationCount($user['id']); ?>
-                <a href="notifications.php" class="notif-bell" style="position:relative; color:#fff; text-decoration:none; font-size:1.3rem; margin-right:10px;">
-                    🔔
+            <?php if ($user): $notifCount = getUnreadNotificationCount($user['id']); $notifImportantCount = getUnreadImportantNotificationCount($user['id']); ?>
+                <a href="notifications.php?scope=important" class="notif-bell notif-bell-important" title="اعلان‌های مهم (کامنت جدید و تغییر وضعیت)" aria-label="اعلان‌های مهم" style="position:relative; margin-right:6px;">
+                    <span class="notif-bell-icon" style="font-size:1.3rem;">⚠️</span>
+                    <?php if ($notifImportantCount > 0): ?>
+                        <span class="notif-bell-badge badge-important"><?= toPersianDigits($notifImportantCount > 99 ? '99+' : $notifImportantCount) ?></span>
+                    <?php endif; ?>
+                </a>
+                <a href="notifications.php" class="notif-bell" title="همهٔ اعلان‌ها" aria-label="همهٔ اعلان‌ها" style="position:relative; margin-right:10px;">
+                    <span class="notif-bell-icon" style="font-size:1.3rem;">🔔</span>
                     <?php if ($notifCount > 0): ?>
-                        <span style="position:absolute; top:-6px; right:-6px; background:#ef4444; color:#fff; font-size:0.65rem; padding:1px 5px; border-radius:50%; font-weight:bold;"><?= toPersianDigits($notifCount > 99 ? '99+' : $notifCount) ?></span>
+                        <span class="notif-bell-badge badge-normal"><?= toPersianDigits($notifCount > 99 ? '99+' : $notifCount) ?></span>
                     <?php endif; ?>
                 </a>
             <?php endif; ?>
@@ -814,11 +820,15 @@ function panel_layout_end() {
                         if (granted) {
                             try {
                                 var opt = { body: n.message || (n.patient ? 'بیمار: ' + n.patient : ''), icon: '../assets/icons/favicon_io/android-chrome-192x192.png', tag: 'exolab-notif-' + n.id };
-                                var notif = new Notification(n.title || 'اعلان جدید', opt);
+                                if (n.important) {
+                                    opt.requireInteraction = true;
+                                    opt.tag = 'exolab-important-' + n.id;
+                                }
+                                var notif = new Notification((n.important ? '⚠️ ' : '') + (n.title || 'اعلان جدید'), opt);
                                 notif.onclick = function(){
                                     window.focus();
                                     if (n.case_id) { window.open('view_case.php?id=' + n.case_id, '_blank'); }
-                                    else { window.open('notifications.php', '_blank'); }
+                                    else { window.open('notifications.php' + (n.important ? '?scope=important' : ''), '_blank'); }
                                     notif.close();
                                 };
                             } catch(e) {}

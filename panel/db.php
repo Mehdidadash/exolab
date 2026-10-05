@@ -24,6 +24,7 @@ function db() {
             ensureSitePricesShortNameColumn($pdo);
             ensureEntityCommentsTable($pdo);
             ensureNotificationsTable($pdo);
+            ensureNotificationsImportance($pdo);
             ensureCasesDesignFeeColumn($pdo);
             ensureDoctorPriceOverrideTypeColumn($pdo);
             ensureCasesOutsourcedRateColumn($pdo);
@@ -2144,10 +2145,12 @@ function ensureNotificationsTable($pdo) {
             title VARCHAR(255) NOT NULL,
             message TEXT NULL,
             type VARCHAR(50) NOT NULL DEFAULT 'info',
+            is_important TINYINT(1) NOT NULL DEFAULT 0,
             is_read TINYINT(1) NOT NULL DEFAULT 0,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             KEY idx_notifications_user (user_id, is_read),
+            KEY idx_notifications_important (user_id, is_important, is_read),
             KEY idx_notifications_case (case_id),
             CONSTRAINT fk_notifications_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE ON UPDATE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
@@ -3355,28 +3358,76 @@ function saveOutsourceInvoiceEdit(int $invoiceId, string $invoiceDate, ?string $
  * Automatic cases that are not yet on any outsource invoice, for a given lab.
  * Used by the "افزودن کیس به این فاکتور" picker (like the designer invoice form).
  * $payerBranch = شعبه‌ای که هزینهٔ برون‌سپاری را می‌پردازد.
+ *
+ * ⚠️★ نکتهٔ کلیدی (باگِ «عنوان/تعداد از روی کیس می‌آید»):
+ * کیس می‌تواند به دو شکل با یک لابراتوار طرف حساب باشد:
+ *   ۱) خودِ کیس برون‌سپاری است → `case_type = 'lab_out'` و `lab_id = <lab>`
+ *      ⇒ عنوان/تعداد از خدمتِ خودِ کیس (`service_id`/`quantity`) می‌آید.
+ *   ۲) «برون‌سپاری جانبی» روی یک کیسِ عادی → `outsourced_lab_id = <lab>` و
+ *      `outsourced_service_id`/`outsourced_qty` پر است
+ *      ⇒ عنوان/تعداد **باید** از فیلدهای جانبی بیاید، نه از خدمتِ خودِ کیس.
+ * قبلاً همیشه `c.service_id`/`c.quantity` خوانده می‌شد؛ پس برای کیسِ نوع ۲
+ * مثلاً «روکش زیرکونیا مولتی لیر ×۹» نشان می‌داد در حالی که برون‌سپاریِ واقعی
+ * «پرینت کست یک فک کامل ×۲» بود.
+ * حالا برای هر ردیف، منبعِ درست بر اساس اینکه لابراتوار از کدام ستون آمده
+ * انتخاب می‌شود و فیلدهای نهایی در `service_id`/`service_title`/`quantity`
+ * بازنویسی می‌شوند تا مصرف‌کننده‌ها (فرم فاکتور و addCasesToOutsourceInvoice)
+ * بدون تغییر کار کنند.
  */
 function getUninvoicedCasesForLabAll(int $labId, ?int $payerBranch = null): array {
     $payerCond = $payerBranch !== null ? ' AND COALESCE(c.branch_id, 0) = ?' : '';
     $stmt = db()->prepare('
-        SELECT c.id, c.patient_name, c.service_id, c.quantity, c.received_date, c.doctor_id,
+        SELECT c.id, c.patient_name, c.received_date, c.doctor_id,
                c.case_type, c.lab_id, c.outsourced_lab_id, c.outsourced_rate, c.unit_price,
-               p.title AS service_title, u.full_name AS doctor_name
+               c.service_id, c.quantity,
+               c.outsourced_service_id, c.outsourced_qty,
+               p.title  AS case_service_title,
+               op.title AS side_service_title,
+               u.full_name AS doctor_name
         FROM cases c
-        LEFT JOIN site_prices p ON c.service_id = p.id
+        LEFT JOIN site_prices p  ON c.service_id = p.id
+        LEFT JOIN site_prices op ON c.outsourced_service_id = op.id
         LEFT JOIN users u ON c.doctor_id = u.id
         WHERE (c.lab_id = ? OR c.outsourced_lab_id = ?)
-          AND c.outsource_invoice_id IS NULL' . $payerCond . '
+          AND c.outsource_invoice_id IS NULL
+          AND (
+                -- نوع ۱: خودِ کیس برون‌سپاری است
+                (c.lab_id IS NOT NULL AND c.lab_id = ?)
+                -- نوع ۲: برون‌سپاری جانبی (باید خدمت و تعداد داشته باشد)
+                OR (c.outsourced_lab_id = ? AND c.outsourced_service_id IS NOT NULL AND COALESCE(c.outsourced_qty, 0) > 0)
+              )' . $payerCond . '
         ORDER BY c.received_date DESC, c.id DESC
         LIMIT 500
     ');
-    $params = [$labId, $labId];
+    $params = [$labId, $labId, $labId, $labId];
     if ($payerBranch !== null) $params[] = (int) $payerBranch;
     $stmt->execute($params);
     $cases = $stmt->fetchAll();
     foreach ($cases as &$c) {
-        // فی: نرخِ ثبت‌شده روی کیس (در صورت وجود) وگرنه نرخِ برون‌سپاریِ آن خدمت
-        $rate = ($c['outsourced_rate'] ?? null) !== null ? (float) $c['outsourced_rate'] : getOutsourceRate($labId, (int) ($c['service_id'] ?? 0));
+        // ── تعیین منبعِ درست: خدمتِ جانبی یا خدمتِ خودِ کیس ──
+        // اگر این لابراتوار از راهِ برون‌سپاریِ جانبی آمده و خدمت جانبی ثبت شده،
+        // همان مرجع است. وگرنه خدمتِ خودِ کیس.
+        $labIsSelf   = ((int) ($c['lab_id'] ?? 0) === $labId);
+        $hasSideSvc  = !empty($c['outsourced_service_id']);
+        $hasSideQty  = ((int) ($c['outsourced_qty'] ?? 0)) > 0;
+        $useSide     = $hasSideSvc && $hasSideQty && (!$labIsSelf || (int) ($c['outsourced_lab_id'] ?? 0) === $labId);
+
+        if ($useSide) {
+            $c['source']        = 'side';
+            $c['service_id']    = (int) $c['outsourced_service_id'];
+            $c['service_title'] = (string) ($c['side_service_title'] ?? '');
+            $c['quantity']      = (int) $c['outsourced_qty'];
+        } else {
+            $c['source']        = 'case';
+            $c['service_id']    = (int) ($c['service_id'] ?? 0);
+            $c['service_title'] = (string) ($c['case_service_title'] ?? '');
+            $c['quantity']      = (int) ($c['quantity'] ?? 1);
+        }
+
+        // فی: نرخِ ثبت‌شده روی برون‌سپاری (در صورت وجود) وگرنه نرخِ برون‌سپاریِ آن خدمت
+        $rate = ($c['outsourced_rate'] ?? null) !== null
+            ? (float) $c['outsourced_rate']
+            : getOutsourceRate($labId, (int) $c['service_id'], $payerBranch);
         $c['unit_rate'] = $rate === null ? 0.0 : (float) $rate;
     }
     return $cases;
@@ -3384,6 +3435,11 @@ function getUninvoicedCasesForLabAll(int $labId, ?int $payerBranch = null): arra
 
 /**
  * افزودن چند کیس به فاکتور برون‌سپاریِ موجود (آینهٔ addCasesToDesignerInvoice).
+ *
+ * ⚠️★ همان باگِ getUninvoicedCasesForLabAll این‌جا هم بود: عنوان/تعداد از خدمتِ
+ * خودِ کیس خوانده می‌شد. برای «برون‌سپاری جانبی» باید از `outsourced_service_id`
+ * و `outsourced_qty` بیاید. ضمناً شرطِ WHERE سخت‌گیرانه‌تر شد تا کیسِ جانبیِ
+ * ناقص (بدون خدمت/تعداد) به فاکتور اضافه نشود.
  */
 function addCasesToOutsourceInvoice(int $invoiceId, array $caseIds): int {
     $inv = getOutsourceInvoice($invoiceId);
@@ -3395,15 +3451,23 @@ function addCasesToOutsourceInvoice(int $invoiceId, array $caseIds): int {
 
     $ph = implode(',', array_fill(0, count($caseIds), '?'));
     $st = db()->prepare("
-        SELECT c.*, p.title AS service_title, u.full_name AS doctor_name
+        SELECT c.*,
+               p.title  AS case_service_title,
+               op.title AS side_service_title,
+               u.full_name AS doctor_name
         FROM cases c
-        LEFT JOIN site_prices p ON c.service_id = p.id
+        LEFT JOIN site_prices p  ON c.service_id = p.id
+        LEFT JOIN site_prices op ON c.outsourced_service_id = op.id
         LEFT JOIN users u ON c.doctor_id = u.id
         WHERE c.id IN ($ph)
           AND (c.lab_id = ? OR c.outsourced_lab_id = ?)
           AND c.outsource_invoice_id IS NULL
+          AND (
+                (c.lab_id IS NOT NULL AND c.lab_id = ?)
+                OR (c.outsourced_lab_id = ? AND c.outsourced_service_id IS NOT NULL AND COALESCE(c.outsourced_qty, 0) > 0)
+              )
     ");
-    $st->execute(array_merge($caseIds, [$labId, $labId]));
+    $st->execute(array_merge($caseIds, [$labId, $labId, $labId, $labId]));
     $cases = $st->fetchAll();
     if (empty($cases)) return 0;
 
@@ -3414,17 +3478,35 @@ function addCasesToOutsourceInvoice(int $invoiceId, array $caseIds): int {
     $added = 0;
     $addedTotal = 0.0;
     foreach ($cases as $c) {
-        $rate = ($c['outsourced_rate'] ?? null) !== null ? (float) $c['outsourced_rate'] : getOutsourceRate($labId, (int) ($c['service_id'] ?? 0));
+        // ── انتخاب منبعِ درست: خدمتِ جانبی یا خدمتِ خودِ کیس ──
+        $labIsSelf  = ((int) ($c['lab_id'] ?? 0) === $labId);
+        $hasSideSvc = !empty($c['outsourced_service_id']);
+        $hasSideQty = ((int) ($c['outsourced_qty'] ?? 0)) > 0;
+        $useSide    = $hasSideSvc && $hasSideQty && (!$labIsSelf || (int) ($c['outsourced_lab_id'] ?? 0) === $labId);
+
+        if ($useSide) {
+            $serviceId    = (int) $c['outsourced_service_id'];
+            $serviceTitle = (string) ($c['side_service_title'] ?? '');
+            $qty          = (int) $c['outsourced_qty'];
+        } else {
+            $serviceId    = (int) ($c['service_id'] ?? 0);
+            $serviceTitle = (string) ($c['case_service_title'] ?? '');
+            $qty          = (int) ($c['quantity'] ?? 1);
+        }
+
+        $rate = ($c['outsourced_rate'] ?? null) !== null
+            ? (float) $c['outsourced_rate']
+            : getOutsourceRate($labId, $serviceId, currentBranchId());
         if ($rate === null) $rate = 0.0;
-        $qty = (int) ($c['quantity'] ?? 1);
+        if ($qty < 1) $qty = 1;
         $amt = round($rate * $qty);
         $ins->execute([
             $invoiceId,
             $c['id'],
             $c['doctor_id'] ?? null,
             $c['doctor_name'] ?? null,
-            $c['service_id'] ?? null,
-            $c['service_title'] ?? null,
+            $serviceId ?: null,
+            $serviceTitle !== '' ? $serviceTitle : null,
             $c['patient_name'] ?? null,
             $qty,
             $rate,
@@ -3880,6 +3962,50 @@ function getAllExpensePayments(?string $type = null, ?int $invoiceId = null): ar
     $stmt = db()->prepare($sql);
     $stmt->execute($params);
     return $stmt->fetchAll();
+}
+
+/**
+ * حذف کامل یک فاکتور برون‌سپاری (هزینه) به‌همراه:
+ *   • آزادکردنِ کیس‌های متصل (outsource_invoice_id = NULL) تا دوباره قابل صدور شوند،
+ *   • حذف آیتم‌های فاکتور،
+ *   • حذف پرداخت‌های ثبت‌شده روی این فاکتور (وگرنه پرداختِ یتیم می‌ماند).
+ * همه در یک تراکنش انجام می‌شود تا فاکتورِ نیمه‌حذف‌شده باقی نماند.
+ *
+ * @return array{items:int,cases:int,payments:float} خلاصهٔ آنچه حذف/آزاد شد
+ */
+function deleteOutsourceInvoice(int $invoiceId): array {
+    $inv = getOutsourceInvoice($invoiceId);
+    if (!$inv) return ['items' => 0, 'cases' => 0, 'payments' => 0.0];
+
+    $db = db();
+    // اگر از قبل تراکنشی باز است (مثلاً در تست یا فراخوانیِ تودرتو)، تراکنشِ تازه باز نکن.
+    $ownTxn = !$db->inTransaction();
+    if ($ownTxn) $db->beginTransaction();
+    try {
+        // ۱) کیس‌های متصل آزاد شوند (فقط همان‌هایی که به این فاکتور اشاره دارند)
+        $rel = $db->prepare('UPDATE cases SET outsource_invoice_id = NULL WHERE outsource_invoice_id = ?');
+        $rel->execute([$invoiceId]);
+        $casesFreed = $rel->rowCount();
+
+        // ۲) آیتم‌های فاکتور
+        $delItems = $db->prepare('DELETE FROM outsource_invoice_items WHERE invoice_id = ?');
+        $delItems->execute([$invoiceId]);
+        $itemsDeleted = $delItems->rowCount();
+
+        // ۳) پرداخت‌های این فاکتور (مبلغ پرداخت‌شده برای گزارش/تأیید برگردانده می‌شود)
+        $paidSum = getExpenseInvoicePaid('outsource', $invoiceId);
+        $delPay = $db->prepare('DELETE FROM expense_payments WHERE expense_type = ? AND invoice_id = ?');
+        $delPay->execute(['outsource', $invoiceId]);
+
+        // ۴) خودِ فاکتور
+        $db->prepare('DELETE FROM outsource_invoices WHERE id = ?')->execute([$invoiceId]);
+
+        if ($ownTxn) $db->commit();
+        return ['items' => $itemsDeleted, 'cases' => $casesFreed, 'payments' => $paidSum];
+    } catch (Throwable $ex) {
+        if ($ownTxn && $db->inTransaction()) $db->rollBack();
+        throw $ex;
+    }
 }
 
 /** Get a single expense payment. */
@@ -4736,12 +4862,33 @@ function getAllPermissionDefinitions(): array {
 // Notification Helpers
 // =====================================================
 
+/**
+ * انواع اعلان‌های «مهم» — این‌ها در زنگِ جداگانه (notif-bell-important) با رنگ متفاوت
+ * نمایش داده می‌شوند و انبوهِ اعلان‌های آپلود/تخصیص آن‌ها را گم نمی‌کند.
+ * نوع‌های پرحجم (file/assignment/appointment/info) در زنگِ عادی می‌مانند.
+ */
+function importantNotificationTypes(): array {
+    return ['status', 'status_change', 'comment'];
+}
+
+/** آیا این نوع اعلان مهم است؟ (پیش‌فرض: از لیست importantNotificationTypes) */
+function isImportantNotificationType(?string $type): bool {
+    return in_array((string) $type, importantNotificationTypes(), true);
+}
+
+/** لیست امنِ نوع‌ها برای استفاده در IN (...) */
+function notificationTypesSql(array $types): string {
+    return implode(',', array_fill(0, count($types), '?'));
+}
+
 function createNotification(int $userId, string $title, string $message = null, int $caseId = null, string $type = 'info'): int {
-    $stmt = db()->prepare('INSERT INTO notifications (user_id, case_id, title, message, type, created_at) VALUES (?, ?, ?, ?, ?, NOW())');
-    $stmt->execute([$userId, $caseId, $title, $message, $type]);
+    $important = isImportantNotificationType($type) ? 1 : 0;
+    $stmt = db()->prepare('INSERT INTO notifications (user_id, case_id, title, message, type, is_important, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())');
+    $stmt->execute([$userId, $caseId, $title, $message, $type, $important]);
     return (int) db()->lastInsertId();
 }
 
+/** اعلان‌های خوانده‌نشدهٔ همهٔ نوع‌ها (برای زنگ اصلی). */
 function getUnreadNotifications(int $userId, int $limit = 10): array {
     $limit = (int) max(1, $limit);
     $stmt = db()->prepare('SELECT * FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT ' . $limit);
@@ -4749,9 +4896,29 @@ function getUnreadNotifications(int $userId, int $limit = 10): array {
     return $stmt->fetchAll();
 }
 
+/** اعلان‌های خوانده‌نشدهٔ «مهم» (کامنت/تغییر وضعیت) برای زنگِ مهم. */
+function getUnreadImportantNotifications(int $userId, int $limit = 10): array {
+    $limit = (int) max(1, $limit);
+    $types = importantNotificationTypes();
+    if (empty($types)) return [];
+    $sql = 'SELECT * FROM notifications WHERE user_id = ? AND is_read = 0 AND type IN (' . notificationTypesSql($types) . ') ORDER BY created_at DESC LIMIT ' . $limit;
+    $stmt = db()->prepare($sql);
+    $stmt->execute(array_merge([$userId], $types));
+    return $stmt->fetchAll();
+}
+
 function getUnreadNotificationCount(int $userId): int {
     $stmt = db()->prepare('SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0');
     $stmt->execute([$userId]);
+    return (int) $stmt->fetchColumn();
+}
+
+function getUnreadImportantNotificationCount(int $userId): int {
+    $types = importantNotificationTypes();
+    if (empty($types)) return 0;
+    $sql = 'SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0 AND type IN (' . notificationTypesSql($types) . ')';
+    $stmt = db()->prepare($sql);
+    $stmt->execute(array_merge([$userId], $types));
     return (int) $stmt->fetchColumn();
 }
 
@@ -4765,11 +4932,59 @@ function markAllNotificationsRead(int $userId): void {
     $stmt->execute([$userId]);
 }
 
-function getAllNotifications(int $userId, int $limit = 50): array {
+/** فقط اعلان‌های مهم را خوانده‌شده می‌کند (از زنگِ مهم). */
+function markAllImportantNotificationsRead(int $userId): void {
+    $types = importantNotificationTypes();
+    if (empty($types)) return;
+    $sql = 'UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0 AND type IN (' . notificationTypesSql($types) . ')';
+    $stmt = db()->prepare($sql);
+    $stmt->execute(array_merge([$userId], $types));
+}
+
+/**
+ * لیست اعلان‌ها برای صفحهٔ نوتیفیکیشن‌ها.
+ * @param string|null $scope 'important' = فقط مهم، null = همه
+ */
+function getAllNotifications(int $userId, int $limit = 50, ?string $scope = null): array {
     $limit = (int) max(1, $limit);
+    if ($scope === 'important') {
+        $types = importantNotificationTypes();
+        if (empty($types)) return [];
+        $sql = 'SELECT * FROM notifications WHERE user_id = ? AND type IN (' . notificationTypesSql($types) . ') ORDER BY created_at DESC LIMIT ' . $limit;
+        $stmt = db()->prepare($sql);
+        $stmt->execute(array_merge([$userId], $types));
+        return $stmt->fetchAll();
+    }
     $stmt = db()->prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT ' . $limit);
     $stmt->execute([$userId]);
     return $stmt->fetchAll();
+}
+
+/** مایگریشن خودکار: ستون is_important برای ردیف‌های قدیمی پر شود. */
+function ensureNotificationsImportance($pdo): void {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'notifications' AND COLUMN_NAME = 'is_important'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (!empty($row) && (int) $row['cnt'] > 0) {
+        // ستون هست؛ فقط ردیف‌های قدیمی را یک‌بار پر کن
+        $types = importantNotificationTypes();
+        if (!empty($types)) {
+            $sql = 'UPDATE notifications SET is_important = 1 WHERE is_important = 0 AND type IN (' . notificationTypesSql($types) . ')';
+            try { $pdo->prepare($sql)->execute($types); } catch (\Throwable $t) {}
+        }
+        return;
+    }
+    try {
+        $pdo->exec("ALTER TABLE notifications ADD COLUMN is_important TINYINT(1) NOT NULL DEFAULT 0 AFTER type");
+        $pdo->exec("ALTER TABLE notifications ADD KEY idx_notifications_important (user_id, is_important, is_read)");
+        $types = importantNotificationTypes();
+        if (!empty($types)) {
+            $sql = 'UPDATE notifications SET is_important = 1 WHERE type IN (' . notificationTypesSql($types) . ')';
+            $pdo->prepare($sql)->execute($types);
+        }
+    } catch (\Throwable $t) {
+        error_log('ensureNotificationsImportance: ' . $t->getMessage());
+    }
 }
 
 // =====================================================

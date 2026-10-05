@@ -972,8 +972,12 @@ panel_layout_start('مشاهده کیس');
             <strong>آپلود فایل</strong>
             <form id="case-upload-form" enctype="multipart/form-data" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
                 <input type="file" id="case-upload-input" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.rar,.zip,.pdf,.matrix4,.dentalProject,.iftScan,.constructionInfo,.dcm,.dicom,.txt,.xml,.html,.htm" multiple hidden>
-                <?php // انتخاب پوشه: مرورگر خودِ پوشه را نمی‌فرستد بلکه همهٔ فایل‌های داخلش را با مسیر نسبی می‌دهد ?>
-                <input type="file" id="case-upload-folder-input" multiple hidden>
+                <?php // انتخاب پوشه: مرورگر خودِ پوشه را نمی‌فرستد بلکه همهٔ فایل‌های داخلش را با مسیر نسبی می‌دهد
+                // ⚠️ این input را نباید با `hidden`/display:none پنهان کرد؛ کروم در آن حالت
+                // انتخابگرِ پوشه را باز نمی‌کند و به انتخابگرِ فایل برمی‌گردد. پس با استایلِ
+                // «از دید پنهان ولی رندرشده» مخفی می‌شود. ?>
+                <input type="file" id="case-upload-folder-input" multiple
+                       style="position:absolute; width:1px; height:1px; opacity:0; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); border:0; padding:0; margin:-1px;">
                 <button type="button" id="case-upload-pick-files" class="btn" style="background:#e0f2fe; color:#0369a1;">🗂 انتخاب فایل</button>
                 <button type="button" id="case-upload-pick-folder" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0;">📁 انتخاب پوشه</button>
 
@@ -1053,9 +1057,13 @@ panel_layout_start('مشاهده کیس');
             }
 
             // انتخاب پوشه با webkitdirectory
-            if (folderInput && 'webkitdirectory' in folderInput) {
-                folderInput.webkitdirectory = true;
+            // ⚠️ `'webkitdirectory' in folderInput` روی کروم/اِج مدرن false است
+            // (ویژگی روی نمونهٔ تازه‌ساخته وجود ندارد) — پس همیشه ست می‌کنیم.
+            if (folderInput) {
+                try { folderInput.webkitdirectory = true; } catch (e) {}
                 folderInput.setAttribute('webkitdirectory', '');
+                folderInput.setAttribute('directory', '');
+                folderInput.setAttribute('mozdirectory', '');
             }
 
             function fa(n){ return String(n).replace(/\d/g, function(d){ return '۰۱۲۳۴۵۶۷۸۹'[+d]; }); }
