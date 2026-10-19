@@ -42,11 +42,40 @@
 
 ## ویژگی‌ها
 
-### سایت عمومی (`index.php`, `contact.php`)
-- صفحه اصلی با معرفی خدمات، لیست قیمت و نمونه کارها
+### سایت عمومی (`index.php`, `pages/`)
+- صفحه اصلی (`index.php`) با معرفی خدمات، لیست قیمت و نمونه کارها
+- صفحه‌های خدماتی مستقل در `pages/` (برای SEO و کاهش ابهام پزشکان):
+  - `pages/aligner.php` — الاینر شفاف، با آدرس تمیز `/aligner`
+  - `pages/photography-guide.php` — راهنمای عکاسی فول ماوث، با آدرس تمیز `/photography-guide`
+- هدر/فوتر/متادیتای مشترک از `includes/public_bootstrap.php` (یک require برای هر صفحه‌ی جدید)
 - گالری تصاویر با لایت‌باکس
 - نقشه و مسیریابی دو شعبه (اسلامشهر و قزوین)
-- سرو عکس نمونه‌کار از پوشه‌ی بیرونِ وب با `media.php`
+- سرو عکس نمونه‌کار و عکس راهنما از پوشه‌ی بیرونِ وب با `pages/media.php` و `pages/guide_media.php`
+
+#### ساختار پوشه‌های سایت عمومی
+```
+public_html/
+├── index.php              ← تنها فایل نمایشیِ ریشه
+├── .htaccess              ← URL تمیز + نگاشت مسیرهای قدیمی
+├── robots.txt / sitemap.xml
+├── contact.php            ← تنظیمات تماس (فقط include می‌شود)
+├── pages/                 ← همه‌ی صفحه‌های دیگر
+│   ├── aligner.php            (/aligner)
+│   ├── photography-guide.php  (/photography-guide)
+│   ├── media.php              (سرو عکس نمونه‌کار)
+│   └── guide_media.php        (سرو عکس راهنمای عکاسی)
+├── includes/
+│   ├── public_bootstrap.php   ← هسته‌ی مشترک صفحات عمومی
+│   └── public_nav.php / public_footer.php   (قدیمی — جایگزین: public_bootstrap)
+└── uploads/guide/         ← عکس‌های راهنمای عکاسی (uploads/ از دسترسی مستقیم بسته است)
+```
+
+#### افزودن صفحه‌ی خدماتی جدید (۳ مرحله)
+1. فایل `pages/<name>.php` را بساز و آرایه‌ی `$PAGE` را پر کن (title/description/keywords).
+2. بالای فایل: `require __DIR__ . '/../includes/public_bootstrap.php';`
+3. در انتها: `<?php public_footer_and_scripts(); ?>`
+   و صفحه را در آرایه‌ی `$GLOBALS['PUBLIC_PAGES']` داخل `public_bootstrap.php` ثبت کن
+   (برای منو و لینک‌های «خدمات مرتبط»)، بعد نام آن را به قاعده‌ی RewriteRule در `.htaccess` اضافه کن.
 
 ### پنل مدیریت (`panel/`)
 

@@ -9,6 +9,11 @@ DirectoryIndex index.php index.html
     Require all denied
 </FilesMatch>
 
+# استثنا: robots.txt باید برای خزنده‌های گوگل قابل خواندن باشد
+<Files "robots.txt">
+    Require all granted
+</Files>
+
 # پنهان کردن فایل‌های مخفی (شروع با نقطه)
 RedirectMatch 404 /\..*$
 
@@ -17,9 +22,28 @@ RedirectMatch 404 /\..*$
     Require all denied
 </Files>
 
-# (اختیاری) جلوگیری از دسترسی به پوشه‌های خاص (مثلاً شامل فایل‌های موقت)
+# ─────────────────────────────────────────────────────────────
+# URL تمیز + نگاشت مسیرهای قدیمی (سازگاری معکوس)
+# صفحه‌ی نمایشی همه در pages/ هستند، ولی آدرس‌ها تمیز و بدون .php می‌مانند.
+# فایل‌های سرو تصویر (media/guide_media) هم در pages/ هستند و مسیر قدیمی‌شان حفظ می‌شود
+# تا لینک‌ها و کش مرورگر کاربران قبلی نشکند.
+# ─────────────────────────────────────────────────────────────
 <IfModule mod_rewrite.c>
     RewriteEngine On
-    # اگر پوشه adminlte یا storage دارید و نمی‌خواهید مستقیم ببینندشان
-    # RewriteRule ^(adminlte/root/docs/|storage/) - [F,L]
+
+    # آدرس‌های قدیمیِ ریشه → همان فایل در pages/ (بازنویسی داخلی، بدون ریدایرکت)
+    # چون مقصد ریدایرکتِ مطلق همیشه پیشوند مسیر اپ (لوکال: /exolab، هاست: خالی) را
+    # از دست می‌دهد، اینجا بازنویسیِ داخلی انجام می‌دهیم تا در هر دو محیط کار کند.
+    RewriteRule ^media\.php$             pages/media.php             [L,QSA]
+    RewriteRule ^guide_media\.php$       pages/guide_media.php       [L,QSA]
+    RewriteRule ^photography-guide\.php$ pages/photography-guide.php [L,QSA]
+    RewriteRule ^aligner\.php$           pages/aligner.php           [L,QSA]
+
+    # URL تمیز صفحه‌های ثبت‌شده در پوشه‌ی pages/
+    #   /photography-guide  →  pages/photography-guide.php
+    #   /aligner            →  pages/aligner.php
+    # فقط نام‌های فهرست‌شده مجاز است تا مسیرهای ناشناخته ۴۰۴ بمانند.
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^(photography-guide|aligner)/?$ pages/$1.php [L,QSA]
 </IfModule>

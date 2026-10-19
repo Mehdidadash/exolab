@@ -49,6 +49,17 @@ $designRequiredProvided   = array_key_exists('design_required', $_POST);
 $designRequired           = $designRequiredProvided ? (((string) $_POST['design_required'] === '1') ? 1 : 0) : null;
 $requiresScanBodyProvided = array_key_exists('requires_scan_body', $_POST);
 $requiresScanBody         = $requiresScanBodyProvided ? (((string) $_POST['requires_scan_body'] === '1') ? 1 : 0) : null;
+// نیازمند انتخاب «نوع فیکسچر» (کاستوم اباتمنت کره‌ای/اروپایی)
+$requiresFixtureProvided  = array_key_exists('requires_fixture_type', $_POST);
+$requiresFixture          = $requiresFixtureProvided ? (((string) $_POST['requires_fixture_type'] === '1') ? 1 : 0) : null;
+
+// فی طراحی پیش‌فرضِ خدمت (فی هر واحد). خالی = بدون پیش‌فرض (NULL).
+$defaultDesignFeeProvided = array_key_exists('default_design_fee', $_POST);
+$defaultDesignFee = null;
+if ($defaultDesignFeeProvided) {
+    $raw = trim((string) $_POST['default_design_fee']);
+    $defaultDesignFee = ($raw === '') ? null : max(0, (float) $raw);
+}
 
 if ($title === '' || $price === '') {
     if ($isAjax) {
@@ -73,11 +84,13 @@ if (!empty($_POST['id'])) {
     if ($extraProvided)      { $setParts[] = 'extra_unit_price = ?'; $params[] = $extraUnitPrice; }
     if ($designRequiredProvided)   { $setParts[] = 'design_required = ?';    $params[] = $designRequired; }
     if ($requiresScanBodyProvided) { $setParts[] = 'requires_scan_body = ?'; $params[] = $requiresScanBody; }
+    if ($requiresFixtureProvided)  { $setParts[] = 'requires_fixture_type = ?'; $params[] = $requiresFixture; }
+    if ($defaultDesignFeeProvided) { $setParts[] = 'default_design_fee = ?'; $params[] = $defaultDesignFee; }
     $params[] = (int) $_POST['id'];
     $stmt = db()->prepare('UPDATE site_prices SET ' . implode(', ', $setParts) . ' WHERE id = ?');
     $stmt->execute($params);
 } else {
-    $stmt = db()->prepare('INSERT INTO site_prices (title, short_name, description, price, category, active, display_order, hide_on_site, qty_manual, base_units, extra_unit_price, design_required, requires_scan_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt = db()->prepare('INSERT INTO site_prices (title, short_name, description, price, category, active, display_order, hide_on_site, qty_manual, base_units, extra_unit_price, design_required, requires_scan_body, requires_fixture_type, default_design_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         $title, ($shortName === '' ? null : $shortName), $description, $price, $category, $active, $display_order, $hideOnSite,
         ($qtyManualProvided ? $qtyManual : 0),
@@ -85,6 +98,8 @@ if (!empty($_POST['id'])) {
         ($extraProvided ? $extraUnitPrice : null),
         ($designRequiredProvided ? $designRequired : 1),
         ($requiresScanBodyProvided ? $requiresScanBody : 0),
+        ($requiresFixtureProvided ? $requiresFixture : 0),
+        ($defaultDesignFeeProvided ? $defaultDesignFee : null),
     ]);
 }
 

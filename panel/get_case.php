@@ -25,7 +25,7 @@ if ($doctorId && $uninvoicedOnly) {
          WHERE c.doctor_id = ?
            AND c.invoice_id IS NULL
            AND c.status_id = 4
-         ORDER BY c.received_date DESC"
+         ORDER BY c.received_date ASC, c.id ASC"
     );
     $stmt->execute([$doctorId]);
     $cases = $stmt->fetchAll();

@@ -31,11 +31,11 @@ $ceOwnerFilter = ' AND c.branch_id = ' . (int) $effBranch;
 $designPayerSql = "COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id)";
 $ceDesignFilter = ' AND ' . $designPayerSql . ' = ' . (int) $effBranch;
 
-// 1) Design-fee rows
+// 1) Design-fee rows — design_fee ستونِ «فی هر واحد» است، جمع = فی × تعداد
 $stmt = db()->query("
     SELECT c.id AS case_id, c.patient_name, c.received_date, u.full_name AS doctor_name,
            'طراحی' AS exp_type, des.full_name AS party_name, p.title AS service_title,
-           c.quantity AS qty, ROUND(c.design_fee / NULLIF(c.quantity,0)) AS unit_rate, c.design_fee AS amount,
+           c.quantity AS qty, c.design_fee AS unit_rate, (c.design_fee * c.quantity) AS amount,
            (c.designer_invoice_id IS NOT NULL) AS invoiced
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id

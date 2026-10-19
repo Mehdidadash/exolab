@@ -194,11 +194,11 @@ if ($compress) {
     @chmod($zipPath, 0644);
     // rel_path ردیفِ ZIP = نام پوشه (تا در درخت به‌عنوان «فایل داخل پوشه» شمرده نشود)
     $zipRelPath = $folderName ?: null;
-    $ins = db()->prepare('INSERT INTO user_uploads (user_id, case_id, filename, original_name, rel_path, description, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())');
-    $ins->execute([$user['id'], $caseId, $safe, $zipName, $zipRelPath, $description, 'application/zip', $size]);
+    $ins = db()->prepare('INSERT INTO user_uploads (user_id, case_id, filename, original_name, rel_path, description, file_type, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+    $ins->execute([$user['id'], $caseId, $safe, $zipName, $zipRelPath, $description, ($uploadFileType !== '' ? $uploadFileType : null), 'application/zip', $size]);
     $savedIds[] = (int) db()->lastInsertId();
 } else {
-    $ins = db()->prepare('INSERT INTO user_uploads (user_id, case_id, filename, original_name, rel_path, description, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())');
+    $ins = db()->prepare('INSERT INTO user_uploads (user_id, case_id, filename, original_name, rel_path, description, file_type, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())');
     foreach ($files as $f) {
         $ext = strtolower(pathinfo($f['name'], PATHINFO_EXTENSION));
         $safe = bin2hex(random_bytes(8)) . '.' . $ext;
@@ -214,7 +214,7 @@ if ($compress) {
             $displaySrc = addCaseFilePrefix($displaySrc, $namingPrefix);
         }
         $displayName = uniqueUserUploadName((int) $user['id'], $caseId, $displaySrc);
-        $ins->execute([$user['id'], $caseId, $safe, $displayName, ($f['rel_path'] ?? null), $description, $f['type'], $f['size']]);
+        $ins->execute([$user['id'], $caseId, $safe, $displayName, ($f['rel_path'] ?? null), $description, ($uploadFileType !== '' ? $uploadFileType : null), $f['type'], $f['size']]);
         $savedIds[] = (int) db()->lastInsertId();
     }
 }

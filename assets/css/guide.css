@@ -1,0 +1,371 @@
+/* ==========================================================================
+   guide.css — استایل اختصاصی صفحه‌ی «راهنمای عکاسی فول ماوث / قدام فک بالا»
+   exolab.ir  |  این فایل فقط در photography-guide.php بارگذاری می‌شود.
+   ========================================================================== */
+
+/* ── هیرو صفحه‌ی داخلی (سربرگ کوتاه، نه هیرو سنگین صفحه‌ی اصلی) ── */
+.page-hero {
+    background: linear-gradient(135deg, #0F172A 0%, #12304a 100%);
+    color: #fff;
+    padding: 54px 0 46px;
+}
+.page-hero .breadcrumb {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    font-size: .85rem;
+    color: #94A3B8;
+    margin-bottom: 16px;
+}
+.page-hero .breadcrumb a { color: #cbd5e1; }
+.page-hero .breadcrumb a:hover { color: #fff; }
+.page-hero .breadcrumb .sep { opacity: .5; }
+.page-hero h1 {
+    margin: 0 0 14px;
+    font-size: clamp(1.6rem, 1.1rem + 2.1vw, 2.5rem);
+    line-height: 1.35;
+}
+.page-hero .lead {
+    max-width: 760px;
+    font-size: 1.05rem;
+    line-height: 2;
+    opacity: .94;
+    margin: 0;
+}
+.page-hero .hero-cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 24px;
+}
+.page-hero .btn-ghost {
+    background: transparent;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, .35);
+}
+.page-hero .btn-ghost:hover { border-color: #fff; }
+
+/* ── خط‌مشی / چه زمانی این راهنما لازم است ── */
+.guide-intro-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 20px;
+    margin-top: 28px;
+}
+.guide-intro-grid .card { height: 100%; }
+.guide-intro-grid .card h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1.05rem;
+}
+.guide-intro-grid .card p { line-height: 2; margin-bottom: 0; }
+
+/* ── شبکه‌ی شات‌لیست (کارت‌های عکس) ── */
+.shot-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 22px;
+    margin-top: 30px;
+}
+.shot-card {
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 14px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(15, 92, 186, .05);
+    display: flex;
+    flex-direction: column;
+}
+.shot-card .shot-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 18px;
+    border-bottom: 1px solid #F1F5F9;
+}
+.shot-card .shot-no {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: #f5c518;
+    color: #1a1a1a;
+    font-weight: 700;
+    font-size: 1rem;
+}
+.shot-card .shot-head h3 {
+    margin: 0;
+    font-size: 1.02rem;
+    line-height: 1.6;
+}
+.shot-card .shot-body {
+    padding: 16px 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    flex: 1;
+}
+.shot-card .shot-body p {
+    margin: 0;
+    line-height: 2;
+    font-size: .95rem;
+    color: #334155;
+}
+
+/* محلِ عکس نمونه: تا وقتی عکس واقعی در uploads/guide نگذاشته شده، راهنمای آپلود نشان می‌دهد */
+.shot-figure {
+    margin: 0;
+    background: #F8FAFC;
+    border-bottom: 1px dashed #CBD5E1;
+    aspect-ratio: 4 / 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    position: relative;
+}
+.shot-figure img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    cursor: zoom-in;
+}
+.shot-figure .shot-placeholder {
+    text-align: center;
+    padding: 18px;
+    color: #64748b;
+    font-size: .85rem;
+    line-height: 1.9;
+}
+.shot-figure .shot-placeholder code {
+    display: inline-block;
+    margin-top: 6px;
+    direction: ltr;
+    background: #E2E8F0;
+    color: #0F172A;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: .8rem;
+}
+
+/* تگ‌های «الزامی / اختیاری» */
+.shot-tags { display: flex; flex-wrap: wrap; gap: 8px; }
+.shot-tag {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: .78rem;
+    font-weight: 700;
+    background: #eef6ff;
+    color: #0f5cba;
+}
+.shot-tag.warn { background: rgba(245, 197, 24, .18); color: #8a6100; }
+.shot-tag.ok   { background: rgba(46, 158, 91, .14); color: #1e7a45; }
+
+/* ── چک‌لیست قبل از عکاسی ── */
+.guide-checklist {
+    list-style: none;
+    max-width: 860px;
+    margin: 26px auto 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 14px;
+}
+.guide-checklist li {
+    position: relative;
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    padding: 16px 16px 16px 18px;
+    padding-inline-start: 54px;
+    line-height: 2;
+    font-size: .95rem;
+}
+.guide-checklist li::before {
+    content: '';
+    position: absolute;
+    inset-inline-start: 18px;
+    top: 20px;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    background: #06B6D4;
+    box-shadow: inset 0 0 0 2px #fff;
+}
+.guide-checklist li::after {
+    content: '✓';
+    position: absolute;
+    inset-inline-start: 21px;
+    top: 17px;
+    font-size: .85rem;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1.6;
+}
+
+/* ── نکات مهم (ایمپلنت / تراش) ── */
+.guide-alerts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-top: 28px;
+}
+.alert-box {
+    border-radius: 14px;
+    padding: 22px 24px;
+    line-height: 2;
+    font-size: .96rem;
+    border: 1px solid;
+}
+.alert-box h3 {
+    margin: 0 0 10px;
+    font-size: 1.02rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.alert-box ul { margin: 8px 0 0; padding-inline-start: 20px; }
+.alert-box li { margin-bottom: 6px; }
+.alert-box.implant {
+    background: rgba(245, 197, 24, .10);
+    border-color: rgba(245, 197, 24, .45);
+}
+.alert-box.prep {
+    background: rgba(6, 182, 212, .08);
+    border-color: rgba(6, 182, 212, .40);
+}
+
+/* ── بخش دلایل فنی (چرا این عکس‌ها) ── */
+.reason-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 18px;
+    margin-top: 26px;
+}
+.reason-list .card h3 { margin-bottom: 8px; font-size: 1rem; }
+.reason-list .card p { line-height: 1.95; font-size: .93rem; margin: 0; color: #334155; }
+
+/* ── FAQ ── */
+.guide-faq {
+    max-width: 860px;
+    margin: 30px auto 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+.guide-faq details {
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    padding: 4px 18px;
+}
+.guide-faq summary {
+    cursor: pointer;
+    padding: 14px 0;
+    font-weight: 700;
+    line-height: 1.9;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.guide-faq summary::-webkit-details-marker { display: none; }
+.guide-faq summary::after {
+    content: '+';
+    flex: 0 0 auto;
+    font-size: 1.25rem;
+    color: #0f5cba;
+    line-height: 1;
+}
+.guide-faq details[open] summary::after { content: '−'; }
+.guide-faq p {
+    margin: 0 0 16px;
+    line-height: 2;
+    font-size: .95rem;
+    color: #334155;
+}
+
+/* ── خدمات مرتبط ── */
+.guide-links {
+    max-width: 860px;
+    margin: 34px auto 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+}
+.guide-links a {
+    display: block;
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    padding: 16px 18px;
+    font-weight: 700;
+    line-height: 1.9;
+    transition: border-color .15s, box-shadow .15s;
+}
+.guide-links a:hover {
+    border-color: #06B6D4;
+    box-shadow: 0 10px 26px rgba(6, 182, 212, .14);
+}
+.guide-links span {
+    display: block;
+    margin-top: 4px;
+    font-size: .85rem;
+    font-weight: 400;
+    color: #64748b;
+}
+
+/* ── راهنمای سریع «چطور عکس بگیریم» ── */
+.photo-tips {
+    max-width: 900px;
+    margin: 26px auto 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 16px;
+}
+.photo-tips .tip {
+    background: #fff;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
+    padding: 18px;
+    line-height: 1.95;
+    font-size: .93rem;
+}
+.photo-tips .tip strong { display: block; margin-bottom: 6px; color: #0F172A; }
+
+/* ── بخش پایانی فراخوان ── */
+.guide-cta {
+    text-align: center;
+    max-width: 760px;
+    margin: 0 auto;
+}
+.guide-cta p { line-height: 2; }
+
+/* گالری مخفیِ منبع lightbox: فقط برای اینکه lightbox.js تصاویر را پیدا کند.
+   از display:none استفاده نمی‌کنیم چون آن زمان ابعاد صفر می‌شود؛ فقط از دید پنهان است. */
+.guide-lightbox-source {
+    position: absolute !important;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    margin: 0;
+    pointer-events: none;
+}
+
+@media (max-width: 760px) {
+    .page-hero { padding: 40px 0 34px; }
+    .shot-card .shot-body { padding: 14px 15px 18px; }
+    .alert-box { padding: 18px 16px; }
+    .guide-checklist li { padding-inline-start: 50px; }
+}

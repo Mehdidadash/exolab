@@ -1,7 +1,14 @@
 <?php
 // panel/download_design_files.php
 // دانلود تجمیعی فایل‌های آپلودشده توسط «طراح» کیس‌های انتخابی به‌صورت ZIP.
-// هر فایل داخل زیپ در پوشه‌ی case_{id} قرار می‌گیرد تا فایل‌های هم‌نام باهم تداخل نداشته باشند.
+//
+// ★ ساختار ZIP دقیقاً مطابق صفحهٔ «مشاهدهٔ کیس» است:
+//     case_{id}/<پوشهٔ طراحی>/<زیرپوشه‌ها...>/<نام نهاییِ فایل>
+//   - فایل‌های داخل پوشهٔ آپلودشده، ساختار درختِ rel_path را حفظ می‌کنند.
+//   - فایل‌های «تکی» (بدون rel_path) مستقیم زیر case_{id}/ قرار می‌گیرند.
+//   - نام هر فایل همان نامی است که در صفحهٔ مشاهدهٔ کیس دیده می‌شود
+//     (پیشوندِ {شماره‌کیس}_{سایه}_{بیمار}_{قبض} + نام اصلی).
+// پوشهٔ case_{id} برای جلوگیری از تداخل فایل‌های هم‌نام بین کیس‌های انتخابی است.
 require_once __DIR__ . '/auth.php';
 require_login();
 
@@ -20,9 +27,12 @@ if (empty($caseIds)) {
 }
 
 $ph = implode(',', array_fill(0, count($caseIds), '?'));
-// فقط فایل‌هایی که توسط طراحِ (فعلی) همان کیس آپلود شده‌اند
+// فقط فایل‌هایی که توسط طراحِ (فعلی) همان کیس آپلود شده‌اند.
+// ستون‌های نام‌گذاری کیس هم لازم است تا نام داخل ZIP با صفحهٔ مشاهدهٔ کیس یکسان شود.
 $stmt = db()->prepare("
-    SELECT cf.case_id, cf.filename, cf.original_name, c.received_date, cf.created_at AS file_created
+    SELECT cf.case_id, cf.filename, cf.original_name, cf.rel_path, cf.file_type,
+           c.received_date, c.shade, c.patient_name, c.receipt_number,
+           cf.created_at AS file_created
     FROM case_files cf
     JOIN cases c ON c.id = cf.case_id
     WHERE cf.case_id IN ($ph)
@@ -44,8 +54,8 @@ if (empty($rows)) {
     exit;
 }
 
-$zipName = 'design_' . jalaliDateForFilename(date('Y-m-d')) . '.zip';
-$outPath = __DIR__ . '/../storage/' . $zipName;
+$zipName = 'design_files_' . jalaliDateForFilename(date('Y-m-d')) . '.zip';
+$outPath = __DIR__ . '/../storage/' . 'tmp_' . bin2hex(random_bytes(6)) . '_' . $zipName;
 $zip = new ZipArchive();
 if ($zip->open($outPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
     http_response_code(500);
@@ -54,18 +64,59 @@ if ($zip->open($outPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
 
 $added = 0;
 $used = [];
+$multiCase = (count(array_unique(array_column($rows, 'case_id'))) > 1);
 foreach ($rows as $r) {
     $filePath = resolve_upload_path('cases/' . $r['case_id'] . '/' . $r['filename']);
     if (!file_exists($filePath)) continue;
-    // نام داخل زیپ: design_<تاریخ دریافت>.ext (در صورت تکرار: design_<تاریخ>_2.ext)
-    $dateStr = jalaliDateForFilename($r['received_date'] ?: ($r['file_created'] ?? date('Y-m-d')));
-    $fe = pathinfo($r['original_name'], PATHINFO_EXTENSION);
-    $entryBase = 'case_' . $r['case_id'] . '/design_' . $dateStr . ($fe !== '' ? '.' . $fe : '');
+
+    // ── پیشوندِ نام‌گذاری (نقطهٔ واحد: caseFileNamingPrefix) ──
+    // دقیقاً همان منطقی که هنگام آپلود استفاده شده، تا نام نمایش‌داده‌شده در
+    // صفحهٔ مشاهدهٔ کیس و نام داخل ZIP یکی باشد.
+    $prefix = '';
+    if (($r['file_type'] ?? null) === 'final_design') {
+        $prefix = caseFileNamingPrefix([
+            'id'             => $r['case_id'],
+            'shade'          => $r['shade'] ?? '',
+            'patient_name'   => $r['patient_name'] ?? '',
+            'receipt_number' => $r['receipt_number'] ?? '',
+        ]);
+    }
+    $baseName = basename((string) $r['original_name']);
+    if ($prefix !== '') {
+        $baseName = addCaseFilePrefix($baseName, $prefix);
+    }
+
+    // ── ساختار پوشه: همان قاعدهٔ صفحهٔ مشاهدهٔ کیس ──
+    // پوشه است اگر rel_path چندبخشی باشد، یا تک‌بخشی و بدون پسوند فایل.
+    $rp = relPathRoot($r['rel_path'] ?? null);
+    $isFolder = $rp && (
+        $rp['rest'] !== ''
+        || pathinfo($rp['root'], PATHINFO_EXTENSION) === ''
+    );
+
+    if ($isFolder) {
+        // ⚠️ پوشهٔ ریشهٔ آپلود (مثلاً «طراحی») دور ریخته می‌شود؛ فقط زیرپوشه‌ها حفظ می‌شوند
+        // تا کاربر مجبور نباشد یک سطح اضافه را باز کند. (درخواست کاربر)
+        $rel = sanitizeRelPath($r['rel_path']);
+        $rest = ($rel !== null && str_contains($rel, '/')) ? substr($rel, strpos($rel, '/') + 1) : '';
+        $dir = ($rest !== '' && str_contains($rest, '/')) ? dirname($rest) : '';
+        $inner = ($dir !== '' && $dir !== '.') ? $dir . '/' . $baseName : $baseName;
+    } else {
+        // فایل تکی → مستقیم در ریشهٔ ZIP
+        $inner = $baseName;
+    }
+
+    // ⚠️ پوشهٔ «case_{id}» فقط وقتی لازم است که بیش از یک کیس انتخاب شده باشد
+    // (برای جلوگیری از تداخل فایل‌های هم‌نام). برای یک کیس، فایل‌ها مستقیم در ریشهٔ ZIP می‌آیند.
+    $entryBase = ($multiCase ? 'case_' . $r['case_id'] . '/' : '') . ltrim(str_replace('\\', '/', $inner), '/');
+
+    // ── یکتا‌سازی نامِ تکراری داخل ZIP ──
     $entry = $entryBase;
     $i = 1;
     while (isset($used[$entry])) {
         $p = pathinfo($entryBase);
-        $entry = $p['dirname'] . '/' . $p['filename'] . "_($i)." . ($p['extension'] ?? '');
+        $dirPart = (($p['dirname'] ?? '') !== '.' && ($p['dirname'] ?? '') !== '') ? $p['dirname'] . '/' : '';
+        $entry = $dirPart . $p['filename'] . "_($i)" . (($p['extension'] ?? '') !== '' ? '.' . $p['extension'] : '');
         $i++;
     }
     $used[$entry] = true;
@@ -90,10 +141,16 @@ foreach ($rows as $r) {
 }
 
 header('Content-Type: application/zip');
-header('Content-Disposition: attachment; filename="' . $zipName . '"');
+// ⚠️ نام فایل در هر دانلود یکتاست تا دانلود‌منیجر (IDM) فایل را «قبلاً دانلودشده»
+// نبیند و هرگز از کش/نسخهٔ قبلی استفاده نکند. (فایل روی سرور موقتی است و بعد پاک می‌شود.)
+$dlName = 'design_files_' . jalaliDateForFilename(date('Y-m-d')) . '_' . date('His') . '.zip';
+header('Content-Disposition: attachment; filename="' . $dlName . '"; filename*=UTF-8\'\'' . rawurlencode($dlName));
 header('Content-Length: ' . filesize($outPath));
-header('Cache-Control: private, max-age=0');
-header('Pragma: public');
+// جلوگیری از استفادهٔ کش/نسخهٔ قبلی توسط مرورگر یا دانلود‌منیجر
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
+header('X-Content-Type-Options: nosniff');
 readfile($outPath);
 @unlink($outPath);
 exit;

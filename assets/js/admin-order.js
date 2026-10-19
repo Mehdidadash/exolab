@@ -3,6 +3,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const tbody = document.getElementById(containerId);
         if (!tbody) return;
 
+        // اگر جدول دستگیرهٔ کشیدن اختصاصی دارد (مثل تب «قیمت‌های عمومی»)،
+        // منطقِ درگِ خودش را دارد و نباید دو بار بایند شود.
+        if (tbody.querySelector('.drag-handle')) return;
+
         let dragSrcEl = null;
 
         function handleDragStart(e) {

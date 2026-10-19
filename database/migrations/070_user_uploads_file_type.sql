@@ -1,0 +1,12 @@
+-- 070_user_uploads_file_type.sql
+-- «نوع فایل» کتابخانهٔ فایل مشترک (user_uploads).
+--
+-- تا پیش از این، ستونِ file_type فقط در جدولِ case_files وجود داشت. صفحهٔ آپلود
+-- کتابخانه («آپلود فایل») هم فیلدِ «نوع فایل» دارد، ولی مقدارش ذخیره نمی‌شد.
+-- با این ستون:
+--   • نام‌گذاری خودکار (پیشوندِ کیس) برای آپلودهای کتابخانه هم اعمال می‌شود،
+--   • «نوع پوشه» در نمای Details قابل استنتاج و نمایش است.
+--
+-- ⚠️ این ستون از نوعِ همان مقادیرِ case_files.file_type پر می‌شود:
+--     raw_scan | final_design | patient_photo | design_html | other
+ALTER TABLE user_uploads ADD COLUMN IF NOT EXISTS file_type VARCHAR(30) NULL AFTER description;

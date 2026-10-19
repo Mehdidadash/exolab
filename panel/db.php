@@ -21,6 +21,7 @@ function db() {
             ensureSitePricesOrderColumn($pdo);
             ensureSitePricesDesignRequiredColumn($pdo);
             ensureSitePricesRequiresScanBodyColumn($pdo);
+            ensureSitePricesDefaultDesignFeeColumn($pdo);
             ensureSitePricesShortNameColumn($pdo);
             ensureEntityCommentsTable($pdo);
             ensureNotificationsTable($pdo);
@@ -35,6 +36,7 @@ function db() {
             ensureCaseFileCaseLinksTable($pdo);
             ensureScanAppointmentsTable($pdo);
             ensureScanBodyTypes($pdo);
+            ensureFixtureTypes($pdo);
             ensureServicePricingColumns($pdo);
             ensureUserClinicsTable($pdo);
             ensureCasesClinicColumn($pdo);
@@ -49,6 +51,7 @@ function db() {
  *   • scan_body_types — کاتالوگ انواع (اویتا / انی‌ریج / ...) + کتابخانهٔ دانلود (لینک یا فایل).
  *   • scan_appointments.scan_body_type_id — نوعِ اسکن‌بادی نوبتِ اسکن.
  *   • cases.scan_body_type_id — نوعِ اسکن‌بادی کیس (برای خدماتِ اباتمنت/فیکسچر).
+ *   • cases.fixture_type_id — نوعِ فیکسچرِ کیس (برای کاستوم اباتمنت کره‌ای/اروپایی).
  *   • site_prices.requires_scan_body — خدماتی که فیلدِ «نوع اسکن‌بادی» لازم دارند.
  * ساختِ خودکار لازم است چون این صفحه‌ها ممکن است روی دیتابیس‌های قدیمی هم اجرا شوند.
  */
@@ -93,7 +96,9 @@ function ensureScanBodyTypes($pdo) {
             ['scan_appointments', 'scan_body_type_id', "INT NULL AFTER needs_scan_body"],
             ['cases', 'scan_body_type_id', "INT NULL AFTER shade"],
             ['cases', 'connection_type', "VARCHAR(30) NULL AFTER scan_body_type_id"],
+            ['cases', 'fixture_type_id', "INT NULL AFTER connection_type"],
             ['site_prices', 'requires_scan_body', "TINYINT(1) NOT NULL DEFAULT 0 AFTER design_required"],
+            ['site_prices', 'requires_fixture_type', "TINYINT(1) NOT NULL DEFAULT 0 AFTER requires_scan_body"],
         ] as [$table, $column, $definition]) {
             $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?");
             $stmt->execute([DB_NAME, $table, $column]);
@@ -110,6 +115,59 @@ function ensureScanBodyTypes($pdo) {
         }
     } catch (Throwable $e) {
         error_log('ensureScanBodyTypes failed: ' . $e->getMessage());
+    }
+}
+
+/**
+ * جدولِ «انواع فیکسچر» (fixture type) + ستون‌های مرتبط.
+ *   • fixture_types — کاتالوگ انواع (مگاژن انی‌ریج / دیو رگولار / ...).
+ *   • cases.fixture_type_id — نوعِ فیکسچرِ کیس (برای کاستوم اباتمنت کره‌ای/اروپایی).
+ *   • site_prices.requires_fixture_type — خدماتی که فیلدِ «نوع فیکسچر» لازم دارند.
+ * ساختِ خودکار لازم است چون این صفحه‌ها ممکن است روی دیتابیس‌های قدیمی هم اجرا شوند.
+ */
+function ensureFixtureTypes($pdo) {
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS fixture_types (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            sort_order INT NOT NULL DEFAULT 0,
+            active TINYINT(1) NOT NULL DEFAULT 1,
+            description TEXT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_fixture_types_name (name)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci");
+
+        // ستون‌ها در صورت نبود (دیتابیس قدیمی)
+        foreach ([
+            ['cases', 'fixture_type_id', "INT NULL AFTER connection_type"],
+            ['site_prices', 'requires_fixture_type', "TINYINT(1) NOT NULL DEFAULT 0 AFTER requires_scan_body"],
+        ] as [$table, $column, $definition]) {
+            try {
+                $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+                $stmt->execute([DB_NAME, $table, $column]);
+                $row = $stmt->fetch();
+                if (empty($row) || (int) $row['cnt'] === 0) {
+                    try {
+                        $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$definition}");
+                    } catch (Throwable $e) {
+                        $fallback = preg_replace('/\s+AFTER\s+`?\w+`?\s*$/i', '', $definition);
+                        $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$fallback}");
+                    }
+                }
+            } catch (Throwable $e) {
+                // جدول/ستون ممکن است هنوز نباشد — بی‌خطر است
+            }
+        }
+
+        // دادهٔ اولیه فقط اگر جدول خالی باشد
+        $cnt = (int) $pdo->query("SELECT COUNT(*) FROM fixture_types")->fetchColumn();
+        if ($cnt === 0) {
+            $pdo->exec("INSERT INTO fixture_types (name, sort_order, active) VALUES
+                ('مگاژن انی ریج', 1, 1), ('دیو رگولار', 2, 1), ('دنتیس وان کیو', 3, 1),
+                ('اویتا', 4, 1), ('بایتم', 5, 1)");
+        }
+    } catch (Throwable $e) {
+        error_log('ensureFixtureTypes failed: ' . $e->getMessage());
     }
 }
 
@@ -177,6 +235,24 @@ function ensureSitePricesRequiresScanBodyColumn($pdo) {
 }
 
 /**
+ * site_prices.default_design_fee — «فی طراحی پیش‌فرض» هر خدمت (فی هر واحد، نه جمع کل).
+ * اگر برای خدمت، نرخِ طراحیِ اختصاصیِ طراح وجود نداشت، فی طراحی از این عدد می‌آید.
+ * مقدار پیش‌فرض NULL = بدون پیش‌فرض (رفتار قبلی).
+ */
+function ensureSitePricesDefaultDesignFeeColumn($pdo) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'site_prices' AND COLUMN_NAME = 'default_design_fee'");
+    $stmt->execute([DB_NAME]);
+    $row = $stmt->fetch();
+    if (empty($row) || (int) $row['cnt'] === 0) {
+        try {
+            $pdo->exec("ALTER TABLE site_prices ADD COLUMN default_design_fee DECIMAL(15,2) NULL DEFAULT NULL AFTER extra_unit_price");
+        } catch (Throwable $e) {
+            $pdo->exec("ALTER TABLE site_prices ADD COLUMN default_design_fee DECIMAL(15,2) NULL DEFAULT NULL");
+        }
+    }
+}
+
+/**
  * آیا خدمتِ داده‌شده نیازمند انتخاب «نوع اسکن‌بادی» است؟
  * (اباتمنت کره‌ای/اروپایی، فیکسچر ایمپلنت و هر خدمتی که در prices.php تیک خورده باشد.)
  * @param int|null $serviceId یا شناسهٔ خدمت
@@ -206,6 +282,38 @@ function serviceScanBodyMap(): array {
         }
     } catch (Throwable $e) {
         // ستون هنوز ساخته نشده — همه false
+    }
+    return $out;
+}
+
+/**
+ * آیا خدمتِ داده‌شده نیازمند انتخاب «نوع فیکسچر» است؟
+ * (کاستوم اباتمنت کره‌ای/اروپایی و هر خدمتی که در price_form.php تیک خورده باشد.)
+ */
+function serviceRequiresFixtureType(?int $serviceId, ?array $priceRow = null): bool {
+    if ($serviceId === null || $serviceId <= 0) return false;
+    if ($priceRow !== null) {
+        return !empty($priceRow['requires_fixture_type']);
+    }
+    try {
+        $st = db()->prepare('SELECT requires_fixture_type FROM site_prices WHERE id = ? LIMIT 1');
+        $st->execute([(int) $serviceId]);
+        $v = $st->fetchColumn();
+        return $v !== false && (int) $v === 1;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/** نقشهٔ id → 0/1 برای «نوع فیکسچر» (برای فرمِ کیس — یک کوئری). */
+function serviceFixtureTypeMap(): array {
+    $out = [];
+    try {
+        foreach (db()->query('SELECT id, requires_fixture_type FROM site_prices')->fetchAll() as $r) {
+            $out[(int) $r['id']] = (int) (!empty($r['requires_fixture_type']));
+        }
+    } catch (Throwable $e) {
+        // ستون هنوز ساخته نشده
     }
     return $out;
 }
@@ -1210,8 +1318,118 @@ function deleteScanBodyType(int $id): bool {
     return true;
 }
 
-// ─── کتابخانهٔ اسکن‌بادی (فایل/لینکِ دانلود) ───
+// =====================================================
+// انواع فیکسچر (fixture type) — کیس‌های کاستوم اباتمنت
+// =====================================================
+// کاستوم اباتمنت کره‌ای/اروپایی علاوه بر نوع اسکن‌بادی، «نوع فیکسچر» هم دارد
+// (مگاژن انی‌ریج، دیو رگولار، دنتیس وان کیو، اویتا، بایتم و ...).
+// این کاتالوگ قابل مدیریت است و پیش‌فرض هیچ گزینه‌ای انتخاب نمی‌شود.
 
+/**
+ * لیستِ انواع فیکسچر.
+ * @param bool $includeInactive آیا موارد غیرفعال هم برگردند؟ (برای صفحهٔ مدیریت)
+ */
+function getFixtureTypes(bool $includeInactive = false): array {
+    $sql = 'SELECT * FROM fixture_types'
+        . ($includeInactive ? '' : ' WHERE active = 1')
+        . ' ORDER BY sort_order ASC, id ASC';
+    try {
+        $rows = db()->query($sql)->fetchAll();
+    } catch (Throwable $e) {
+        if (function_exists('ensureFixtureTypes')) { ensureFixtureTypes(db()); }
+        try { $rows = db()->query($sql)->fetchAll(); } catch (Throwable $e2) { $rows = []; }
+    }
+    return $rows;
+}
+
+/** یک نوع فیکسچر. */
+function getFixtureType(int $id): ?array {
+    if ($id <= 0) return null;
+    try {
+        $st = db()->prepare('SELECT * FROM fixture_types WHERE id = ? LIMIT 1');
+        $st->execute([$id]);
+        $row = $st->fetch();
+    } catch (Throwable $e) {
+        return null;
+    }
+    return $row ?: null;
+}
+
+/** نقشهٔ id → نام برای برچسب‌گذاری سریع در لیست‌ها. */
+function getFixtureTypeNames(): array {
+    $out = [];
+    foreach (getFixtureTypes(true) as $t) {
+        $out[(int) $t['id']] = (string) $t['name'];
+    }
+    return $out;
+}
+
+/** نامِ یک نوع فیکسچر (یا رشتهٔ خالی). */
+function fixtureTypeName(?int $id): string {
+    if (!$id) return '';
+    $t = getFixtureType((int) $id);
+    return $t ? (string) $t['name'] : '';
+}
+
+/** ذخیرهٔ (ایجاد/ویرایش) یک نوع فیکسچر. خطا با Exception برگردانده می‌شود. */
+function saveFixtureType(string $name, int $sortOrder = 0, int $active = 1, ?int $id = null, array $extra = []): int {
+    $name = trim($name);
+    if ($name === '') {
+        throw new InvalidArgumentException('name_required');
+    }
+    $dup = db()->prepare('SELECT id FROM fixture_types WHERE name = ? AND id <> ? LIMIT 1');
+    $dup->execute([$name, (int) ($id ?? 0)]);
+    if ($dup->fetchColumn()) {
+        throw new RuntimeException('duplicate');
+    }
+    $description = array_key_exists('description', $extra) ? trim((string) $extra['description']) : null;
+    $description = ($description === '') ? null : $description;
+    $id = (int) ($id ?? 0);
+
+    if ($id) {
+        db()->prepare('UPDATE fixture_types SET name = ?, sort_order = ?, active = ?, description = ? WHERE id = ?')
+            ->execute([$name, $sortOrder, $active ? 1 : 0, $description, $id]);
+        return $id;
+    }
+
+    db()->prepare('INSERT INTO fixture_types (name, sort_order, active, description, created_at) VALUES (?, ?, ?, ?, NOW())')
+        ->execute([$name, $sortOrder, $active ? 1 : 0, $description]);
+    return (int) db()->lastInsertId();
+}
+
+/** تعداد کیس‌هایی که از این نوع فیکسچر استفاده می‌کنند. */
+function fixtureTypeUsage(int $id): int {
+    try {
+        $st = db()->prepare('SELECT COUNT(*) FROM cases WHERE fixture_type_id = ?');
+        $st->execute([$id]);
+        return (int) $st->fetchColumn();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+/** حذفِ یک نوع فیکسچر. اگر در کیسی استفاده شده باشد حذف نمی‌شود (false). */
+function deleteFixtureType(int $id): bool {
+    if ($id <= 0) return false;
+    if (fixtureTypeUsage($id) > 0) return false;
+    db()->prepare('DELETE FROM fixture_types WHERE id = ?')->execute([$id]);
+    return true;
+}
+
+/** آیا کاربر مجاز به دیدنِ فهرست انواع فیکسچر است؟ (فرمِ کیس باید فهرست را ببیند) */
+function canViewFixtureTypes(?array $user = null): bool {
+    if (function_exists('canViewScanBodyLibrary')) {
+        return canViewScanBodyLibrary($user);
+    }
+    return true;
+}
+
+/** نگهبانِ ویرایشِ کاتالوگ فیکسچر (فقط مدیر سیستم و مدیران شعبه). */
+function canManageFixtureTypes(?array $user = null): bool {
+    return is_admin();
+}
+
+// ─── کتابخانهٔ اسکن‌بادی (فایل/لینکِ دانلود) ───
 /** پوشهٔ ذخیرهٔ فایل‌های کتابخانهٔ اسکن‌بادی (خارج از دسترسِ مستقیم وب اجرا می‌شود). */
 function scanBodyLibraryDir(): string {
     $dir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'storage' . DIRECTORY_SEPARATOR . 'scan_body_library';
@@ -2586,13 +2804,14 @@ function getInvoice($id) {
 
 function getInvoiceItems($invoice_id) {
     $stmt = db()->prepare('SELECT ii.*, p.title AS price_title, c.received_date AS case_received_date,
+                  c.received_date AS received_date,
                   c.case_type, u.full_name AS case_doctor_name
         FROM invoice_items ii
         LEFT JOIN site_prices p ON ii.price_id = p.id
         LEFT JOIN cases c ON ii.case_id = c.id
         LEFT JOIN users u ON c.doctor_id = u.id
         WHERE ii.invoice_id = ?
-        ORDER BY ii.id ASC');
+        ORDER BY (c.received_date IS NULL) ASC, c.received_date ASC, ii.id ASC');
     $stmt->execute([(int) $invoice_id]);
     $items = $stmt->fetchAll();
     // Round amounts to integers (Toman has no decimals)
@@ -3027,7 +3246,50 @@ function getApplicableDesignFee($designer_id, $service_id = null) {
     }
 
     $override = getDesignerDesignFeeOverride((int) $designer_id, $service_id);
-    return $override ? (float) $override['custom_price'] : null;
+    if ($override) {
+        return (float) $override['custom_price'];
+    }
+
+    // آخرین مرحله: «فی طراحی پیش‌فرضِ خودِ خدمت» (site_prices.default_design_fee).
+    // اگر برای این طراح نرخِ اختصاصی وجود نداشت، از پیش‌فرضِ خدمت استفاده می‌شود.
+    return getServiceDefaultDesignFee($service_id);
+}
+
+/**
+ * «فی طراحی پیش‌فرضِ خدمت» — `site_prices.default_design_fee`.
+ * اگر خدمت پیش‌فرضِ طراحی نداشته باشد، NULL برمی‌گردد (رفتار قبلی: نرخ نامشخص).
+ * مقدار برگشتی «فی هر واحد» است (نه جمع کل).
+ *
+ * @param int|null $serviceId
+ * @return float|null
+ */
+function getServiceDefaultDesignFee($serviceId): ?float {
+    if ($serviceId === null || (int) $serviceId <= 0) return null;
+    try {
+        $st = db()->prepare('SELECT default_design_fee FROM site_prices WHERE id = ? LIMIT 1');
+        $st->execute([(int) $serviceId]);
+        $v = $st->fetchColumn();
+        if ($v === false || $v === null || $v === '') return null;
+        return (float) $v;
+    } catch (Throwable $e) {
+        // ستون روی دیتابیس قدیمی ممکن است هنوز نباشد → پیش‌فرض نداشته باش
+        return null;
+    }
+}
+
+/** نقشهٔ id → default_design_fee (برای فرم کیس — یک کوئری، بدون کوئری به‌ازای هر خدمت). */
+function getServiceDefaultDesignFeeMap(): array {
+    $map = [];
+    try {
+        foreach (db()->query('SELECT id, default_design_fee FROM site_prices') as $r) {
+            if ($r['default_design_fee'] !== null && $r['default_design_fee'] !== '') {
+                $map[(int) $r['id']] = (float) $r['default_design_fee'];
+            }
+        }
+    } catch (Throwable $e) {
+        // ستون موجود نیست → نقشهٔ خالی
+    }
+    return $map;
 }
 
 // =====================================================
@@ -3136,12 +3398,12 @@ function getDesignerInvoice(int $id): ?array {
 function getDesignerInvoiceItems(int $invoiceId): array {
     // نامِ اختصاری خدمت و تاریخ دریافت کیس هم برگردانده می‌شوند (برای جدول‌های ویرایش/PDF).
     $stmt = db()->prepare('SELECT dii.*, p.short_name AS service_short,
-                                  c.received_date AS case_received_date
+                                  COALESCE(dii.received_date, c.received_date) AS case_received_date
                            FROM designer_invoice_items dii
                            LEFT JOIN site_prices p ON p.id = dii.service_id
                            LEFT JOIN cases c ON c.id = dii.case_id
                            WHERE dii.invoice_id = ?
-                           ORDER BY dii.id ASC');
+                           ORDER BY (COALESCE(dii.received_date, c.received_date) IS NULL) ASC, COALESCE(dii.received_date, c.received_date) ASC, dii.id ASC');
     $stmt->execute([$invoiceId]);
     return $stmt->fetchAll();
 }
@@ -3227,7 +3489,7 @@ function getUninvoicedCasesForDesignerAll(int $designerId, ?int $payerBranch = n
         LEFT JOIN users u ON c.doctor_id = u.id
         WHERE c.designer_id = ?
           AND c.designer_invoice_id IS NULL' . $payerCond . '
-        ORDER BY c.received_date DESC, c.id DESC
+        ORDER BY c.received_date ASC, c.id ASC
         LIMIT 500
     ');
     $params = [$designerId];
@@ -3396,7 +3658,7 @@ function getUninvoicedCasesForLabAll(int $labId, ?int $payerBranch = null): arra
                 -- نوع ۲: برون‌سپاری جانبی (باید خدمت و تعداد داشته باشد)
                 OR (c.outsourced_lab_id = ? AND c.outsourced_service_id IS NOT NULL AND COALESCE(c.outsourced_qty, 0) > 0)
               )' . $payerCond . '
-        ORDER BY c.received_date DESC, c.id DESC
+        ORDER BY c.received_date ASC, c.id ASC
         LIMIT 500
     ');
     $params = [$labId, $labId, $labId, $labId];
@@ -3546,7 +3808,7 @@ function getUninvoicedCasesForClinic(int $clinicId, string $startDate, string $e
           AND c.invoice_id IS NULL
           AND c.received_date BETWEEN ? AND ?
           AND ' . $scope['sql'] . '
-        ORDER BY c.doctor_id, c.received_date ASC
+        ORDER BY c.received_date ASC, c.id ASC
     ');
     $stmt->execute(array_merge([$startDate, $endDate], $scope['params']));
     return $stmt->fetchAll();
@@ -3906,7 +4168,8 @@ function getOutsourceInvoice(int $id): ?array {
 }
 
 function getOutsourceInvoiceItems(int $invoiceId): array {
-    $stmt = db()->prepare('SELECT * FROM outsource_invoice_items WHERE invoice_id = ? ORDER BY id ASC');
+    $stmt = db()->prepare('SELECT * FROM outsource_invoice_items WHERE invoice_id = ?
+                           ORDER BY (received_date IS NULL) ASC, received_date ASC, id ASC');
     $stmt->execute([$invoiceId]);
     return $stmt->fetchAll();
 }
@@ -4332,7 +4595,8 @@ function getBranchReceivable(int $id): ?array {
 }
 
 function getBranchReceivableItems(int $receivableId): array {
-    $stmt = db()->prepare('SELECT * FROM branch_receivable_items WHERE receivable_id = ? ORDER BY id ASC');
+    $stmt = db()->prepare('SELECT * FROM branch_receivable_items WHERE receivable_id = ?
+                           ORDER BY (received_date IS NULL) ASC, received_date ASC, id ASC');
     $stmt->execute([$receivableId]);
     return $stmt->fetchAll();
 }
@@ -5002,7 +5266,7 @@ function getUninvoicedCasesForLab(int $labId, string $startDate, string $endDate
           AND c.invoice_id IS NULL
           AND c.received_date BETWEEN ? AND ?
           AND c.case_type IN (\'lab_in\', \'lab_out\')
-        ORDER BY c.doctor_id, c.received_date ASC
+        ORDER BY c.received_date ASC, c.id ASC
     ');
     $stmt->execute([$labId, $startDate, $endDate]);
     return $stmt->fetchAll();

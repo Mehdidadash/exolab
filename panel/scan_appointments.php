@@ -201,7 +201,7 @@ panel_layout_start('نوبت اسکن');
 
         <div id="sa-msg" class="sa-msg"></div>
 
-        <form id="sa-form" style="margin-top:10px;">
+        <form id="sa-form" method="post" style="margin-top:10px;">
             <input type="hidden" id="sa-id" value="">
             <div class="sa-grid">
                 <div class="fg">

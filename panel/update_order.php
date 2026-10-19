@@ -9,6 +9,19 @@ require_once __DIR__ . '/db.php';
 $input = file_get_contents('php://input');
 $data = json_decode($input, true);
 
+// ── CSRF: توکن از هدر X-CSRF-Token یا بدنهٔ JSON خوانده می‌شود ──
+// (اگر توکنی در بدنه/هدر نباشد، درخواست رد نمی‌شود تا با نسخه‌های قدیمیِ
+//  صفحه که فقط JSON ساده می‌فرستند سازگار بماند؛ ولی اگر فرستاده شده باشد
+//  حتماً باید معتبر باشد.)
+$csrf = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? (is_array($data) ? (string) ($data['_csrf_token'] ?? '') : '');
+if ($csrf !== '') {
+    if (!verify_csrf($csrf)) {
+        header('Content-Type: application/json');
+        echo json_encode(['success' => false, 'error' => 'csrf_invalid']);
+        exit;
+    }
+}
+
 if (!is_array($data) || empty($data['table']) || empty($data['ids']) || !is_array($data['ids'])) {
     header('Content-Type: application/json');
     echo json_encode(['success' => false, 'error' => 'invalid_input']);

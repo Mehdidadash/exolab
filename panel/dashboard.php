@@ -112,6 +112,79 @@ if ($role === 'admin' || $role === 'branch_admin') {
         $stats['monthly_revenue'] = $runStat("SELECT COALESCE(SUM(i.total_amount), 0) {$invBase} AND i.payment_status='paid' AND i.invoice_date BETWEEN ? AND ?", array_merge($invBr['params'], [$curMonthFrom, $curMonthTo]));
         $stats['total_revenue'] = $runStat("SELECT COALESCE(SUM(i.total_amount), 0) {$invBase} AND i.payment_status='paid'", $invBr['params']);
     }
+
+    // ─── تفکیک بدهی: «فاکتورشده» در برابر «فاکتورنشده» ───
+    // از تابعِ مشترکِ `partyDebtBreakdown()` استفاده می‌کنیم (منبعِ واحدِ حقیقت).
+    // ✅ قاعده: هر کیس فقط یک پرداخت‌کننده دارد → lab → clinic → doctor.
+    // پس هیچ کیسی در دو گروه شمرده نمی‌شود و لازم نیست پزشکانِ عضو کلینیک را
+    // دستی حذف کنیم (چون در تابع، کیسِ دارای clinic_id از پزشک حذف می‌شود).
+    $debtBreak = ['doctor' => [], 'clinic' => [], 'lab' => []];
+    try {
+        $dashBranchOpt = $branchScoped ? ['branch_id' => (int) $bid] : [];
+
+        // ── پزشکان: هر کسی که کیسِ «خودی» (بدون lab و بدون clinic) یا فاکتور دارد ──
+        $docIds = [];
+        $q = "SELECT doctor_id AS uid FROM doctor_invoices
+              WHERE doctor_id IS NOT NULL AND invoice_number NOT LIKE 'INV-LAB%' AND invoice_number NOT LIKE 'INV-CLN%'";
+        if ($branchScoped) $q .= " AND branch_id = " . (int) $bid;
+        $q .= " UNION SELECT doctor_id FROM cases
+               WHERE doctor_id IS NOT NULL AND clinic_id IS NULL
+                 AND lab_id IS NULL AND outsourced_lab_id IS NULL AND status_id <> 5";
+        if ($branchScoped) $q .= " AND branch_id = " . (int) $bid;
+        foreach (db()->query($q)->fetchAll() as $r) { $docIds[(int) $r['uid']] = true; }
+        foreach (array_keys($docIds) as $uid) {
+            if ($uid <= 0) continue;
+            // کاربرِ با نقشِ «کلینیک» در گروه کلینیک‌ها حساب می‌شود، نه پزشکان.
+            $chk = db()->prepare("SELECT role FROM users WHERE id = ? LIMIT 1");
+            $chk->execute([$uid]);
+            if (($chk->fetchColumn() ?: '') === 'clinic') continue;
+            $b = partyDebtBreakdown('doctor', $uid, $dashBranchOpt);
+            $debtBreak['doctor']['invoiced']      = ($debtBreak['doctor']['invoiced'] ?? 0) + $b['invoiced'];
+            $debtBreak['doctor']['uninvoiced']    = ($debtBreak['doctor']['uninvoiced'] ?? 0) + $b['uninvoiced'];
+            $debtBreak['doctor']['invoiced_count']   = ($debtBreak['doctor']['invoiced_count'] ?? 0) + $b['invoice_count'];
+            $debtBreak['doctor']['uninvoiced_count'] = ($debtBreak['doctor']['uninvoiced_count'] ?? 0) + $b['uninvoiced_count'];
+        }
+
+        // ── کلینیک‌ها: هر کلینیکی که کیسِ clinic_id دارد یا فاکتور INV-CLN ──
+        $clinicIds = [];
+        foreach (db()->query("SELECT id FROM users WHERE role = 'clinic'")->fetchAll() as $r) { $clinicIds[(int) $r['id']] = true; }
+        foreach (db()->query("SELECT DISTINCT clinic_id FROM cases WHERE clinic_id IS NOT NULL")->fetchAll() as $r) { $clinicIds[(int) $r['clinic_id']] = true; }
+        foreach (db()->query("SELECT DISTINCT doctor_id FROM doctor_invoices WHERE invoice_number LIKE 'INV-CLN%' AND doctor_id IS NOT NULL")->fetchAll() as $r) { $clinicIds[(int) $r['doctor_id']] = true; }
+        foreach (array_keys($clinicIds) as $uid) {
+            if ($uid <= 0) continue;
+            $b = partyDebtBreakdown('clinic', $uid, $dashBranchOpt);
+            $debtBreak['clinic']['invoiced']      = ($debtBreak['clinic']['invoiced'] ?? 0) + $b['invoiced'];
+            $debtBreak['clinic']['uninvoiced']    = ($debtBreak['clinic']['uninvoiced'] ?? 0) + $b['uninvoiced'];
+            $debtBreak['clinic']['invoiced_count']   = ($debtBreak['clinic']['invoiced_count'] ?? 0) + $b['invoice_count'];
+            $debtBreak['clinic']['uninvoiced_count'] = ($debtBreak['clinic']['uninvoiced_count'] ?? 0) + $b['uninvoiced_count'];
+        }
+
+        // ── لابراتوارهای همکار: هر لابراتواری که فاکتور INV-LAB دارد یا کیس به آن سپرده شده ──
+        $labIds = [];
+        foreach (db()->query("SELECT id FROM users WHERE role IN ('lab','partner_lab','customer_lab','outsource_lab')")->fetchAll() as $r) { $labIds[(int) $r['id']] = true; }
+        foreach (db()->query("SELECT lab_id AS uid FROM cases WHERE lab_id IS NOT NULL UNION SELECT outsourced_lab_id FROM cases WHERE outsourced_lab_id IS NOT NULL")->fetchAll() as $r) { $labIds[(int) $r['uid']] = true; }
+        foreach (db()->query("SELECT DISTINCT doctor_id FROM doctor_invoices WHERE invoice_number LIKE 'INV-LAB%' AND doctor_id IS NOT NULL")->fetchAll() as $r) { $labIds[(int) $r['doctor_id']] = true; }
+        foreach (array_keys($labIds) as $uid) {
+            if ($uid <= 0) continue;
+            $b = partyDebtBreakdown('lab', $uid, $dashBranchOpt);
+            $debtBreak['lab']['invoiced']      = ($debtBreak['lab']['invoiced'] ?? 0) + $b['invoiced'];
+            $debtBreak['lab']['uninvoiced']    = ($debtBreak['lab']['uninvoiced'] ?? 0) + $b['uninvoiced'];
+            $debtBreak['lab']['invoiced_count']   = ($debtBreak['lab']['invoiced_count'] ?? 0) + $b['invoice_count'];
+            $debtBreak['lab']['uninvoiced_count'] = ($debtBreak['lab']['uninvoiced_count'] ?? 0) + $b['uninvoiced_count'];
+        }
+    } catch (\Throwable $e) {
+        // اگر جداول مرتبط نبودند، داشبورد نباید بشکند.
+        $debtBreak = ['doctor' => [], 'clinic' => [], 'lab' => []];
+    }
+    $debtLabels = ['doctor' => 'پزشکان', 'clinic' => 'کلینیک‌ها', 'lab' => 'لابراتوارهای همکار'];
+    $debtSum = ['invoiced' => 0.0, 'uninvoiced' => 0.0, 'invoiced_count' => 0, 'uninvoiced_count' => 0];
+    foreach ($debtBreak as $k => $v) {
+        $debtSum['invoiced']         += (float) ($v['invoiced'] ?? 0);
+        $debtSum['uninvoiced']       += (float) ($v['uninvoiced'] ?? 0);
+        $debtSum['invoiced_count']   += (int) ($v['invoiced_count'] ?? 0);
+        $debtSum['uninvoiced_count'] += (int) ($v['uninvoiced_count'] ?? 0);
+    }
+    $debtSum['total'] = $debtSum['invoiced'] + $debtSum['uninvoiced'];
     ?>
     <!-- Stats Cards -->
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 32px;">
@@ -140,6 +213,89 @@ if ($role === 'admin' || $role === 'branch_admin') {
             <h4 style="margin:0; color:#525252; font-size:0.9rem;">کل درآمد</h4>
             <p style="font-size:1.2rem; margin:8px 0 0; font-weight:700;"><?= formatAmountToman($stats['total_revenue']) ?></p>
         </div>
+    </div>
+
+    <!-- ─── تفکیک بدهی: فاکتورشده در برابر فاکتورنشده ─── -->
+    <div class="form-card" style="margin-bottom:24px;">
+        <h4 style="margin:0 0 12px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+            <span>💰 بدهی طرف‌حساب‌ها — تفکیک «فاکتورشده» و «فاکتورنشده»</span>
+            <span style="font-size:0.85rem; color:#64748b; font-weight:400;">
+                جمع کل: <strong style="color:#ef4444;"><?= formatAmountToman($debtSum['total']) ?></strong>
+            </span>
+        </h4>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; margin-bottom:14px;">
+            <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#991b1b; font-weight:700;">بدهی فاکتورشده</div>
+                <div style="font-size:1.25rem; font-weight:700; color:<?= $debtSum['invoiced'] < -0.01 ? '#166534' : '#b91c1c' ?>; margin-top:4px;"><?= formatAmountToman($debtSum['invoiced']) ?></div>
+                <small style="color:#991b1b;">مجموع فاکتورها − مجموع پرداختی‌ها</small>
+            </div>
+            <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#92400e; font-weight:700;">بدهی فاکتورنشده</div>
+                <div style="font-size:1.25rem; font-weight:700; color:<?= $debtSum['uninvoiced'] < -0.01 ? '#166534' : '#b45309' ?>; margin-top:4px;"><?= formatAmountToman($debtSum['uninvoiced']) ?></div>
+                <small style="color:#92400e;">بدهی کل <?= formatAmountToman($debtSum['total']) ?> − فاکتورشده <?= formatAmountToman($debtSum['invoiced']) ?></small>
+            </div>
+            <div style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#334155; font-weight:700;">جمع کل بدهی</div>
+                <div style="font-size:1.25rem; font-weight:700; color:<?= $debtSum['total'] < -0.01 ? '#166534' : '#0f172a' ?>; margin-top:4px;"><?= formatAmountToman($debtSum['total']) ?></div>
+                <small style="color:#475569;">فاکتورشده + فاکتورنشده</small>
+            </div>
+        </div>
+
+        <div class="table-scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>نوع طرف‌حساب</th>
+                        <th class="th-price">بدهی فاکتورشده</th>
+                        <th class="th-narrow">تعداد فاکتور</th>
+                        <th class="th-price">بدهی فاکتورنشده</th>
+                        <th class="th-narrow">تعداد کیس</th>
+                        <th class="th-price">جمع</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($debtLabels as $dk => $dl):
+                    $dv = $debtBreak[$dk] ?? [];
+                    $inv = (float) ($dv['invoiced'] ?? 0);
+                    $uninv = (float) ($dv['uninvoiced'] ?? 0);
+                    $amtCell = function (float $v) {
+                        if (abs($v) < 0.01) return '<span style="color:#94a3b8;">—</span>';
+                        $c = $v < 0 ? '#166534' : '#b91c1c';
+                        return '<span style="color:' . $c . ';">' . formatAmountToman($v) . '</span>';
+                    };
+                ?>
+                    <tr>
+                        <td><strong><?= htmlspecialchars($dl) ?></strong></td>
+                        <td><?= $amtCell($inv) ?></td>
+                        <td><?= toPersianDigits((string) (int) ($dv['invoiced_count'] ?? 0)) ?></td>
+                        <td><?= $amtCell($uninv) ?></td>
+                        <td><?= toPersianDigits((string) (int) ($dv['uninvoiced_count'] ?? 0)) ?></td>
+                        <td style="font-weight:700; color:<?= ($inv + $uninv) < -0.01 ? '#166534' : '#0f172a' ?>;"><?= formatAmountToman($inv + $uninv) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+                <tfoot>
+                    <tr style="background:#f8fafc; font-weight:700;">
+                        <td>جمع کل</td>
+                        <td><?= formatAmountToman($debtSum['invoiced']) ?></td>
+                        <td><?= toPersianDigits((string) $debtSum['invoiced_count']) ?></td>
+                        <td><?= formatAmountToman($debtSum['uninvoiced']) ?></td>
+                        <td><?= toPersianDigits((string) $debtSum['uninvoiced_count']) ?></td>
+                        <td style="color:<?= $debtSum['total'] < -0.01 ? '#166534' : '#ef4444' ?>;"><?= formatAmountToman($debtSum['total']) ?></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <p style="margin:10px 0 0; font-size:0.82rem; color:#64748b;">
+            ✅ هر کیس فقط یک پرداخت‌کننده دارد: با <code>lab_id</code> ← لابراتوار؛
+            وگرنه با <code>clinic_id</code> ← کلینیک؛ وگرنه ← پزشک.<br>
+            <b>بدهی کل</b> = هزینهٔ کیس‌های خودش − پرداختی &nbsp;|&nbsp;
+            <b>بدهی فاکتورشده</b> = مبلغ فاکتورهای خودش − پرداختی<br>
+            <b>بدهی فاکتورنشده</b> = بدهی کل − بدهی فاکتورشده (پرداختی فقط یک بار کسر می‌شود).<br>
+            عدد <b style="color:#166534;">منفی</b> یعنی طرف‌حساب بستانکار است.
+            کیس‌های لغوشده در محاسبه نمی‌آیند. گزارش لحظه‌ای (مستقل از بازهٔ تاریخ).
+        </p>
     </div>
 
     <!-- Navigation Cards -->
@@ -188,27 +344,53 @@ if ($role === 'admin' || $role === 'branch_admin') {
     $stmt->execute([$user['id']]);
     $totalCases = $stmt->fetchColumn();
 
-    // بدهی پزشک = فاکتورهای پرداخت‌نشده منهای پرداخت‌های جزئیِ ثبت‌شده (خالص)
-    $stmt2 = db()->prepare("SELECT COALESCE(SUM(i.total_amount - COALESCE(paid.applied, 0)), 0)
-        FROM doctor_invoices i
-        LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied FROM doctor_payment_invoices GROUP BY invoice_id) paid
-               ON paid.invoice_id = i.id
-        WHERE i.doctor_id = ? AND i.payment_status = 'unpaid'");
-    $stmt2->execute([$user['id']]);
-    $totalDebt = $stmt2->fetchColumn();
+    // تفکیک بدهی: فاکتورشده (ماندهٔ فاکتورهای پرداخت‌نشده) + فاکتورنشده (کیس‌های بدون فاکتور)
+    $myDebt = partyDebtBreakdown('doctor', (int) $user['id']);
+    $totalDebt = $myDebt['total'];
     ?>
     <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 32px;">
         <div class="card" style="text-align: center; border-right: 4px solid #06B6D4;">
             <h4 style="margin:0; color:#525252; font-size:0.9rem;">کل کیس‌ها</h4>
             <p style="font-size:2rem; margin:8px 0 0; font-weight:700;"><?= toPersianDigits($totalCases) ?></p>
         </div>
-        <?php if ($totalDebt > 0): ?>
-        <div class="card" style="text-align: center; border-right: 4px solid #ef4444;">
-            <h4 style="margin:0; color:#525252; font-size:0.9rem;">بدهی</h4>
-            <p style="font-size:1.2rem; margin:8px 0 0; font-weight:700; color:#ef4444;"><?= formatAmountToman($totalDebt) ?></p>
+        <?php if (abs($totalDebt) > 0.01): ?>
+        <div class="card" style="text-align: center; border-right: 4px solid <?= $totalDebt > 0 ? '#ef4444' : '#10b981' ?>">
+            <h4 style="margin:0; color:#525252; font-size:0.9rem;">جمع بدهی</h4>
+            <p style="font-size:1.2rem; margin:8px 0 0; font-weight:700; color:<?= $totalDebt > 0 ? '#ef4444' : '#166534' ?>;"><?= formatAmountToman($totalDebt) ?></p>
         </div>
         <?php endif; ?>
     </div>
+
+    <?php if (abs($myDebt['invoiced_raw']) > 0.01 || abs($myDebt['uninvoiced_raw']) > 0.01): ?>
+    <!-- تفکیک بدهی: فاکتورشده / فاکتورنشده -->
+    <div class="form-card" style="margin-bottom:24px;">
+        <h4 style="margin:0 0 12px;">💰 تفکیک بدهی شما</h4>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px;">
+            <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#991b1b; font-weight:700;">بدهی فاکتورشده</div>
+                <div style="font-size:1.15rem; font-weight:700; color:<?= $myDebt['invoiced'] < -0.01 ? '#166534' : '#b91c1c' ?>; margin-top:4px;"><?= formatAmountToman($myDebt['invoiced']) ?></div>
+                <small style="color:#991b1b;">فاکتورها <?= formatAmountToman($myDebt['invoiced_raw']) ?> − پرداختی <?= formatAmountToman($myDebt['paid']) ?></small>
+            </div>
+            <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#92400e; font-weight:700;">بدهی فاکتورنشده</div>
+                <div style="font-size:1.15rem; font-weight:700; color:<?= $myDebt['uninvoiced'] < -0.01 ? '#166534' : '#b45309' ?>; margin-top:4px;"><?= formatAmountToman($myDebt['uninvoiced']) ?></div>
+                <small style="color:#92400e;">هزینهٔ <?= toPersianDigits((string) $myDebt['uninvoiced_count']) ?> کیس <?= formatAmountToman($myDebt['uninvoiced_raw']) ?> − فاکتورها <?= formatAmountToman($myDebt['invoiced_raw']) ?></small>
+            </div>
+            <div style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#334155; font-weight:700;">بدهی کل</div>
+                <div style="font-size:1.15rem; font-weight:700; color:<?= $myDebt['total'] < -0.01 ? '#166534' : '#0f172a' ?>; margin-top:4px;"><?= formatAmountToman($myDebt['total']) ?></div>
+                <small style="color:#64748b;">هزینهٔ کیس‌ها <?= formatAmountToman($myDebt['uninvoiced_raw']) ?> − پرداختی <?= formatAmountToman($myDebt['paid']) ?></small>
+            </div>
+        </div>
+        <p style="margin:10px 0 0; font-size:0.82rem; color:#64748b;">
+            «بدهی کل» = مجموع هزینهٔ کیس‌های خودتان منهای مجموع پرداختی‌ها.
+            «فاکتورشده» = مبلغ فاکتورهای خودتان منهای مجموع پرداختی‌ها.
+            «فاکتورنشده» = بدهی کل − بدهی فاکتورشده؛ پرداختی فقط یک بار کسر می‌شود.
+            کیس‌هایی که به لابراتوار سپرده شده‌اند از حساب شما خارج‌اند.
+            عدد منفی یعنی بیشتر از بدهی پرداخت کرده‌اید (بستانکار).
+        </p>
+    </div>
+    <?php endif; ?>
     <div class="grid">
         <div class="card">
             <h3>کیس‌های من</h3>
@@ -225,6 +407,56 @@ if ($role === 'admin' || $role === 'branch_admin') {
         <div class="card">
             <h3>پروفایل من</h3>
             <a class="btn" href="my_profile.php">ویرایش مشخصات و رمز عبور</a>
+        </div>
+    </div>
+    <?php
+} elseif (in_array($role, ['clinic', 'lab', 'partner_lab', 'customer_lab', 'outsource_lab'], true)
+          || has_permission('view_clinic_cases') || has_permission('view_assigned_cases')) {
+    // ─── کلینیک / لابراتوارِ همکار: تفکیک بدهی فاکتورشده و فاکتورنشده ───
+    $party = ($role === 'clinic' || has_permission('view_clinic_cases')) ? 'clinic' : 'lab';
+    $partyLabel = $party === 'clinic' ? 'کلینیک شما' : 'لابراتوار شما';
+    $myDebt = partyDebtBreakdown($party, (int) $user['id'], [
+        'clinic_doctor_ids' => $party === 'clinic' && function_exists('getClinicDoctorIds')
+            ? getClinicDoctorIds((int) $user['id'])
+            : [],
+    ]);
+    ?>
+    <?php if (abs($myDebt['invoiced_raw']) > 0.01 || abs($myDebt['uninvoiced_raw']) > 0.01): ?>
+    <div class="form-card" style="margin-bottom:24px;">
+        <h4 style="margin:0 0 12px;">💰 تفکیک بدهی <?= htmlspecialchars($partyLabel) ?></h4>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:12px;">
+            <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#991b1b; font-weight:700;">بدهی فاکتورشده</div>
+                <div style="font-size:1.15rem; font-weight:700; color:<?= $myDebt['invoiced'] < -0.01 ? '#166534' : '#b91c1c' ?>; margin-top:4px;"><?= formatAmountToman($myDebt['invoiced']) ?></div>
+                <small style="color:#991b1b;">فاکتورها <?= formatAmountToman($myDebt['invoiced_raw']) ?> − پرداختی <?= formatAmountToman($myDebt['paid']) ?></small>
+            </div>
+            <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#92400e; font-weight:700;">بدهی فاکتورنشده</div>
+                <div style="font-size:1.15rem; font-weight:700; color:<?= $myDebt['uninvoiced'] < -0.01 ? '#166534' : '#b45309' ?>; margin-top:4px;"><?= formatAmountToman($myDebt['uninvoiced']) ?></div>
+                <small style="color:#92400e;">هزینهٔ <?= toPersianDigits((string) $myDebt['uninvoiced_count']) ?> کیس <?= formatAmountToman($myDebt['uninvoiced_raw']) ?> − فاکتورها <?= formatAmountToman($myDebt['invoiced_raw']) ?></small>
+            </div>
+            <div style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:10px; padding:12px;">
+                <div style="font-size:0.85rem; color:#334155; font-weight:700;">بدهی کل</div>
+                <div style="font-size:1.15rem; font-weight:700; color:<?= $myDebt['total'] < -0.01 ? '#166534' : '#0f172a' ?>; margin-top:4px;"><?= formatAmountToman($myDebt['total']) ?></div>
+                <small style="color:#64748b;">هزینهٔ کیس‌ها <?= formatAmountToman($myDebt['uninvoiced_raw']) ?> − پرداختی <?= formatAmountToman($myDebt['paid']) ?></small>
+            </div>
+        </div>
+        <p style="margin:0; font-size:0.82rem; color:#64748b;">
+            «بدهی کل» = مجموع هزینهٔ کیس‌های خودتان منهای مجموع پرداختی‌ها.
+            «فاکتورشده» = مبلغ فاکتورهای خودتان منهای مجموع پرداختی‌ها.
+            «فاکتورنشده» = بدهی کل − بدهی فاکتورشده؛ پرداختی فقط یک بار کسر می‌شود.
+            کیس‌هایی که به لابراتوار سپرده شده‌اند از حساب شما خارج‌اند.
+        </p>
+    </div>
+    <?php endif; ?>
+    <div class="grid">
+        <div class="card">
+            <h3>کیس‌ها</h3>
+            <a class="btn" href="cases.php">مشاهده</a>
+        </div>
+        <div class="card">
+            <h3>فاکتورها</h3>
+            <a class="btn" href="invoices.php">مشاهده</a>
         </div>
     </div>
     <?php

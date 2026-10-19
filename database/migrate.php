@@ -134,6 +134,11 @@ $ALREADY_CHECKS = [
     '042_fix_design_fees.sql' => "SELECT 1 FROM cases WHERE patient_name='خانوم حسینی' AND received_date='2026-08-06' AND doctor_id=3 AND design_fee=600000",
     '043_fix_design_fee_1126.sql' => "SELECT 1 FROM cases WHERE patient_name='نیلوفر زمانی' AND received_date='2026-08-16' AND doctor_id=22 AND design_fee=160000",
     '044_fix_design_fee_1141_1159.sql' => "SELECT 1 FROM cases WHERE patient_name='علیرضا آتشین' AND received_date='2026-08-26' AND doctor_id=16 AND design_fee=480000",
+    // 074: ستون نشانهٔ design_fee_is_unit اثرِ شناسهٔ این مهاجرت است. اگر وجود داشته باشد،
+    // مهاجرت «از قبل» اعمال شده و اجرای دوبارهٔ آن باعث تقسیمِ دوبارهٔ design_fee (فاجعه) می‌شود.
+    // ⚠️ بدون این چک، برگرداندنِ ردیف از _migrations یا دیتابیسِ ناقص، نرخ طراحی را دوباره تقسیم می‌کرد.
+    '074_design_fee_to_unit_rate.sql' => "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='cases' AND COLUMN_NAME='design_fee_is_unit'",
+    '075_site_prices_default_design_fee.sql' => "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='site_prices' AND COLUMN_NAME='default_design_fee'",
 ];
 
 $count = 0;

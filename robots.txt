@@ -1,0 +1,17 @@
+User-agent: *
+Allow: /
+
+# پوشه‌های مدیریتی و فایل‌های داخلی نباید ایندکس شوند
+Disallow: /panel/
+Disallow: /includes/
+Disallow: /src/
+Disallow: /storage/
+Disallow: /vendor/
+Disallow: /database/
+Disallow: /backups/
+Disallow: /uploads/
+
+# اجازه‌ی ایندکس‌شدنِ عکس‌های راهنمای عمومی (از طریق guide_media.php سرو می‌شوند)
+Allow: /uploads/guide/
+
+Sitemap: https://exolab.ir/sitemap.xml

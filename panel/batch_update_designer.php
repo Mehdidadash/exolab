@@ -75,12 +75,13 @@ foreach ($caseIds as $cid) {
         continue;
     }
 
-    // Recompute design fee for the new designer
+    // Recompute design fee for the new designer.
+    // design_fee = فی (نرخ هر واحد طراحی)، نه جمع کل.
     $qty = (int) ($case['quantity'] ?? 1);
     $unitPrice = (float) ($case['unit_price'] ?? 0);
     if ($designerId > 0) {
         $unitFee = getApplicableDesignFee($designerId, (int) ($case['service_id'] ?? 0));
-        $newDesignFee = $unitFee !== null ? round($unitFee * $qty) : 0;
+        $newDesignFee = $unitFee !== null ? round($unitFee) : 0;
     } else {
         $newDesignFee = 0;
     }

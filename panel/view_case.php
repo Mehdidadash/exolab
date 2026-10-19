@@ -120,6 +120,9 @@ $prices = getAllPrices();
 // انواع اسکن‌بادی فعال — برای فیلدِ «نوع اسکن‌بادی» در فرم ویرایش کیس
 // (فقط برای خدماتی که requires_scan_body دارند نمایش داده می‌شود).
 $scanBodyTypesForCase = getScanBodyTypes();
+// انواع فیکسچر فعال — برای فیلدِ «نوع فیکسچر» در فرم ویرایش کیس
+// (فقط برای خدماتی که requires_fixture_type دارند — کاستوم اباتمنت کره‌ای/اروپایی — نمایش داده می‌شود).
+$fixtureTypesForCase = getFixtureTypes();
 // Whether the current user may edit this case (admin / staff / secretary …)
 $canEditCase = has_role('admin') || has_role('branch_admin') || has_permission('edit_cases');
 // چه کسی می‌تواند متن کامنت/توضیح فایل را به یادداشت پزشک اضافه کند
@@ -133,12 +136,32 @@ $canLinkFiles = is_admin()
 
 panel_layout_start('مشاهده کیس');
 ?>
+<style>
+    /* ── بزرگ‌ترکردن کلیِ فونت‌های صفحهٔ مشاهدهٔ کیس ──
+       فقط روی همین صفحه اثر دارد و بلوک‌های سه‌بعدی/آپلود (که اندازهٔ ثابت دارند)
+       را با استثنا بیرون می‌گذارد. */
+    .form-card{ font-size:1.02rem; }
+    .form-card h3{ font-size:1.85rem; line-height:1.6; }
+    .form-card h4{ font-size:1.25rem; line-height:1.7; }
+    .form-card label{ font-size:1rem; }
+    .form-card p, .form-card li{ line-height:1.95; }
+    .form-card table{ font-size:1rem; }
+    .form-card table td, .form-card table th{ padding:8px 10px; }
+    .form-card .btn{ font-size:.95rem; }
+    .form-card small{ font-size:.86rem; }
+    /* استثناها: نمایشگر سه‌بعدی، آپلود فایل و مودال‌های فنی */
+    #viewer, #viewer-overlay, #case-upload-box, #webview-wrap, #webview-frame, .modal{ font-size:initial; }
+</style>
 <div class="form-card">
     <?php if (!$case): ?>
         <p>کیسی یافت نشد.</p>
     <?php else: ?>
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
-            <h3 style="margin:0;">کیس #<?= htmlspecialchars($case['id']) ?> - <?= htmlspecialchars($case['patient_name']) ?><?= !empty($case['receipt_number']) ? ' / ' . htmlspecialchars($case['receipt_number']) : '' ?></h3>
+            <h3 style="margin:0; font-size:1.85rem; line-height:1.6;">
+                کیس #<?= htmlspecialchars($case['id']) ?> — <?= htmlspecialchars($case['patient_name']) ?>
+                <?php if (!empty($case['service_title'])): ?><span style="font-size:1.15rem; font-weight:700; color:#0369a1;">| خدمت: <?= htmlspecialchars($case['service_title']) ?></span><?php endif; ?>
+                <?php if (!empty($case['receipt_number'])): ?><span style="font-size:1rem; font-weight:600; color:#64748b;">/ <?= htmlspecialchars($case['receipt_number']) ?></span><?php endif; ?>
+            </h3>
             <?php if ($canEditCase): ?>
                 <a href="#" id="edit-case-btn" class="btn" style="background:#06B6D4; color:#fff;">✏️ ویرایش کیس</a>
             <?php endif; ?>
@@ -297,6 +320,12 @@ panel_layout_start('مشاهده کیس');
         if (isValidConnectionType($case['connection_type'] ?? null)) {
             $infoItems[] = ['label' => '🔩 نوع اتصال', 'value' => htmlspecialchars(connectionTypeLabel((string) $case['connection_type']))];
         }
+        if (!empty($case['fixture_type_id'])) {
+            $ftName = fixtureTypeName((int) $case['fixture_type_id']);
+            if ($ftName !== '') {
+                $infoItems[] = ['label' => '🔧 نوع فیکسچر', 'value' => htmlspecialchars($ftName)];
+            }
+        }
         $infoItems[] = ['label' => 'تاریخ دریافت', 'value' => htmlspecialchars(toJalaliDateFormatted($case['received_date']))];
         $infoItems[] = ['label' => 'مکان / دندان', 'value' => htmlspecialchars(formatCaseLocation($case['location_type'], $case['teeth']))];
 
@@ -375,22 +404,47 @@ panel_layout_start('مشاهده کیس');
                 ];
             } else {
                 $infoItems[] = ['label' => 'فی (تومان)', 'value' => $case['unit_price'] ? formatAmountToman($case['unit_price']) : '—'];
-                $infoItems[] = ['label' => 'هزینه طراحی', 'value' => !empty($case['design_fee']) ? formatAmountToman($case['design_fee']) : '—'];
+                // فی طراحی (نرخ هر واحد) + جمع طراحی (فی × تعداد)
+                $designUnit = (float) ($case['design_fee'] ?? 0);
+                $designQty  = (int) ($case['quantity'] ?? 1);
+                if ($designUnit > 0) {
+                    $infoItems[] = ['label' => 'فی طراحی', 'value' => formatAmountToman($designUnit) . ' تومان'
+                        . ($designQty > 1 ? '<small style="display:block; font-weight:400; color:#525252; margin-top:2px;">جمع طراحی: ' . formatAmountToman($designUnit * $designQty) . ' تومان (' . toPersianDigits($designQty) . ' واحد)</small>' : '')];
+                } else {
+                    $infoItems[] = ['label' => 'فی طراحی', 'value' => '—'];
+                }
                 $infoItems[] = ['label' => 'جمع کل', 'value' => $case['total_price'] ? formatAmountToman($case['total_price']) : '—', 'valueStyle' => 'font-weight:700;'];
             }
         }
         if (!empty($case['doctor_notes'])) {
+            // توضیحات پزشک: کشویی (details) + نشانگرِ توجه وقتی خالی نیست.
+            // دکمهٔ «پرچم» هشدار بصری است تا بینندهٔ کیس متوجه وجود یادداشت شود.
             $infoItems[] = [
-                'label' => 'توضیحات پزشک',
-                'value' => '<div style="white-space:pre-wrap; direction:rtl; text-align:right; unicode-bidi:plaintext; line-height:1.9;">' . nl2br(htmlspecialchars($case['doctor_notes'])) . '</div>',
+                'label' => '<span class="ci-flag" title="توضیحات پزشک ثبت شده است">⚑</span> توضیحات پزشک',
+                'labelRaw' => true,
+                'value' => '<details class="ci-details ci-doctor-notes">'
+                    . '<summary class="ci-details-summary">'
+                    . '<span class="ci-flag" title="یادداشت پزشک دارد">⚑</span>'
+                    . '<span>مشاهدهٔ توضیحات پزشک</span>'
+                    . '<span class="ci-details-caret">▶</span>'
+                    . '</summary>'
+                    . '<div class="ci-details-body" style="white-space:pre-wrap; direction:rtl; text-align:right; unicode-bidi:plaintext; line-height:2;">'
+                    . nl2br(htmlspecialchars($case['doctor_notes']))
+                    . '</div>'
+                    . '</details>',
                 'wide' => true,
+                'style' => 'background:#fffbeb; border-right:4px solid #f59e0b;',
+                'itemClass' => 'ci-doctor-notes-item',
             ];
         }
         if (!empty($case['description'])) {
+            // توضیحات کیس: پررنگ و درشت تا بیش از بقیهٔ فیلدها به چشم بیاید.
             $infoItems[] = [
-                'label' => 'توضیحات',
-                'value' => '<div style="white-space:pre-wrap; line-height:1.9;">' . nl2br(htmlspecialchars($case['description'])) . '</div>',
+                'label' => '📝 توضیحات',
+                'value' => '<div class="ci-description" style="white-space:pre-wrap; line-height:2;">' . nl2br(htmlspecialchars($case['description'])) . '</div>',
                 'wide' => true,
+                'style' => 'background:#eff6ff; border-right:4px solid #2563eb;',
+                'itemClass' => 'ci-description-item',
             ];
         }
         ?>
@@ -415,16 +469,41 @@ panel_layout_start('مشاهده کیس');
             .case-info-grid .ci-item.ci-wide{ grid-column:1 / -1; }
             .case-info-grid .ci-item.ci-stack{ flex-direction:column; gap:2px; align-items:stretch; }
             .case-info-grid .ci-label{
-                color:#475569; font-weight:700; white-space:nowrap; font-size:.82rem;
+                color:#475569; font-weight:700; white-space:nowrap; font-size:.95rem;
                 flex:0 0 auto;
             }
             .case-info-grid .ci-value{
-                min-width:0; overflow-wrap:anywhere; font-size:.88rem;
+                min-width:0; overflow-wrap:anywhere; font-size:1.02rem;
                 /* مقدارها ستون‌بندی‌شده و خوانا: اعداد هم‌تراز و بدون شکستِ زشت */
-                line-height:1.7;
+                line-height:1.85;
             }
             /* ارزش‌های عددی (مبلغ/تعداد) هم‌عرض و هم‌تراز */
             .case-info-grid .ci-value b{ font-weight:700; }
+            /* ── «توضیحات»: پررنگ‌تر و درشت‌تر از بقیهٔ فیلدها تا به چشم بیاید ── */
+            .case-info-grid .ci-description-item .ci-label{ font-size:1.05rem; color:#1e3a8a; }
+            .case-info-grid .ci-description{
+                font-size:1.18rem; font-weight:700; color:#0f172a; line-height:2.1;
+            }
+            /* ── «توضیحات پزشک»: کشویی + نشانگرِ توجه (پرچم ⚑) ── */
+            .case-info-grid .ci-flag{
+                color:#b45309; font-size:1.05rem; line-height:1;
+            }
+            .case-info-grid .ci-doctor-notes-item .ci-label{ color:#92400e; }
+            .ci-details{ display:block; }
+            .ci-details > summary.ci-details-summary{
+                cursor:pointer; list-style:none; outline:none;
+                display:inline-flex; align-items:center; gap:8px;
+                background:#fef3c7; color:#92400e; border:1px solid #fcd34d;
+                border-radius:8px; padding:5px 12px; font-weight:700; font-size:1rem;
+            }
+            .ci-details > summary.ci-details-summary::-webkit-details-marker{ display:none; }
+            .ci-details > summary.ci-details-summary:hover{ background:#fde68a; }
+            .ci-details-caret{ transition:transform .2s; display:inline-block; font-size:.8rem; }
+            .ci-details[open] .ci-details-caret{ transform:rotate(90deg); }
+            .ci-details .ci-details-body{
+                margin-top:8px; padding:10px 12px; background:#fff;
+                border:1px dashed #fcd34d; border-radius:8px; font-size:1.05rem;
+            }
             /* نمودار دندان: تمام‌عرضِ کارت را پر کند (نه فقط نیمهٔ چپ). */
             .case-info-grid .ci-teeth-wrap{ width:100%; padding:4px 0 2px; }
             /* خطِ جداکنندهٔ عمودی روشن‌تر روی ستون‌ها: هر فیلد مرزِ مشخصی دارد */
@@ -435,8 +514,8 @@ panel_layout_start('مشاهده کیس');
         </style>
         <div class="case-info-grid">
             <?php foreach ($infoItems as $it): ?>
-                <div class="ci-item<?= !empty($it['wide']) ? ' ci-wide' : '' ?><?= !empty($it['stack']) ? ' ci-stack' : '' ?>"<?= !empty($it['style']) ? ' style="' . htmlspecialchars($it['style'], ENT_QUOTES) . '"' : '' ?>>
-                    <span class="ci-label"><?= htmlspecialchars($it['label']) ?>:</span>
+                <div class="ci-item<?= !empty($it['wide']) ? ' ci-wide' : '' ?><?= !empty($it['stack']) ? ' ci-stack' : '' ?><?= !empty($it['itemClass']) ? ' ' . htmlspecialchars($it['itemClass'], ENT_QUOTES) : '' ?>"<?= !empty($it['style']) ? ' style="' . htmlspecialchars($it['style'], ENT_QUOTES) . '"' : '' ?>>
+                    <span class="ci-label"><?= !empty($it['labelRaw']) ? $it['label'] : htmlspecialchars($it['label']) ?>:</span>
                     <span class="ci-value"<?= !empty($it['valueStyle']) ? ' style="' . htmlspecialchars($it['valueStyle'], ENT_QUOTES) . '"' : '' ?>><?= $it['value'] ?></span>
                 </div>
             <?php endforeach; ?>
@@ -462,7 +541,7 @@ panel_layout_start('مشاهده کیس');
             <?php if ($canChangeStatus): ?>
             <div class="form-card">
                 <h4>تغییر وضعیت کیس</h4>
-                <form id="case-status-form" class="vc-action-form">
+                <form id="case-status-form" method="post" class="vc-action-form">
                 <input type="hidden" name="case_id" value="<?= (int) $case['id'] ?>">
                 <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <select id="case-status-change" name="status_id">
@@ -521,7 +600,7 @@ panel_layout_start('مشاهده کیس');
             <?php if (!empty($case['designer_invoice_id'])): ?>
                 <p style="color:#b91c1c;">این کیس قبلاً در فاکتور طراحی ثبت شده و نمی‌توان طراح آن را تغییر داد.</p>
             <?php else: ?>
-            <form id="case-change-designer-form" class="vc-action-form">
+            <form id="case-change-designer-form" method="post" class="vc-action-form">
                 <input type="hidden" name="case_id" value="<?= (int) $case['id'] ?>">
                 <select id="case-change-designer-select">
                     <option value="">بدون طراح (حذف طراح)</option>
@@ -534,7 +613,7 @@ panel_layout_start('مشاهده کیس');
                 <button type="submit" class="btn" style="background:#d97706; color:#fff;">تغییر طراح</button>
             </form>
             <div id="case-change-designer-msg" style="margin-top:8px; font-weight:bold;"></div>
-            <small style="display:block; margin-top:6px; color:#525252;">هزینه طراحی و جمع کل بر اساس نرخ طراح جدید به‌صورت خودکار محاسبه می‌شود.</small>
+            <small style="display:block; margin-top:6px; color:#525252;">فی طراحی و جمع کل بر اساس نرخ طراح جدید به‌صورت خودکار محاسبه می‌شود.</small>
             <?php endif; ?>
         </div>
         <script>
@@ -579,11 +658,14 @@ panel_layout_start('مشاهده کیس');
 
         <?php
         // ── نوبت‌های اسکن این کیس (نوبت‌دهی اسکن) ──
+        // طراح نیازی به دیدن این بخش ندارد و برایش کاملاً پنهان می‌شود.
         $caseAppts      = getCaseScanAppointments((int) $case['id']);
         $saTypes        = scanAppointmentTypes();
         $saStatuses     = scanAppointmentStatuses();
         $canManageAppts = canManageScanAppointments();
+        $showScanAppts  = !$isDesigner;
         ?>
+        <?php if ($showScanAppts): ?>
         <div class="form-card" style="margin-top:20px;">
             <h4 style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 8px;">
                 <span>🗓 نوبت‌های اسکن این کیس</span>
@@ -621,6 +703,7 @@ panel_layout_start('مشاهده کیس');
                 </div>
             <?php endif; ?>
         </div>
+        <?php endif; // showScanAppts (طراح این بخش را نمی‌بیند) ?>
 
         <div class="form-card" style="margin-top:20px;">
             <h4>پیام‌ها و کامنت‌ها</h4>
@@ -970,7 +1053,7 @@ panel_layout_start('مشاهده کیس');
                 #case-upload-form .vc-up-help.has-error{ color:#b91c1c; }
             </style>
             <strong>آپلود فایل</strong>
-            <form id="case-upload-form" enctype="multipart/form-data" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
+            <form id="case-upload-form" method="post" enctype="multipart/form-data" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:8px;">
                 <input type="file" id="case-upload-input" name="case_files[]" accept=".stl,.ply,.stp,.step,.obj,.3mf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.rar,.zip,.pdf,.matrix4,.dentalProject,.iftScan,.constructionInfo,.dcm,.dicom,.txt,.xml,.html,.htm" multiple hidden>
                 <?php // انتخاب پوشه: مرورگر خودِ پوشه را نمی‌فرستد بلکه همهٔ فایل‌های داخلش را با مسیر نسبی می‌دهد
                 // ⚠️ این input را نباید با `hidden`/display:none پنهان کرد؛ کروم در آن حالت
@@ -1012,13 +1095,7 @@ panel_layout_start('مشاهده کیس');
                 <div id="case-upload-folder-list" style="display:none; width:100%; margin-top:8px; max-height:170px; overflow:auto; border:1px solid #e2e8f0; border-radius:8px; padding:6px;"></div>
                 <?php $uplLimits = uploadLimits(); ?>
                 <?php // راهنما فقط در صورت نیاز (hover روی ناحیهٔ آپلود یا هنگام خطا) ?>
-                <small id="case-upload-help" class="vc-up-help" style="width:100%;">
-                    فرمت‌های مجاز: STL، PLY، STP، STEP، OBJ، 3MF · JPG، PNG، GIF، WEBP، BMP · RAR، ZIP · PDF · HTML<br>
-                    محدودیت سرور: حداکثر حجم هر فایل <strong><?= $uplLimits['max_file'] ? formatFileSize($uplLimits['max_file']) : 'نامحدود' ?></strong>
-                    · مجموع هر ارسال <strong><?= $uplLimits['post_max'] ? formatFileSize($uplLimits['post_max']) : 'نامحدود' ?></strong>
-                    · حداکثر <strong><?= toPersianDigits((string) $uplLimits['max_files']) ?></strong> فایل در هر ارسال
-                    · پوشه: حداکثر <strong><?= toPersianDigits((string) uploadFolderMaxFiles()) ?></strong> فایل
-                </small>
+
             </form>
             <div id="case-upload-msg" style="margin-top:6px; font-weight:bold;"></div>
             <div id="case-upload-progress" style="display:none; margin-top:8px;">
@@ -1311,6 +1388,13 @@ panel_layout_start('مشاهده کیس');
         </script>
         <?php endif; ?>
         <?php
+        // ── کامپوننت مشترکِ نمایش فایل‌ها (نمای Details / درختِ پوشه) ──
+        // ⚠️ این require باید **بیرون و پیش از** شرطِ «کیس فایل دارد؟» باشد.
+        // قبلاً داخلِ شاخهٔ else بود؛ ولی renderFileDetailsView() در شاخهٔ
+        // «کیسِ بدون فایل» هم صدا زده می‌شود ⇒ خطای
+        // «Call to undefined function renderFileDetailsView()» روی کیج‌های خالی.
+        require_once __DIR__ . '/../includes/file_details_view.php';
+
         // ── آماده‌سازی: جدا کردن فایل‌های «داخل پوشه» از فایل‌های تکی ──
         // این بخش باید **قبل از** رندر نوار پوشه اجرا شود و به فایل‌ها وابسته نیست،
         // چون باید برای کیسِ بدون فایل هم کار کند (تا کاربر بتواند پوشه بسازد).
@@ -1511,7 +1595,7 @@ panel_layout_start('مشاهده کیس');
 
             // ── ساختِ ردیف‌های «نمای Details» ──
             // هر فایل به یک ردیف با ستون‌های هم‌تراز تبدیل می‌شود: نام | حجم | نوع | تاریخ | عملیات.
-            require_once __DIR__ . '/../includes/file_details_view.php';
+            // (require یک‌بار در بالای همین بلوک انجام شده است.)
             $fileRows = [];
             foreach ($files as $f) {
                 $ext = strtolower(pathinfo($f['filename'], PATHINFO_EXTENSION));
@@ -1523,6 +1607,9 @@ panel_layout_start('مشاهده کیس');
                     'size'     => $f['size'] ?? null,
                     'date'     => $f['created_at'] ?? null,
                     'ext'      => $ext,
+                    // نوع فایل — برای استنتاج «نوع پوشه» در سرصفحهٔ پوشه استفاده می‌شود.
+                    'file_type' => $f['file_type'] ?? null,
+                    'mime'     => $f['mime'] ?? null,
                     // ستونِ «نوع» در کامپوننت از ext پر می‌شود؛ متادیتای تفصیلی را
                     // در ستونِ نام (زیرِ نام فایل) تزریق می‌کنیم.
                     'actions'  => $fileActionsHtml($f, $rp ? $rp['rest'] : null),
@@ -1628,7 +1715,7 @@ panel_layout_start('مشاهده کیس');
             <div id="rename-modal" class="modal" style="display:none;">
                 <div class="modal-content form-card" style="max-width:460px; margin:auto;">
                     <h3>ویرایش فایل</h3>
-                    <form id="rename-form">
+                    <form id="rename-form" method="post">
                         <input type="hidden" id="rename-file-id" name="id">
                         <div class="form-group">
                             <label for="rename-file-name">نام فایل</label>
@@ -1651,7 +1738,7 @@ panel_layout_start('مشاهده کیس');
                 <div class="modal-content form-card" style="max-width:420px; margin:auto;">
                     <h3>حذف فایل</h3>
                     <p>آیا از حذف فایل <strong id="delete-file-name"></strong> مطمئن هستید؟</p>
-                    <form id="delete-form">
+                    <form id="delete-form" method="post">
                         <input type="hidden" id="delete-file-id" name="id">
                         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:12px;">
                             <button type="button" id="delete-cancel-file" class="btn">انصراف</button>
@@ -2736,7 +2823,7 @@ panel_layout_start('مشاهده کیس');
             <h3 style="margin:0;">✏️ ویرایش کیس #<?= (int) $case['id'] ?> - <?= htmlspecialchars($case['patient_name']) ?></h3>
             <button type="button" id="edit-case-close" class="btn" style="background:#E5E7EB; color:#0F172A; padding:4px 12px;">✕</button>
         </div>
-        <form id="edit-case-form">
+        <form id="edit-case-form" method="post">
             <input type="hidden" name="id" value="<?= (int) $case['id'] ?>">
             <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px;">
@@ -2847,6 +2934,21 @@ panel_layout_start('مشاهده کیس');
                         نحوهٔ نگهداشتِ ترمیم روی اباتمنت: پیچ‌شونده، سیمانی‌شونده، یا ترکیبی.
                     </small>
                 </div>
+                <?php if (!empty($fixtureTypesForCase)): ?>
+                <div class="form-group" id="ec-fixture-group" style="display:none;">
+                    <label for="ec-fixture-type">🔧 نوع فیکسچر</label>
+                    <select id="ec-fixture-type" name="fixture_type_id">
+                        <option value="">انتخاب...</option>
+                        <?php foreach ($fixtureTypesForCase as $ft): ?>
+                            <option value="<?= (int) $ft['id'] ?>" <?= (int) ($case['fixture_type_id'] ?? 0) === (int) $ft['id'] ? 'selected' : '' ?>><?= htmlspecialchars((string) $ft['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                    <small style="display:block; color:#525252; margin-top:4px;">
+                        برای کیس‌های کاستوم اباتمنت کره‌ای/اروپایی.
+                        <a href="fixture_types.php" target="_blank">مدیریت انواع فیکسچر</a>
+                    </small>
+                </div>
+                <?php endif; ?>
                 <?php endif; ?>
                 <div class="form-group">
                     <label><?= field_icon('map-location') ?> مکان</label>
@@ -2892,7 +2994,7 @@ panel_layout_start('مشاهده کیس');
                     <input type="number" name="unit_price" min="0" step="1" value="<?= (int) ($case['unit_price'] ?? 0) ?>">
                 </div>
                 <div class="form-group">
-                    <label><?= field_icon('pen-ruler') ?> هزینه طراحی (تومان)</label>
+                    <label><?= field_icon('pen-ruler') ?> فی طراحی (تومان)</label>
                     <input type="number" name="design_fee" id="ec-design-fee" min="0" step="1" value="<?= (int) ($case['design_fee'] ?? 0) ?>">
                     <small id="ec-design-fee-note" style="display:none; color:#b45309; background:#fffbeb; border-radius:6px; padding:4px 8px; margin-top:6px;"></small>
                 </div>
@@ -2990,6 +3092,14 @@ panel_layout_start('مشاهده کیس');
         array_map(function ($p) { return (int) (!empty($p['requires_scan_body'])); }, array_column($prices, null, 'id')),
         JSON_UNESCAPED_UNICODE
     ) ?>;
+    // خدماتی که فیلدِ «نوع فیکسچر» لازم دارند (کاستوم اباتمنت کره‌ای/اروپایی).
+    var SVC_REQUIRES_FIXTURE = <?= json_encode(
+        array_map(function ($p) { return (int) (!empty($p['requires_fixture_type'])); }, array_column($prices, null, 'id')),
+        JSON_UNESCAPED_UNICODE
+    ) ?>;
+    var DEFAULT_CONNECTION_TYPE = 'cement-retained';   // «چسب‌شونده»
+    // فی طراحی پیش‌فرض هر خدمت (site_prices.default_design_fee) — فالبکِ نرخ اختصاصی.
+    var SVC_DEFAULT_DESIGN_FEE = <?= json_encode(getServiceDefaultDesignFeeMap(), JSON_UNESCAPED_UNICODE) ?>;
     var DEFAULT_DESIGNER_ID = <?= (int) $defaultDesignerId ?>;
     var ecDesignerEl = document.getElementById('ec-designer-id');
     var ecDesignFeeEl = document.getElementById('ec-design-fee');
@@ -3004,24 +3114,51 @@ panel_layout_start('مشاهده کیس');
         return (SVC_DESIGN_REQUIRED[v] === undefined) ? true : !!SVC_DESIGN_REQUIRED[v];
     }
 
-    // ── فیلد «نوع اسکن‌بادی» و «نوع اتصال»: فقط برای خدماتی که requires_scan_body دارند ──
+    // ── فیلد «نوع اسکن‌بادی»، «نوع اتصال» و «نوع فیکسچر»: فقط برای خدماتی که پرچمِ مربوط را دارند ──
     function ecToggleScanBodyField(){
         var wrap = document.getElementById('ec-scan-body-group');
         var connWrap = document.getElementById('ec-connection-group');
+        var fixWrap = document.getElementById('ec-fixture-group');
         var el = ecServiceEl();
         var v = el ? String(el.value || '') : '';
         var on = v !== '' && !!SVC_REQUIRES_SCAN_BODY[v];
-        // هر دو فیلد با هم ظاهر/ناپدید می‌شوند
+        var onFix = v !== '' && !!SVC_REQUIRES_FIXTURE[v];
+        // فیلدهای نوع اسکن‌بادی + نوع اتصال با هم ظاهر/ناپدید می‌شوند
         if (wrap) wrap.style.display = on ? 'block' : 'none';
         if (connWrap) connWrap.style.display = on ? 'block' : 'none';
+        if (fixWrap) fixWrap.style.display = onFix ? 'block' : 'none';
         if (!on) {
             var sel = document.getElementById('ec-scan-body-type');
             if (sel) sel.value = '';
             var connSel = document.getElementById('ec-connection-type');
             if (connSel) connSel.value = '';
+        } else {
+            // پیش‌فرضِ «چسب‌شونده» — فقط اگر هنوز مقداری انتخاب نشده
+            var cs = document.getElementById('ec-connection-type');
+            if (cs && !cs.value) cs.value = DEFAULT_CONNECTION_TYPE;
+        }
+        if (!onFix) {
+            var ftSel = document.getElementById('ec-fixture-type');
+            if (ftSel) ftSel.value = '';
         }
     }
     ecToggleScanBodyField();
+    // ⚠️ حالت فرعی «ecToggle» پیش‌فرضِ «چسب‌شونده» را روی نوع اتصال می‌گذارد؛ روی فرمِ
+    // ویرایش باید مقدارِ ذخیره‌شدهٔ کیس حفظ شود — پس مقدارِ اولیه دوباره اعمال می‌شود.
+    (function(){
+        var svcInit = ecServiceEl();
+        var svcId = svcInit ? String(svcInit.value || '') : '';
+        if (svcId && SVC_REQUIRES_SCAN_BODY[svcId]) {
+            var connInit = document.getElementById('ec-connection-type');
+            var savedConn = <?= json_encode((string) ($case['connection_type'] ?? ''), JSON_UNESCAPED_UNICODE) ?>;
+            if (connInit) connInit.value = savedConn;
+        }
+        if (svcId && SVC_REQUIRES_FIXTURE[svcId]) {
+            var fixInit = document.getElementById('ec-fixture-type');
+            var savedFix = <?= json_encode((string) (int) ($case['fixture_type_id'] ?? 0)) ?>;
+            if (fixInit) fixInit.value = savedFix;
+        }
+    })();
     if (ecServiceEl()) ecServiceEl().addEventListener('change', ecToggleScanBodyField);
     function ecSetNote(el, text){
         if (!el) return;
@@ -3039,24 +3176,37 @@ panel_layout_start('مشاهده کیس');
             }
         }
     }
+    function ecServiceDefaultDesignFee(){
+        var svcEl = ecServiceEl();
+        var sid = svcEl ? String(svcEl.value || '') : '';
+        if (!sid) return null;
+        return (SVC_DEFAULT_DESIGN_FEE[sid] === undefined) ? null : parseFloat(SVC_DEFAULT_DESIGN_FEE[sid]);
+    }
     function ecReloadDesignFee(){
         if (!ecDesignFeeEl) return;
         if (!ecServiceRequiresDesign()) { ecDesignFeeEl.value = 0; ecSetNote(ecDesignFeeNoteEl, ''); return; }
         var designerId = ecDesignerEl ? ecDesignerEl.value : '';
         var svcEl = ecServiceEl();
         var serviceId = svcEl ? svcEl.value : '';
-        if (!designerId) { ecDesignFeeEl.value = 0; ecSetNote(ecDesignFeeNoteEl, ''); return; }
         if (!serviceId) { ecSetNote(ecDesignFeeNoteEl, ''); return; }
+        // طراح انتخاب نشده → فقط پیش‌فرضِ خدمت قابل استفاده است.
+        if (!designerId) {
+            var def0 = ecServiceDefaultDesignFee();
+            if (def0 !== null) { ecDesignFeeEl.value = Math.round(def0); ecSetNote(ecDesignFeeNoteEl, 'از «فی طراحی پیش‌فرضِ خدمت» استفاده شد (طراحی انتخاب نشده است).'); }
+            else { ecDesignFeeEl.value = 0; ecSetNote(ecDesignFeeNoteEl, ''); }
+            return;
+        }
         fetch('get_price.php?doctor_id=' + encodeURIComponent(designerId) + '&service_id=' + encodeURIComponent(serviceId) + '&price_type=design_fee', { headers: { 'Accept': 'application/json' } })
             .then(function(r){ return r.json(); })
             .then(function(resp){
-                if (!resp || resp.price === null) {
-                    ecSetNote(ecDesignFeeNoteEl, '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ هزینهٔ طراحی ۰ می‌ماند. مبلغ درست را دستی وارد یا در «نقشه قیمت‌گذاری» ثبت کنید.');
+                var fee = (resp && resp.price !== null && resp.price !== undefined) ? parseFloat(resp.price) : null;
+                // فالبک: در نبودِ نرخ اختصاصی، پیش‌فرضِ خدمت
+                if (isNaN(fee) || fee === null) fee = ecServiceDefaultDesignFee();
+                if (fee === null) {
+                    ecSetNote(ecDesignFeeNoteEl, '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ فی طراحی ۰ می‌ماند. مبلغ درست را دستی وارد کنید، یا «فی طراحی پیش‌فرض» این خدمت را در قیمت‌ها تعیین کنید.');
                     return;
                 }
-                var qtyEl = document.querySelector('#edit-case-form [name="quantity"]');
-                var qty = parseInt(qtyEl ? qtyEl.value : '1', 10) || 1;
-                ecDesignFeeEl.value = Math.round(parseFloat(resp.price) * qty);
+                ecDesignFeeEl.value = Math.round(fee);
                 ecSetNote(ecDesignFeeNoteEl, '');
             })
             .catch(function(){});
@@ -3167,6 +3317,20 @@ panel_layout_start('مشاهده کیس');
         if (window.CaseTeethPicker) { CaseTeethPicker.setValue(originalTeeth); }
         toggleLabGroup();
         ecRestoreShade();
+        // «نوع اتصال» و «نوع فیکسچر» به مقدارِ ذخیره‌شدهٔ کیس برگردند (اگر کاربر
+        // بدون ذخیره تغییرشان داده بود، نباید روی حالتِ جدید باقی بمانند)
+        (function(){
+            var svc = ecServiceEl();
+            var svcId = svc ? String(svc.value || '') : '';
+            if (svcId && SVC_REQUIRES_SCAN_BODY[svcId]) {
+                var c = document.getElementById('ec-connection-type');
+                if (c) c.value = <?= json_encode((string) ($case['connection_type'] ?? ''), JSON_UNESCAPED_UNICODE) ?>;
+            }
+            if (svcId && SVC_REQUIRES_FIXTURE[svcId]) {
+                var f = document.getElementById('ec-fixture-type');
+                if (f) f.value = <?= json_encode((string) (int) ($case['fixture_type_id'] ?? 0)) ?>;
+            }
+        })();
         ecUpdateTeethForLocation();
         ecUpdateQuantity();
         if (typeof $.fn !== 'undefined' && $.fn.persianDatepicker) {
@@ -3246,7 +3410,7 @@ panel_layout_start('مشاهده کیس');
             }
         };
         xhr.onerror = function(){
-            if (msgEl) { msgEl.textContent = 'خطا در اتصال به سرور.'; msgEl.style.color = '#b91c1c'; }
+            if (msgEl) { msgEl.textContent = 'ارتباط با سرور قطع شد. اتصال اینترنت را بررسی و دوباره «ذخیره» بزنید (این فرم ویرایش است و کیس تکراری نمی‌سازد).'; msgEl.style.color = '#b91c1c'; }
             if (saveBtn) saveBtn.disabled = false;
         };
         var fd = new FormData(form);

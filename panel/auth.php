@@ -639,6 +639,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
                             <a href="network.php">شبکه همکاران</a>
                             <a href="case_statuses.php">وضعیت‌های کیس</a>
                             <a href="scan_body_types.php">🧩 انواع و کتابخانه اسکن‌بادی</a>
+                            <a href="fixture_types.php">🔩 انواع فیکسچر</a>
                         </div>
                     </div>
 

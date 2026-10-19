@@ -102,10 +102,14 @@ foreach ($rows as $r) {
 }
 
 header('Content-Type: application/zip');
-header('Content-Disposition: attachment; filename="' . $zipName . '"');
+// نامِ یکتا در هر دانلود تا دانلود‌منیجر (IDM) فایل را «قبلاً دانلودشده» نبیند.
+$dlName = 'scan_' . jalaliDateForFilename(date('Y-m-d')) . '_' . date('His') . '.zip';
+header('Content-Disposition: attachment; filename="' . $dlName . '"; filename*=UTF-8\'\'' . rawurlencode($dlName));
 header('Content-Length: ' . filesize($outPath));
-header('Cache-Control: private, max-age=0');
-header('Pragma: public');
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
+header('Expires: 0');
+header('X-Content-Type-Options: nosniff');
 readfile($outPath);
 @unlink($outPath);
 exit;

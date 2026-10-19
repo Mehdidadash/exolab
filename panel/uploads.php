@@ -96,7 +96,7 @@ $upErrText = [
 <div class="form-card" style="max-width:760px; margin:0 auto 24px;">
     <h3>آپلود فایل جدید</h3>
     <p style="color:#555; margin:6px 0 12px;">می‌توانید چند فایل را همزمان انتخاب کنید (ZIP/RAR/عکس/مدل سه‌بعدی). اگر چند فایل انتخاب کنید، می‌توانید همه را در یک فایل ZIP بسته‌بندی کنید. اتصال به کیس اختیاری است.</p>
-    <form id="upload-form" enctype="multipart/form-data" style="margin-top:12px;">
+    <form id="upload-form" method="post" enctype="multipart/form-data" style="margin-top:12px;">
         <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
         <div class="form-group">
             <label for="upload-file">فایل‌ها (می‌توانید چند تا انتخاب کنید)</label>
@@ -188,6 +188,8 @@ $upErrText = [
             'size'     => $u['size'] ?? null,
             'date'     => $u['created_at'] ?? null,
             'ext'      => strtolower((string) pathinfo((string) $u['original_name'], PATHINFO_EXTENSION)),
+            'file_type' => $u['file_type'] ?? null,
+            'mime'     => $u['mime'] ?? null,
             'actions'  => $acts,
         ];
     }
@@ -226,6 +228,8 @@ $upErrText = [
             'size'     => $u['size'] ?? null,
             'date'     => $u['created_at'] ?? null,
             'ext'      => strtolower((string) pathinfo((string) $u['original_name'], PATHINFO_EXTENSION)),
+            'file_type' => $u['file_type'] ?? null,
+            'mime'     => $u['mime'] ?? null,
             'meta'     => (string) ($u['uploader_name'] ?? ''),
             'actions'  => $acts,
         ];

@@ -1047,3 +1047,348 @@ function appBaseUrl(): string
 
     return $scheme . '://' . $host . $root;
 }
+
+// =====================================================
+// ادغامِ نام‌های مستعارِ لابراتوار (Lab alias / canonical id)
+// =====================================================
+//
+// در طول زمان، کارِ یک لابراتوار گاهی زیرِ شناسهٔ کاربرِ دیگری (اشتباه/قدیمی) ثبت شده
+// است؛ مثلاً کارهای «لابراتوار شعبهٔ قزوین» (کاربر ۳۱) قبلاً روی حساب کاربر ۱۳
+// (`فاطمه حسینی`) در `cases.outsourced_lab_id` و `outsource_invoices.lab_id` درج شده‌اند.
+// این توابع اجازه می‌دهند چنین شناسه‌هایی به لابراتوارِ کانونیکال نگاشت شوند تا
+// گزارش‌ها (به‌ویژه بدهی/طلبِ لابراتوار و خالص بدهی شعبه) اعداد را یک‌پارچه نشان دهند.
+//
+// نکته: نگاشت پیش‌فرض خالی است و می‌توان آن را با فیلترِ
+// `exolab_lab_user_aliases` یا تنظیمِ ثابتِ `EXOLAB_LAB_ALIASES` تغییر داد.
+
+/**
+ * نگاشتِ «شناسهٔ کاربرِ مستعار ⇒ شناسهٔ لابراتوارِ کانونیکال».
+ *
+ * @return array<int,int>
+ */
+function labUserAliasMap(): array
+{
+    $aliases = [
+        // ۱۳ ⇒ ۳۱ : کارهای لابراتوار شعبهٔ قزوین که اشتباهاً زیر کاربر ۱۳ ثبت شده‌اند.
+        13 => 31,
+    ];
+
+    // امکان بازنویسی از طریق فیلتر (برای ماژول‌های بعدی/تنظیمات محیطی).
+    if (function_exists('apply_filters')) {
+        /** @var mixed $filtered */
+        $filtered = apply_filters('exolab_lab_user_aliases', $aliases);
+        if (is_array($filtered)) {
+            $aliases = $filtered;
+        }
+    } elseif (defined('EXOLAB_LAB_ALIASES') && is_array(EXOLAB_LAB_ALIASES)) {
+        $aliases = EXOLAB_LAB_ALIASES;
+    }
+
+    $out = [];
+    foreach ($aliases as $from => $to) {
+        $from = (int) $from;
+        $to   = (int) $to;
+        if ($from > 0 && $to > 0 && $from !== $to) {
+            $out[$from] = $to;
+        }
+    }
+    return $out;
+}
+
+/**
+ * شناسهٔ کانونیکالِ یک کاربرِ لابراتوار را برمی‌گرداند.
+ * اگر شناسهٔ ورودی مستعار باشد، به شناسهٔ کانونیکالش نگاشت می‌شود؛ در غیر این صورت
+ * خودِ شناسه بازگردانده می‌شود. زنجیرهٔ نگاشت‌ها هم به‌صورت بازگشتی حل می‌شوند.
+ */
+function labCanonicalId(int $labId): int
+{
+    $aliases = labUserAliasMap();
+    $seen = [];
+    $id = $labId;
+    while ($id > 0 && isset($aliases[$id]) && !isset($seen[$id])) {
+        $seen[$id] = true;
+        $id = (int) $aliases[$id];
+    }
+    return $id;
+}
+
+/**
+ * فهرستِ شناسه‌های کانونیکالِ یک مجموعه شناسه (تکراری‌ها حذف می‌شوند).
+ *
+ * @param  array<int,int|string> $ids
+ * @return array<int,int>
+ */
+function labCanonicalIdList(array $ids): array
+{
+    $out = [];
+    foreach ($ids as $id) {
+        $cid = labCanonicalId((int) $id);
+        if ($cid > 0) {
+            $out[$cid] = true;
+        }
+    }
+    return array_keys($out);
+}
+
+// =====================================================
+// بدهی طرف‌حساب‌ها (پزشک / کلینیک / لابراتوار / شعبه)
+// =====================================================
+
+/**
+ * ⭐ قاعدهٔ بنیادی: «هر کیس دقیقاً یک پرداخت‌کننده دارد.»
+ *
+ * پرداخت‌کنندهٔ هر کیس با اولویت زیر تعیین می‌شود و کیس **فقط** در محاسبهٔ همان
+ * طرف‌حساب می‌آید (هیچ کیسی در دو طرف حساب نمی‌شود):
+ *
+ *   ۱) `lab_id` یا `outsourced_lab_id` پر باشد  → لابراتوارِ همان فیلد
+ *      (شامل همهٔ کیس‌های `lab_in` و `lab_out` — حتی اگر `doctor_id` هم داشته باشند)
+ *   ۲) `clinic_id` پر باشد                       → کلینیک
+ *   ۳) وگرنه                                     → پزشک
+ *
+ * سپس برای هر طرف‌حساب:
+ *   بدهی کل        = مجموع هزینهٔ کیس‌های خودش  − مجموع پرداختی‌های خودش
+ *   بدهی فاکتورشده = مجموع مبلغ فاکتورهای خودش  − مجموع پرداختی‌های خودش
+ *   بدهی فاکتورنشده = بدهی کل − بدهی فاکتورشده
+ *   ⇒ پرداختی فقط یک بار کسر می‌شود و همیشه «فاکتورشده + فاکتورنشده = کل».
+ *
+ * منابع فاکتور/پرداختی:
+ *   • پزشک/کلینیک/لابراتوار → `doctor_invoices` (فاکتور) و `doctor_payments` (پرداختی)
+ *     – لابراتوار: فاکتورهای `INV-LAB%` (doctor_id یا doctor_name = خودش)
+ *     – پزشک/کلینیک: فاکتورهای غیرِ `INV-LAB%`
+ *   • شعبه → `branch_receivables` (فاکتور) و `branch_receivable_payments` (پرداختی)
+ *
+ * @param string $party  'doctor' | 'clinic' | 'lab' | 'branch'
+ * @param int    $userId شناسهٔ کاربر (یا شناسهٔ شعبه در حالت 'branch')
+ * @param array  $opts   اختیاری: ['branch_id' => ?int]
+ *                              در حالت 'branch': ['viewer_branch_id' => ?int, 'is_root' => bool]
+ * @return array{
+ *     total: float, invoiced: float, uninvoiced: float, paid: float,
+ *     invoiced_raw: float, uninvoiced_raw: float,
+ *     invoiced_count: int, uninvoiced_count: int, invoice_count: int, party: string
+ * }
+ */
+function partyDebtBreakdown(string $party, int $userId, array $opts = []): array
+{
+    $out = [
+        'party'            => $party,
+        'invoiced'         => 0.0,
+        'uninvoiced'       => 0.0,
+        'paid'             => 0.0,
+        'paid_raw'         => 0.0,   // کل پرداختی قبل از تفکیک
+        'paid_lab'         => 0.0,   // سهمِ لابراتوار از پرداختی (تفکیک‌شده)
+        'invoiced_raw'     => 0.0,
+        'uninvoiced_raw'   => 0.0,
+        'inv_lab_share'    => 0.0,   // سهمِ آیتم‌های لابراتواری در فاکتور
+        'invoiced_count'   => 0,
+        'uninvoiced_count' => 0,
+        'invoice_count'    => 0,
+    ];
+    $branchId = array_key_exists('branch_id', $opts) ? $opts['branch_id'] : null;
+
+    try {
+        $db = db();
+
+        // ══════════════════════════════════════════════════════════════
+        // حالت «شعبه»: حجمِ کارِ انجام‌شده بین شعبه‌ها + فاکتورهای بین‌شعبه‌ای
+        // ══════════════════════════════════════════════════════════════
+        // مبنای بدهی بین دو شعبه، **کیس‌های بین‌شعبه‌ای** است:
+        //   کیسی که مالکش این شعبه است ولی از شعبهٔ دیگر آمده (source_branch_id)
+        //   → این شعبه کار را برای آن شعبه انجام داده (طلبِ این شعبه).
+        // علاوه بر آن، فاکتورهای `branch_receivables` و پرداختی‌هایشان هم لحاظ می‌شوند.
+        if ($party === 'branch') {
+            $viewerBranch = array_key_exists('viewer_branch_id', $opts) ? (int) $opts['viewer_branch_id'] : 0;
+
+            // ── ۱) کیس‌های بین‌شعبه‌ای (کارِ انجام‌شده) ──
+            $cw = ['c.branch_id = ?', 'c.source_branch_id IS NOT NULL',
+                   'c.status_id <> 5', 'COALESCE(c.total_price, 0) > 0'];
+            $cp = [$userId];
+            if ($viewerBranch > 0 && $viewerBranch !== $userId) {
+                $cw[] = 'c.source_branch_id = ?';
+                $cp[] = $viewerBranch;
+            }
+            $st = $db->prepare('SELECT COUNT(*) AS cnt, COALESCE(SUM(c.total_price), 0) AS total
+                                FROM cases c WHERE ' . implode(' AND ', $cw));
+            $st->execute($cp);
+            $cr = $st->fetch() ?: ['cnt' => 0, 'total' => 0];
+            $out['uninvoiced_count'] = (int) $cr['cnt'];
+            $out['uninvoiced_raw']   = (float) $cr['total'];
+
+            // ── ۲) فاکتورهای بین‌شعبه‌ای (branch_receivables) ──
+            $bw = [];
+            $bp = [];
+            if ($viewerBranch > 0 && $viewerBranch !== $userId) {
+                $bw[] = '((br.branch_id = ? AND br.partner_branch_id = ?) OR (br.branch_id = ? AND br.partner_branch_id = ?))';
+                $bp[] = $userId; $bp[] = $viewerBranch;
+                $bp[] = $viewerBranch; $bp[] = $userId;
+            } else {
+                $bw[] = 'br.branch_id = ?';
+                $bp[] = $userId;
+            }
+            $bwSql = implode(' AND ', $bw);
+
+            $st = $db->prepare("SELECT COUNT(*) AS cnt, COALESCE(SUM(br.total_amount), 0) AS total
+                                FROM branch_receivables br WHERE $bwSql");
+            $st->execute($bp);
+            $br = $st->fetch() ?: ['cnt' => 0, 'total' => 0];
+            $out['invoice_count'] = (int) $br['cnt'];
+            $out['invoiced_raw']  = (float) $br['total'];
+
+            $st = $db->prepare("SELECT COALESCE(SUM(p.amount), 0)
+                                FROM branch_receivable_payments p
+                                JOIN branch_receivables br ON br.id = p.receivable_id
+                                WHERE $bwSql");
+            $st->execute($bp);
+            $out['paid']     = (float) $st->fetchColumn();
+            $out['paid_raw'] = $out['paid'];
+
+            // بدهی کلِ بین‌شعبه‌ای = کارِ انجام‌شده (کیس‌ها) + فاکتورها − پرداختی‌ها
+            $out['total']      = ($out['uninvoiced_raw'] + $out['invoiced_raw']) - $out['paid'];
+            $out['invoiced']   = $out['invoiced_raw'] - $out['paid'];
+            $out['uninvoiced'] = $out['uninvoiced_raw'];
+            return $out;
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // پزشک / کلینیک / لابراتوار
+        // ══════════════════════════════════════════════════════════════
+        //
+        // ── شرطِ مالکیت کیس (هر کیس فقط یک پرداخت‌کننده) ──
+        //   ۱) lab_id یا outsourced_lab_id پر → لابراتوار
+        //   ۲) clinic_id پر                    → کلینیک
+        //   ۳) وگرنه                           → پزشک
+        $labCond   = '(c.lab_id IS NOT NULL OR c.outsourced_lab_id IS NOT NULL)';
+        $noLabCond = '(c.lab_id IS NULL AND c.outsourced_lab_id IS NULL)';
+
+        if ($party === 'lab') {
+            $caseOwnerSql = '((c.lab_id = ?) OR (c.outsourced_lab_id = ?))';
+            $caseOwnerParams = [$userId, $userId];
+            // فاکتور لابراتوار: INV-LAB صادرشده به نام خودش
+            $invoiceOwnerSql = "(i.invoice_number LIKE 'INV-LAB%' AND (i.doctor_id = ? OR (i.doctor_id IS NULL AND i.doctor_name = (SELECT full_name FROM users WHERE id = ?))))";
+            $invoiceOwnerParams = [$userId, $userId];
+            $payOwnerSql = "(dp.doctor_id = ? OR (dp.doctor_id IS NULL AND dp.doctor_name = (SELECT full_name FROM users WHERE id = ?)))";
+            $payOwnerParams = [$userId, $userId];
+        } elseif ($party === 'clinic') {
+            // کلینیک: کیس‌هایی که صریحاً clinic_id = این کلینیک دارند
+            // و کارشان به لابراتوار سپرده نشده (اگر شده، مالِ لابراتوار است).
+            $caseOwnerSql = 'c.clinic_id = ? AND ' . $noLabCond;
+            $caseOwnerParams = [$userId];
+            $invoiceOwnerSql = "i.doctor_id = ? AND i.invoice_number NOT LIKE 'INV-LAB%'";
+            $invoiceOwnerParams = [$userId];
+            $payOwnerSql = 'dp.doctor_id = ?';
+            $payOwnerParams = [$userId];
+        } else { // doctor
+            // پزشک: کیس‌های خودش که نه به کلینیک و نه به لابراتوار نسبت داده شده‌اند.
+            $caseOwnerSql = 'c.doctor_id = ? AND c.clinic_id IS NULL AND ' . $noLabCond;
+            $caseOwnerParams = [$userId];
+            $invoiceOwnerSql = "i.doctor_id = ? AND i.invoice_number NOT LIKE 'INV-LAB%'";
+            $invoiceOwnerParams = [$userId];
+            $payOwnerSql = 'dp.doctor_id = ?';
+            $payOwnerParams = [$userId];
+        }
+
+        // ── ۱) مجموع مبلغ فاکتورها ──
+        //
+        // ⚠️ تفکیک فاکتور: کیس‌هایی که به لابراتوار سپرده شده‌اند مالیِ لابراتوارند،
+        //    پس اگر روی فاکتور پزشک/کلینیک هم آمده باشند باید از فاکتور او جدا شوند.
+        //    مبنای تفکیک: `invoice_items` (هر آیتم به کیس خودش وصل است).
+        $invWhere = [$invoiceOwnerSql];
+        $invParams = $invoiceOwnerParams;
+        if ($branchId !== null && $branchId > 0 && $party !== 'lab') {
+            $invWhere[] = "COALESCE(i.branch_id, (SELECT u2.branch_id FROM users u2 WHERE u2.id = i.doctor_id)) = ?";
+            $invParams[] = (int) $branchId;
+        }
+        $invWhereSql = implode(' AND ', $invWhere);
+
+        if ($party === 'lab') {
+            // لابراتوار: کل مبلغ فاکتورهای INV-LAB خودش.
+            $st = $db->prepare("SELECT COUNT(*) AS cnt, COALESCE(SUM(i.total_amount), 0) AS total
+                                FROM doctor_invoices i WHERE $invWhereSql");
+            $st->execute($invParams);
+            $invRow = $st->fetch() ?: ['cnt' => 0, 'total' => 0];
+            $out['invoice_count'] = (int) $invRow['cnt'];
+            $out['invoiced_raw']  = (float) $invRow['total'];
+            $out['inv_lab_share'] = 0.0;
+        } else {
+            // پزشک/کلینیک: اقلامِ فاکتور بر اساس مالکیتِ کیس تفکیک می‌شوند.
+            //   own      = آیتم‌های بدون کیس (تخفیف) + آیتم‌های کیسِ خودی
+            //   labShare = آیتم‌های کیسِ لابراتواری (از فاکتور کسر می‌شود)
+            // شرطِ «کیسِ خودی» = دقیقاً همان `$caseOwnerSql` (با alias «c»).
+            $ownSql = "COALESCE(SUM(CASE
+                        WHEN ii.case_id IS NULL THEN ii.total_amount
+                        WHEN ($caseOwnerSql) THEN ii.total_amount
+                        ELSE 0 END), 0)";
+            $labSql = "COALESCE(SUM(CASE
+                        WHEN ii.case_id IS NOT NULL AND $labCond
+                        THEN ii.total_amount ELSE 0 END), 0)";
+            $st = $db->prepare("SELECT $ownSql AS own_amount, $labSql AS lab_amount,
+                    COUNT(DISTINCT i.id) AS inv_cnt
+                FROM doctor_invoices i
+                LEFT JOIN invoice_items ii ON ii.invoice_id = i.id
+                LEFT JOIN cases c ON c.id = ii.case_id
+                WHERE $invWhereSql");
+            // پارامترها: اول پارامترهای شرطِ کیسِ خودی (که در CASE آمده‌اند)، بعد پارامترهای فاکتور.
+            $st->execute(array_merge($caseOwnerParams, $invParams));
+            $sp = $st->fetch() ?: ['own_amount' => 0, 'lab_amount' => 0, 'inv_cnt' => 0];
+            $out['invoice_count'] = (int) $sp['inv_cnt'];
+            $out['invoiced_raw']  = (float) $sp['own_amount'];
+            $out['inv_lab_share'] = (float) $sp['lab_amount'];
+
+            // اگر هیچ آیتمی ثبت نشده بود (دادهٔ قدیمی)، مبلغ کل فاکتور مبنا می‌شود.
+            $st = $db->prepare("SELECT COALESCE(SUM(i.total_amount), 0) FROM doctor_invoices i WHERE $invWhereSql");
+            $st->execute($invParams);
+            $invTotal = (float) $st->fetchColumn();
+            if ($out['invoiced_raw'] + $out['inv_lab_share'] < 0.01 && $invTotal > 0) {
+                $out['invoiced_raw'] = $invTotal;
+            }
+        }
+
+        // ── ۲) مجموع پرداختی‌ها ──
+        //   پرداختیِ کل، سپس تفکیک به نسبت (کل فاکتور = خودی + لابراتواری).
+        $payWhere = [$payOwnerSql];
+        $payParams = $payOwnerParams;
+        if ($branchId !== null && $branchId > 0) {
+            $payWhere[] = 'dp.branch_id = ?';
+            $payParams[] = (int) $branchId;
+        }
+        $st = $db->prepare('SELECT COALESCE(SUM(dp.amount), 0) FROM doctor_payments dp WHERE ' . implode(' AND ', $payWhere));
+        $st->execute($payParams);
+        $out['paid_raw'] = (float) $st->fetchColumn();
+
+        if ($party !== 'lab' && ($out['inv_lab_share'] ?? 0) > 0.01) {
+            $totalInv = $out['invoiced_raw'] + $out['inv_lab_share'];
+            $ownShare = $totalInv > 0 ? ($out['invoiced_raw'] / $totalInv) : 1.0;
+            $out['paid']     = $out['paid_raw'] * $ownShare;   // سهمِ خودی
+            $out['paid_lab'] = $out['paid_raw'] - $out['paid'];
+        } else {
+            $out['paid']     = $out['paid_raw'];
+            $out['paid_lab'] = 0.0;
+        }
+
+        // ── ۳) مجموع هزینهٔ کیس‌های خودش ──
+        $caseWhere = [$caseOwnerSql, 'c.status_id <> 5', 'COALESCE(c.total_price, 0) > 0'];
+        $caseParams = $caseOwnerParams;
+        if ($branchId !== null && $branchId > 0) {
+            $caseWhere[] = 'c.branch_id = ?';
+            $caseParams[] = (int) $branchId;
+        }
+        $st = $db->prepare('SELECT COUNT(*) AS cnt, COALESCE(SUM(c.total_price), 0) AS total
+                            FROM cases c WHERE ' . implode(' AND ', $caseWhere));
+        $st->execute($caseParams);
+        $caseRow = $st->fetch() ?: ['cnt' => 0, 'total' => 0];
+        $out['uninvoiced_count'] = (int) $caseRow['cnt'];
+        $out['uninvoiced_raw']   = (float) $caseRow['total'];
+
+        // ── ۴) بدهی‌ها ──
+        //   بدهی کل        = هزینهٔ کیس‌های خودش − پرداختیِ سهمِ خودی
+        //   بدهی فاکتورشده = مبلغ فاکتورِ خودی   − پرداختیِ سهمِ خودی
+        //   بدهی فاکتورنشده = بدهی کل − بدهی فاکتورشده
+        $out['total']      = $out['uninvoiced_raw'] - $out['paid'];
+        $out['invoiced']   = $out['invoiced_raw']   - $out['paid'];
+        $out['uninvoiced'] = $out['total'] - $out['invoiced'];
+    } catch (\Throwable $e) {
+        // اگر جدول‌ها/ستون‌های مرتبط موجود نبودند، صفحه نباید بشکند.
+        return $out;
+    }
+
+    return $out;
+}

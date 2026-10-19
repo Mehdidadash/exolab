@@ -59,6 +59,17 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
             <input type="text" id="price" name="price" value="<?= htmlspecialchars(formatTomanInput($price['price'] ?? '')) ?>" required>
         </div>
         <div class="form-group">
+            <label for="default_design_fee">فی طراحی پیش‌فرض (تومان)</label>
+            <input type="number" id="default_design_fee" name="default_design_fee" min="0" step="1" style="max-width:220px;"
+                   value="<?= ($price['default_design_fee'] ?? null) === null || ($price['default_design_fee'] ?? null) === '' ? '' : (int) $price['default_design_fee'] ?>"
+                   placeholder="خالی = بدون پیش‌فرض">
+            <small style="display:block; color:#525252; margin-top:4px; line-height:1.9;">
+                نرخ <b>هر واحد</b> طراحی برای این خدمت (فی، نه جمع کل). اگر برای طراحِ انتخابی
+                «نرخ طراحی اختصاصی» ثبت نشده باشد، فی طراحی از این عدد می‌آید.
+                خالی بگذارید تا رفتار قبلی حفظ شود (نرخ نامشخص و طراحی ۰).
+            </small>
+        </div>
+        <div class="form-group">
             <label for="category">دسته</label>
             <input type="text" id="category" name="category" value="<?= htmlspecialchars($price['category'] ?? 'عمومی') ?>">
         </div>
@@ -91,11 +102,16 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
                     <input type="checkbox" name="requires_scan_body" value="1" style="width:auto;" <?= !empty($price['requires_scan_body']) ? 'checked' : '' ?>>
                     🧩 نیازمند انتخاب «نوع اسکن‌بادی»
                 </label>
+                <label style="display:flex; align-items:center; gap:6px; font-weight:400;" title="مثل کاستوم اباتمنت کره‌ای و اروپایی">
+                    <input type="checkbox" name="requires_fixture_type" value="1" style="width:auto;" <?= !empty($price['requires_fixture_type']) ? 'checked' : '' ?>>
+                    🔩 نیازمند انتخاب «نوع فیکسچر»
+                </label>
             </div>
             <small style="display:block; color:#525252; margin-top:6px; line-height:1.9;">
                 با تیکِ «نیازمند انتخاب نوع اسکن‌بادی»، در فرم ثبت و ویرایش کیس یک فیلد اضافه باز می‌شود که از بین
                 انواع تعریف‌شده در <a href="scan_body_types.php">انواع و کتابخانه اسکن‌بادی</a> یکی انتخاب می‌شود.
-                برای خدماتِ دیگری هم که در آینده نیاز داشتند، همین تیک را بزنید.
+                با تیکِ «نیازمند انتخاب نوع فیکسچر» هم فیلدِ «نوع فیکسچر» باز می‌شود
+                (<a href="fixture_types.php">انواع فیکسچر</a>). برای خدماتِ دیگری هم که در آینده نیاز داشتند، همین تیک‌ها را بزنید.
             </small>
         </div>
         <button type="submit"><?= $editing ? 'بروزرسانی' : 'ذخیره' ?></button>

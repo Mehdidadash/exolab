@@ -11,6 +11,24 @@ document.addEventListener('DOMContentLoaded', function () {
         return Math.round(n).toLocaleString('en-US');
     }
 
+    // ─── Helper: تاریخ میلادیِ «YYYY-MM-DD» → شمسیِ «۱۴۰۵/۰۶/۲۰» ───
+    // کتابخانهٔ persian-date قبل از این فایل بارگذاری می‌شود (invoice_form.php).
+    // اگر به هر دلیلی در دسترس نبود، همان تاریخ میلادی برگردانده می‌شود تا جدول خالی نماند.
+    var PERSIAN_DIGITS = ['۰','۱','۲','۳','۴','۵','۶','۷','۸','۹'];
+    function toPersianDigits(str) {
+        return String(str).replace(/\d/g, function (d) { return PERSIAN_DIGITS[+d]; });
+    }
+    function fmtJalaliDate(gregorian) {
+        if (!gregorian) return '—';
+        var g = String(gregorian).trim().substring(0, 10);   // حذف بخش زمان در صورت وجود
+        try {
+            if (typeof persianDate === 'function') {
+                return toPersianDigits(new persianDate(new Date(g + 'T00:00:00')).format('YYYY/MM/DD'));
+            }
+        } catch (e) { /* در صورت خطا، تاریخ میلادی نمایش داده می‌شود */ }
+        return toPersianDigits(g);
+    }
+
 
 
     // ─── Re-index input names after row add/remove ───
@@ -319,16 +337,17 @@ document.addEventListener('DOMContentLoaded', function () {
                             '<td>' + c.id + '</td>' +
                             '<td>' + (c.patient_name || '') + '</td>' +
                             '<td>' + (c.service_title || '') + '</td>' +
+                            '<td style="white-space:nowrap;">' + fmtJalaliDate(c.received_date) + '</td>' +
                             '<td>' + fmt(c.total_price || c.unit_price || 0) + '</td>' +
                             '</tr>';
                         rowsHtml += '<tr style="display:none;" class="case-data" data-idx="' + idx + '" data-json="' + safeData + '"></tr>';
                     });
 
                     var html = '<div class="case-selector-overlay" style="position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:99999;">' +
-                        '<div style="background:#fff; border-radius:12px; max-width:700px; width:90%; max-height:80vh; overflow:auto; padding:24px;">' +
+                        '<div style="background:#fff; border-radius:12px; max-width:800px; width:90%; max-height:80vh; overflow:auto; padding:24px;">' +
                         '<h3 style="margin-top:0;">انتخاب کیس‌ها</h3>' +
                         '<table style="width:100%; border-collapse:collapse;">' +
-                        '<thead><tr><th><input type="checkbox" id="case-select-all" checked></th><th>#</th><th>بیمار</th><th>خدمت</th><th>قیمت</th></tr></thead><tbody>' +
+                        '<thead><tr><th><input type="checkbox" id="case-select-all" checked></th><th>#</th><th>بیمار</th><th>خدمت</th><th>تاریخ دریافت</th><th>قیمت</th></tr></thead><tbody>' +
                         rowsHtml +
                         '</tbody></table>' +
                         '<div style="margin-top:16px; display:flex; gap:10px;">' +

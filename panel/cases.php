@@ -32,12 +32,27 @@ $canSelectCases = in_array($user['role'] ?? '', ['admin', 'branch_admin', 'staff
     || has_permission('batch_print_labels') || has_permission('batch_update_status')
     || has_permission('export_csv') || has_permission('edit_cases')
     || has_permission('upload_files') || has_permission('upload_design_files') || has_permission('delete_files');
+
+// ── دستور کار و خروجی CSV ──────────────────────────────────────────
+// پرینت دستور کار: مدیران (admin/branch_admin)، کارمندان شعبه (staff/secretary/technician)
+// و طراح‌ها. (نقشِ طراح مجوزِ batch_print_labels/export_csv ندارد، پس صریحاً اضافه شده است.)
+$canPrintWorkOrder = is_admin()
+    || is_designer_user($user)
+    || has_permission('batch_print_labels')
+    || has_permission('export_csv')
+    || has_permission('edit_cases')
+    || in_array($user['role'] ?? '', ['staff', 'secretary', 'technician'], true);
+
+// خروجی CSV: طراح هم بتواند استفاده کند (قبلاً فقط با مجوزِ export_csv فعال می‌شد).
+$canExportCsv = has_permission('export_csv') || is_designer_user($user);
 $designers = getAllDesigners();
 $defaultDesigner = getDefaultDesigner();
 $defaultDesignerId = $defaultDesigner ? (int) $defaultDesigner['id'] : 0;
 $prices = getAllPrices();
 // انواع اسکن‌بادی فعال — برای فیلدِ «نوع اسکن‌بادی» در خدماتی که requires_scan_body دارند.
 $scanBodyTypesForCase = getScanBodyTypes();
+// انواع فیکسچر فعال — برای فیلدِ «نوع فیکسچر» در خدماتی که requires_fixture_type دارند.
+$fixtureTypesForCase = getFixtureTypes();
 // At the very top, after require_once
 date_default_timezone_set('Asia/Tehran');
 
@@ -116,10 +131,15 @@ panel_layout_start('مدیریت کیس‌ها');
             <?php if (has_permission('batch_print_labels')): ?>
             <button type="button" id="print-labels-btn" class="btn" style="background: #059669; color: #fff;" onclick="printSelectedLabels()">🖨 پرینت برچسب</button>
             <?php endif; ?>
+            <?php // ── دستور کار: مثل پرینت برچسب، ولی هر کیس یک برگهٔ کامل A4 ──
+            // برای مدیران شعب، کارمندان شعبه و طراح‌ها. ?>
+            <?php if ($canPrintWorkOrder): ?>
+            <button type="button" id="print-work-orders-btn" class="btn" style="background: #0369a1; color: #fff;" onclick="printSelectedWorkOrders()" title="پرینت دستور کار — هر کیس یک برگهٔ کامل A4 با توضیحات کیس">📋 پرینت دستور کار</button>
+            <?php endif; ?>
             <?php if (has_permission('batch_update_status')): ?>
             <button type="button" id="batch-status-btn" class="btn" style="background: #7c3aed; color: #fff;" onclick="openBatchStatusModal()">📋 تغییر وضعیت گروهی</button>
             <?php endif; ?>
-            <?php if (has_permission('export_csv')): ?>
+            <?php if ($canExportCsv): ?>
             <button type="button" id="export-csv-btn" class="btn" style="background: #0891b2; color: #fff;" onclick="exportSelectedCSV()">📥 خروجی CSV</button>
             <?php endif; ?>
             <?php if (has_permission('edit_cases') || has_role('admin')): ?>
@@ -236,7 +256,7 @@ panel_layout_start('مدیریت کیس‌ها');
 <div id="case-modal" class="modal" style="display:none;">
     <div class="modal-content form-card" style="max-width:1100px; margin:auto;">
         <h3 id="case-modal-title">افزودن کیس جدید</h3>
-        <form id="case-form">
+        <form id="case-form" method="post">
             <style>
                 /* جعبهٔ پیام/خطای ذخیرهٔ کیس — خطاهای سرور باید واضح و کپی‌پذیر دیده شوند */
                 #case-form-error{ display:none; margin:0 0 12px; padding:10px 12px; border:1px solid #fca5a5; background:#fef2f2; color:#991b1b; border-radius:8px; font-size:0.9rem; line-height:1.9; }
@@ -418,6 +438,17 @@ panel_layout_start('مدیریت کیس‌ها');
                     </select>
                 </div>
                 <?php endif; ?>
+                <?php if ($fixtureTypesForCase): ?>
+                <div class="form-group" id="case-fixture-group" style="display:none;">
+                    <label for="case-fixture-type"><?= field_icon('screwdriver') ?> نوع فیکسچر</label>
+                    <select id="case-fixture-type" name="fixture_type_id">
+                        <option value="">انتخاب...</option>
+                        <?php foreach ($fixtureTypesForCase as $ft): ?>
+                            <option value="<?= (int) $ft['id'] ?>"><?= htmlspecialchars((string) $ft['name']) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <?php endif; ?>
                 <div class="form-group">
                     <label for="case-location-type"><?= field_icon('map-location') ?> مکان</label>
                     <select id="case-location-type" name="location_type">
@@ -467,7 +498,7 @@ panel_layout_start('مدیریت کیس‌ها');
                 </div>
                 <?php if (!$isExternalViewer): ?>
                 <div class="form-group" id="case-design-fee-group">
-                    <label for="case-design-fee"><?= field_icon('pen-ruler') ?> هزینه طراحی (تومان)</label>
+                    <label for="case-design-fee"><?= field_icon('pen-ruler') ?> فی طراحی (تومان)</label>
                     <input type="number" id="case-design-fee" name="design_fee" step="1" min="0" value="0">
                     <small id="case-design-fee-note" style="display:none; color:#b45309; background:#fffbeb; border-radius:6px; padding:4px 8px; margin-top:6px;"></small>
                 </div>
@@ -516,7 +547,8 @@ panel_layout_start('مدیریت کیس‌ها');
                         <br>
                         <b>آپلود پوشه:</b> با دکمهٔ «📁 انتخاب پوشه» می‌توانید یک پوشه را با همهٔ محتویات و زیرپوشه‌هایش انتخاب کنید،
                         یا پوشه را با ماوس داخل کادر رها کنید. ساختار پوشه‌ها در فهرست فایل‌های کیس حفظ می‌شود.
-                        برای پوشه‌های چندفایلی، گزینهٔ «ذخیره به‌صورت یک فایل ZIP» خودکار فعال می‌شود (قابل خاموش کردن).
+                        اگر می‌خواهید همهٔ فایل‌های پوشه در یک فایل ZIP ذخیره شوند، تیکِ «ذخیره به‌صورت یک فایل ZIP» را خودتان بزنید
+                        (به‌صورت پیش‌فرض خاموش است).
                     </small>
                     <?php endif; ?>
                     <div id="cf-groups"></div>
@@ -681,16 +713,16 @@ panel_layout_start('مدیریت کیس‌ها');
                 hint.style.display = files.length ? 'none' : 'flex';
                 dzActions.style.display = files.length ? 'none' : 'flex';
             }
-            /** بعد از افزودن/حذف فایل‌های پوشه، نام پوشه و پیشنهاد ZIP را به‌روز کن */
+            /** بعد از افزودن/حذف فایل‌های پوشه، نام پوشه و نشانگر را به‌روز کن */
             function refreshFolderMeta() {
                 var folderFiles = files.filter(isFolderFile);
                 g._folderName = '';
                 if (folderFiles.length) {
                     // نام پوشه = بخش اول مسیر فایل اول
                     g._folderName = (folderFiles[0]._rel.split('/')[0]) || '';
-                    // پیشنهاد خودکار «ZIP کن» برای پوشه‌های چندفایلی (کاربر می‌تواند خاموش کند)
-                    if (folderFiles.length > 1 && !g._zipTouched) zip.checked = true;
-                    if (folderFiles.length <= 1 && !g._zipTouched) zip.checked = false;
+                    // ⚠️ «ذخیره به‌صورت یک فایل ZIP» دیگر خودکار فعال نمی‌شود؛
+                    // کاربر باید خودش تیک بزند (درخواست کاربر — آپلود پوشه باید به‌صورت
+                    // فایل‌های جدا و با حفظ ساختار ذخیره شود).
                 }
                 var badge = g.querySelector('.cf-folder-meta');
                 if (badge) {
@@ -759,7 +791,14 @@ panel_layout_start('مدیریت کیس‌ها');
                     done();
                 }
             }
+            // ⚠️ کلیکِ برنامه‌ای روی input (dirInput.click()/fileInput.click()) خودش یک
+            // رویدادِ click تولید می‌کند که به dz می‌رسد؛ اگر هدف، خودِ input باشد نباید
+            // دوباره fileInput باز شود (وگرنه «انتخاب پوشه» به انتخابگرِ فایل تبدیل می‌شود).
+            function isOwnInput(el) {
+                return el === dirInput || el === fileInput || el === pickBtn || el === pickDirBtn;
+            }
             dz.addEventListener('click', function (e) {
+                if (isOwnInput(e.target)) return;
                 if (e.target && e.target.closest && e.target.closest('.cf-pick-folder')) return;
                 if (e.target && e.target.closest && e.target.closest('.cf-pick-files')) return;
                 if (e.target && e.target.classList && e.target.classList.contains('cf-file-remove')) return;
@@ -956,7 +995,7 @@ panel_layout_start('مدیریت کیس‌ها');
                     <option value="<?= $des['id'] ?>"><?= htmlspecialchars($des['full_name']) ?></option>
                 <?php endforeach; ?>
             </select>
-            <small style="display:block; margin-top:6px; color:#525252;">هزینه طراحی و جمع کل هر کیس بر اساس نرخ طراح جدید به‌صورت خودکار دوباره محاسبه می‌شود.</small>
+            <small style="display:block; margin-top:6px; color:#525252;">فی طراحی و جمع کل هر کیس بر اساس نرخ طراح جدید به‌صورت خودکار دوباره محاسبه می‌شود.</small>
         </div>
         <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
             <button id="change-designer-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
@@ -1174,6 +1213,15 @@ panel_layout_start('مدیریت کیس‌ها');
             array_map(function ($p) { return (int) (!empty($p['requires_scan_body'])); }, array_column($prices, null, 'id')),
             JSON_UNESCAPED_UNICODE
         ) ?>;
+        // خدماتی که هنگام ثبت/ویرایش کیس فیلدِ «نوع فیکسچر» لازم دارند
+        // (کاستوم اباتمنت کره‌ای/اروپایی و هر خدمتی که در price_form.php تیک خورده باشد).
+        window.__SVC_REQUIRES_FIXTURE__ = <?= json_encode(
+            array_map(function ($p) { return (int) (!empty($p['requires_fixture_type'])); }, array_column($prices, null, 'id')),
+            JSON_UNESCAPED_UNICODE
+        ) ?>;
+        // فی طراحی پیش‌فرضِ هر خدمت (site_prices.default_design_fee) — وقتی برای طراحِ
+        // انتخابی نرخ اختصاصی نباشد، فی طراحی از این عدد می‌آید. عدم وجود کلید = بدون پیش‌فرض.
+        window.__SVC_DEFAULT_DESIGN_FEE__ = <?= json_encode(getServiceDefaultDesignFeeMap(), JSON_UNESCAPED_UNICODE) ?>;
         // خدمتِ مکمل برای «کیس زیرمجموعه»: اگر کیسِ اصلی «پایه اباتمنت/ایمپلنت» باشد →
         // کاستوم اباتمنت، و اگر «کاستوم اباتمنت» باشد → روکش/فریم پایه اباتمنت.
         // (map: service_id → service_idِ پیشنهادی)
@@ -1849,8 +1897,21 @@ panel_layout_start('مدیریت کیس‌ها');
                     var parentSvc = String(parentCase.service_id || '');
                     var suggestedSvc = suggestMap[parentSvc] || parentSvc;
                     jQuery('#case-service-id').val(suggestedSvc || '');
-                    // برای خدمتی که نیازمند اسکن‌بادی/اتصال است، فیلدها را نشان بده
+                    // برای خدمتی که نیازمند اسکن‌بادی/اتصال/فیکسچر است، فیلدها را نشان بده.
+                    // (قبل از خواندنِ قیمت‌ها: تا «نوع اتصال» پیش‌فرضِ چسب‌شونده ست شود.)
                     if (typeof toggleCaseScanBodyField === 'function') toggleCaseScanBodyField();
+                    // پیش‌فرضِ طراح برای خدمت (اگر طراح خالی ماند) — پیش از خواندنِ فی طراحی
+                    syncDesignerWithService('init');
+                    // ⚠️ .val() رویدادِ change را آتش نمی‌زند. چون در این لحظه مودال هنوز
+                    // بسته است، بعضی هندلرهای change به عناصرِ موجود در فرم وابسته‌اند؛
+                    // بنابراین فی خدمت و فی طراحی مستقیماً از get_price خوانده می‌شوند تا
+                    // فرمِ کیسِ زیرمجموعه با فیلدهای خالی باز نشود.
+                    if (suggestedSvc) {
+                        loadSubCasePricingFromDb(String(suggestedSvc),
+                            String(parentCase.doctor_id || ''),
+                            String(parentCase.lab_id || ''),
+                            String(parentCase.case_type || 'doctor'));
+                    }
 
                     // وضعیت هم معادل کیسِ اصلی انتخاب می‌شود (اول گزینه را اضافه کن، بعد مقدار بده)
                     // نکته: اگر وضعیتِ کیسِ اصلی برای این کاربر مجاز نباشد، keepStatusOption
@@ -1967,11 +2028,33 @@ panel_layout_start('مدیریت کیس‌ها');
                 return [];
             }
 
+            // ── توکنِ یکتای ارسالِ کیس (idempotency) ──
+            // الگوی «تصادفی + زمان» تا در جلسه‌های هم‌زمان هم یکتا باشد.
+            function genCaseSubmitToken(){
+                var rnd = '';
+                try {
+                    if (window.crypto && window.crypto.getRandomValues) {
+                        var a = new Uint8Array(16);
+                        window.crypto.getRandomValues(a);
+                        for (var i = 0; i < a.length; i++) { rnd += ('0' + a[i].toString(16)).slice(-2); }
+                    }
+                } catch (err) {}
+                if (!rnd) {
+                    rnd = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+                }
+                return 'c' + Date.now().toString(36) + '-' + rnd;
+            }
+
             function openCaseModal(title, isAdd){
                 clearCaseFormMsg();
                 jQuery('#case-modal-title').text(title || 'افزودن کیس جدید');
                 jQuery('#case-modal').css({display: 'flex'});
                 if (isAdd) {
+                    // ── توکنِ یکتای ارسال ──
+                    // برای هر بار «باز کردنِ فرمِ کیس جدید» یک توکن تازه ساخته می‌شود.
+                    // اگر اینترنت وسط ذخیره قطع شود و کاربر دوباره تلاش کند، همان توکن
+                    // دوباره فرستاده می‌شود تا سرور کیسِ تکراری نسازد.
+                    window.__CASE_SUBMIT_TOKEN__ = genCaseSubmitToken();
                     // طراح همیشه «طراح پیش‌فرض» است + گروه‌های فایل خالی
                     var did = Number('<?= (int) $defaultDesignerId ?>') || 0;
                     if (did) jQuery('#case-designer-id').val(did);
@@ -2018,6 +2101,8 @@ panel_layout_start('مدیریت کیس‌ها');
                 var progWrap = document.getElementById('case-files-progress');
                 if (progWrap) progWrap.style.display = 'none';
                 if (window.CaseFiles) window.CaseFiles.reset();
+                // توکنِ ارسال پاک شود تا فرمِ بعدی توکنِ تازه بگیرد
+                window.__CASE_SUBMIT_TOKEN__ = null;
                 setTimeout(function(){ jQuery('#case-received-date').val(''); }, 100);
             }
             jQuery('#case-cancel').on('click', function(){ closeCaseModal(); });
@@ -2090,12 +2175,16 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-patient-name').val(data.patient_name || '');
                 jQuery('#case-receipt-number').val(data.receipt_number || '');
                 jQuery('#case-service-id').val(data.service_id || '');
-                // فیلد «نوع اسکن‌بادی» و «نوع اتصال»: ابتدا نمایش/عدم‌نمایش، سپس مقدار ذخیره‌شده
+                // فیلد «نوع اسکن‌بادی» / «نوع اتصال» / «نوع فیکسچر»: اول نمایش، سپس مقدارِ ذخیره‌شده.
+                // ⚠️ toggle پیش‌فرضِ «چسب‌شونده» را روی نوع اتصال می‌گذارد؛ پس مقدارِ ذخیره‌شده
+                // (حتی خالی) باید *بعد* از آن اعمال شود تا انتخابِ کاربر حفظ شود.
                 toggleCaseScanBodyField();
                 var sbSel = document.getElementById('case-scan-body-type');
                 if (sbSel) sbSel.value = data.scan_body_type_id || '';
                 var connSel = document.getElementById('case-connection-type');
                 if (connSel) connSel.value = data.connection_type || '';
+                var fixSel = document.getElementById('case-fixture-type');
+                if (fixSel) fixSel.value = data.fixture_type_id || '';
                 jQuery('#case-location-type').val(data.location_type || '');
                 if (window.CaseTeethPicker) { CaseTeethPicker.setValue(data.teeth || ''); }
                 else { jQuery('#case-teeth').val(data.teeth || ''); }
@@ -2161,6 +2250,16 @@ panel_layout_start('مدیریت کیس‌ها');
                 // Build URL-encoded data (text fields only – no files)
                 var params = new URLSearchParams(new FormData(formEl));
                 params.set('_csrf_token', csrf);
+                // آیا این «ایجاد کیس جدید» است؟ (ویرایش توکن نمی‌خواهد)
+                var isNewCase = !params.get('id');
+                if (isNewCase) {
+                    // توکنِ یکتای ارسال: همان توکن در تلاشِ دوباره بعد از قطعی اینترنت
+                    // دوباره فرستاده می‌شود تا سرور کیسِ تکراری نسازد.
+                    if (!window.__CASE_SUBMIT_TOKEN__) {
+                        window.__CASE_SUBMIT_TOKEN__ = genCaseSubmitToken();
+                    }
+                    params.set('submit_token', window.__CASE_SUBMIT_TOKEN__);
+                }
                 // اگر فایل اسکن پیوست شده، وضعیتِ کیس جدید «اسکن شد» ثبت شود (پزشک و غیرپزشک)
                 try {
                     if (window.CaseFiles && window.CaseFiles.countFiles() > 0) {
@@ -2185,6 +2284,12 @@ panel_layout_start('مدیریت کیس‌ها');
                     success: function(resp){
                         try { var j = (typeof resp === 'string') ? JSON.parse(resp) : resp; } catch(e){ j = { success: false }; }
                         if (j.success) {
+                            // توکن مصرف شد → تا باز شدنِ فرمِ بعدی دیگر استفاده نشود
+                            window.__CASE_SUBMIT_TOKEN__ = null;
+                            if (j.duplicate) {
+                                // ارسالِ قطع‌شدهٔ قبلی در واقع موفق بوده؛ کیس ساخته شده است.
+                                showCaseFormMsg('ok', j.message || 'این کیس قبلاً ثبت شده بود؛ همان کیس بازگردانده شد.');
+                            }
                             var finish = function () {
                                 // «ذخیره و ایجاد کیس زیرمجموعه»: بلافاصله فرمِ زیرمجموعه باز شود
                                 if (wantsSubCase && j.id) {
@@ -2218,7 +2323,12 @@ panel_layout_start('مدیریت کیس‌ها');
                         if (j && (j.message || j.error)) {
                             showCaseFormMsg('error', j.message || ('کد خطا: ' + j.error), caseErrDetails(j));
                         } else if (xhr && xhr.status === 0) {
-                            showCaseFormMsg('error', 'ارتباط با سرور برقرار نشد. اتصال اینترنت/سرور را بررسی کنید.');
+                            // ── قطعِ اینترنت/سرور وسط ذخیره ──
+                            // ممکن است سرور کیس را ساخته باشد ولی پاسخ برنگشته باشد.
+                            // توکن حفظ می‌شود تا با فشردن دوبارهٔ «ذخیره»، کیسِ تکراری
+                            // ساخته نشود (سرور همان کیس را برمی‌گرداند).
+                            showCaseFormMsg('error',
+                                'ارتباط با سرور قطع شد. اگر اینترنت وصل شد، دوباره روی «ذخیره» بزنید — اگر کیس قبلاً ثبت شده باشد، همان بازگردانده می‌شود و کیس تکراری ساخته نمی‌شود.');
                         } else {
                             showCaseFormMsg('error', 'خطای سرور (کد ' + ((xhr && xhr.status) || '?') + '). اگر تکرار شد، همین پیام را برای پشتیبانی بفرستید.');
                         }
@@ -2254,6 +2364,18 @@ panel_layout_start('مدیریت کیس‌ها');
                             } else {
                                 jQuery('#case-unit-price').val('');
                             }
+                            applyServicePricingNote();
+                        }
+                    });
+                } else {
+                    // ⚠️ پزشک انتخاب نشده (مثلاً کیسِ زیرمجموعهٔ پیش‌پر یا فرمِ برنامه‌ای):
+                    // فی خدمت باید از «قیمتِ عمومی خدمت» خوانده شود، نه خالی بماند.
+                    jQuery.ajax({
+                        url: 'get_price.php',
+                        data: { service_id: serviceId },   // بدون doctor_id → قیمتِ عمومی/شعبه
+                        dataType: 'json',
+                        success: function(resp) {
+                            jQuery('#case-unit-price').val(resp && resp.price !== null && resp.price !== undefined ? resp.price : '');
                             applyServicePricingNote();
                         }
                     });
@@ -2303,6 +2425,13 @@ panel_layout_start('مدیریت کیس‌ها');
                 }
             }
 
+            // فی طراحی پیش‌فرضِ خدمت (اگر طراح نرخ اختصاصی نداشت)
+            function serviceDefaultDesignFee(serviceId) {
+                var m = window.__SVC_DEFAULT_DESIGN_FEE__ || {};
+                if (!serviceId) return null;
+                return (m[serviceId] === undefined) ? null : parseFloat(m[serviceId]);
+            }
+
             // Load per-unit design fee for the selected designer + service
             function reloadDesignFee() {
                 var designerId = jQuery('#case-designer-id').val();
@@ -2314,15 +2443,17 @@ panel_layout_start('مدیریت کیس‌ها');
                     setDesignFeeNote('');
                     return;
                 }
-                if (!designerId) {
-                    currentDesignUnitFee = null;
-                    jQuery('#case-design-fee').val('0');
-                    setDesignFeeNote('');
-                    return;
-                }
                 if (!serviceId) {
                     currentDesignUnitFee = null;
                     setDesignFeeNote('');
+                    return;
+                }
+                // اگر طراحی انتخاب نشده باشد، فقط می‌توان از پیش‌فرضِ خدمت استفاده کرد.
+                if (!designerId) {
+                    var def0 = serviceDefaultDesignFee(serviceId);
+                    currentDesignUnitFee = def0;
+                    applyDesignFee();
+                    setDesignFeeNote(def0 === null ? '' : 'از «فی طراحی پیش‌فرضِ خدمت» استفاده شد (طراحی انتخاب نشده است).');
                     return;
                 }
                 jQuery.ajax({
@@ -2330,21 +2461,25 @@ panel_layout_start('مدیریت کیس‌ها');
                     data: { doctor_id: designerId, service_id: serviceId, price_type: 'design_fee' },
                     dataType: 'json',
                     success: function(resp) {
-                        currentDesignUnitFee = (resp.price !== null) ? parseFloat(resp.price) : null;
-                        // نرخ نامشخص → هشدار بده تا هزینهٔ طراحی بی‌سروصدا صفر نشود
-                        setDesignFeeNote(currentDesignUnitFee === null
-                            ? '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ هزینهٔ طراحی ۰ می‌ماند. مبلغ درست را دستی وارد یا در «نقشه قیمت‌گذاری» ثبت کنید.'
+                        // get_price اکنون در نبودِ نرخ اختصاصی، خودش پیش‌فرضِ خدمت را
+                        // برمی‌گرداند؛ ولی برای اطمینان، همین‌جا هم فالبک می‌کنیم.
+                        var fee = (resp && resp.price !== null && resp.price !== undefined) ? parseFloat(resp.price) : null;
+                        if (fee === null) fee = serviceDefaultDesignFee(serviceId);
+                        currentDesignUnitFee = fee;
+                        setDesignFeeNote(fee === null
+                            ? '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ فی طراحی ۰ می‌ماند. مبلغ درست را دستی وارد کنید، یا «فی طراحی پیش‌فرض» این خدمت را در قیمت‌ها تعیین کنید.'
                             : '');
                         applyDesignFee();
                     }
                 });
             }
 
-            // design fee (تومان) = per-unit fee × quantity
+            // design fee (تومان) = فی هر واحد طراحی (نرخ طراح × ۱) — نه جمع کل.
+            // ستون design_fee از این پس نرخ هر واحد را نگه می‌دارد؛ جمع کل هرجا لازم
+            // شد با design_fee × تعداد محاسبه می‌شود.
             function applyDesignFee() {
                 if (currentDesignUnitFee === null) return;
-                var qty = parseInt(jQuery('#case-quantity').val(), 10) || 1;
-                jQuery('#case-design-fee').val(Math.round(currentDesignUnitFee * qty));
+                jQuery('#case-design-fee').val(Math.round(currentDesignUnitFee));
             }
 
             // تغییر خدمت → پیش‌فرضِ طراح را اعمال کن، سپس هزینهٔ طراحی/تعداد را حساب کن
@@ -2366,19 +2501,87 @@ panel_layout_start('مدیریت کیس‌ها');
                 var m = window.__SVC_REQUIRES_SCAN_BODY__ || {};
                 return m[v] === undefined ? false : !!m[v];
             }
+            // «نوع فیکسچر» فقط برای خدماتی که requires_fixture_type = ۱ دارند (کاستوم اباتمنت).
+            function serviceRequiresFixtureFor(v) {
+                if (!v) return false;
+                var m = window.__SVC_REQUIRES_FIXTURE__ || {};
+                return m[v] === undefined ? false : !!m[v];
+            }
+            // انتخاب پیش‌فرضِ خدمتِ زیرمجموعه → فی خدمت و فی طراحی از دیتابیس خوانده شوند.
+            // ⚠️ .val() رویدادِ change را آتش نمی‌زند؛ و روی عنصرِ hidden/غیرموجود هم jQuery
+            // هندلرها را اجرا نمی‌کند. پس درخواست‌ها مستقیم فرستاده می‌شوند (مستقل از DOM).
+            // (تعریف‌های تابع بالاتر در بلوکِ add_sub هم استفاده می‌شوند — hoisting کار می‌کند.)
+            function loadSubCasePricingFromDb(serviceId, doctorId, labId, caseType) {
+                if (!serviceId) return;
+                // ۱) فی خدمت (کیسِ لابراتواری از نرخِ لابراتوار، بقیه از نرخِ پزشک/عمومی)
+                var isLabCase = (caseType === 'lab_in' || caseType === 'lab_out') && !!labId;
+                jQuery.ajax({
+                    url: 'get_price.php',
+                    data: isLabCase
+                        ? { lab_id: labId, service_id: serviceId }
+                        : { doctor_id: doctorId, service_id: serviceId },
+                    dataType: 'json',
+                    success: function(resp) {
+                        jQuery('#case-unit-price').val(resp && resp.price !== null && resp.price !== undefined ? resp.price : '');
+                        applyServicePricingNote();
+                    }
+                });
+                // ۲) فی طراحی — مطابق منطقِ reloadDesignFee (طراح، فی طراحی پیش‌فرض، یا بدون طراحی)
+                if (!serviceRequiresDesign(serviceId)) {
+                    currentDesignUnitFee = null;
+                    jQuery('#case-design-fee').val('0');
+                    setDesignFeeNote('');
+                    return;
+                }
+                var designerId = jQuery('#case-designer-id').val() || '';
+                if (!designerId) {
+                    var def0 = serviceDefaultDesignFee(serviceId);
+                    currentDesignUnitFee = def0;
+                    applyDesignFee();
+                    setDesignFeeNote(def0 === null ? '' : 'از «فی طراحی پیش‌فرضِ خدمت» استفاده شد (طراحی انتخاب نشده است).');
+                    return;
+                }
+                jQuery.ajax({
+                    url: 'get_price.php',
+                    data: { doctor_id: designerId, service_id: serviceId, price_type: 'design_fee' },
+                    dataType: 'json',
+                    success: function(resp) {
+                        var fee = (resp && resp.price !== null && resp.price !== undefined) ? parseFloat(resp.price) : null;
+                        if (fee === null || isNaN(fee)) fee = serviceDefaultDesignFee(serviceId);
+                        currentDesignUnitFee = fee;
+                        setDesignFeeNote(fee === null
+                            ? '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ فی طراحی ۰ می‌ماند. مبلغ درست را دستی وارد کنید، یا «فی طراحی پیش‌فرض» این خدمت را در قیمت‌ها تعیین کنید.'
+                            : '');
+                        applyDesignFee();
+                    }
+                });
+            }
+            var DEFAULT_CONNECTION_TYPE = 'cement-retained';   // «چسب‌شونده»
             function toggleCaseScanBodyField() {
                 var wrap = document.getElementById('case-scan-body-group');
                 var connWrap = document.getElementById('case-connection-group');
+                var fixWrap = document.getElementById('case-fixture-group');
                 var sid = String(jQuery('#case-service-id').val() || '');
                 var on  = serviceRequiresScanBodyFor(sid);
-                // هر دو فیلد (نوع اسکن‌بادی + نوع اتصال) با هم ظاهر/ناپدید می‌شوند
+                var onFix = serviceRequiresFixtureFor(sid);
+                // فیلدهای نوع اسکن‌بادی + نوع اتصال با هم ظاهر/ناپدید می‌شوند
                 if (wrap) wrap.style.display = on ? 'block' : 'none';
                 if (connWrap) connWrap.style.display = on ? 'block' : 'none';
+                if (fixWrap) fixWrap.style.display = onFix ? 'block' : 'none';
                 if (!on) {
                     var sel = document.getElementById('case-scan-body-type');
                     if (sel) sel.value = '';
                     var connSel = document.getElementById('case-connection-type');
                     if (connSel) connSel.value = '';
+                } else {
+                    // پیش‌فرضِ نوع اتصال: «چسب‌شونده» — فقط اگر کاربر هنوز چیزی انتخاب نکرده
+                    // (تا هنگام ویرایش یا انتخابِ دستی، مقدارِ قبلی بازنویسی نشود)
+                    var cs = document.getElementById('case-connection-type');
+                    if (cs && !cs.value) cs.value = DEFAULT_CONNECTION_TYPE;
+                }
+                if (!onFix) {
+                    var ftSel = document.getElementById('case-fixture-type');
+                    if (ftSel) ftSel.value = '';
                 }
                 toggleCaseSaveAndSubButton(sid);
             }
@@ -2438,6 +2641,33 @@ panel_layout_start('مدیریت کیس‌ها');
                 var form = document.createElement('form');
                 form.method = 'post';
                 form.action = 'print_labels.php';
+                form.target = '_blank';
+                ids.forEach(function(id) {
+                    var inp = document.createElement('input');
+                    inp.type = 'hidden';
+                    inp.name = 'case_ids[]';
+                    inp.value = id;
+                    form.appendChild(inp);
+                });
+                document.body.appendChild(form);
+                form.submit();
+                document.body.removeChild(form);
+            };
+
+            // ─── پرینت دستور کار برای کیس‌های انتخاب‌شده ───
+            // دقیقاً مثل printSelectedLabels، ولی به print_work_orders.php می‌رود
+            // (هر کیس یک برگهٔ کامل A4 با توضیحات کیس).
+            window.printSelectedWorkOrders = function() {
+                var checked = document.querySelectorAll('.case-select-cb:checked');
+                var ids = [];
+                checked.forEach(function(cb) { ids.push(cb.value); });
+                if (ids.length === 0) {
+                    alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                    return;
+                }
+                var form = document.createElement('form');
+                form.method = 'post';
+                form.action = 'print_work_orders.php';
                 form.target = '_blank';
                 ids.forEach(function(id) {
                     var inp = document.createElement('input');

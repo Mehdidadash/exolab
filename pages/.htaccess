@@ -1,0 +1,11 @@
+# pages/.htaccess — لایه‌ی امنیتی پوشه‌ی صفحات نمایشی
+#
+# این پوشه فقط شامل فایل‌های نمایشی و سرو تصویر است. فایل‌های حساس نباید اینجا باشند.
+# نمایش لیست فایل‌ها بسته است تا ساختار پوشه لو نرود.
+
+Options -Indexes
+
+# فقط فایل‌های PHP از این پوشه اجرا شوند؛ بقیه‌ی پسوندها مسدود
+<FilesMatch "\.(ini|log|sh|sql|bak|config|lock|md|txt|env|phps|info)$">
+    Require all denied
+</FilesMatch>

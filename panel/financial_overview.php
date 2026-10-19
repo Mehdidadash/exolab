@@ -53,12 +53,14 @@ $outAmountExpr = "CASE
 $designPayerSql = "COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id)";
 if ($bid === null) {
     $unrealizedIncomeSql = 'SELECT COALESCE(SUM(total_price),0) FROM cases WHERE received_date BETWEEN ? AND ?';
-    $unrealizedExpenseSql = "SELECT COALESCE(SUM(c.design_fee),0) + COALESCE(SUM({$outAmountExpr}),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
+    // design_fee ستونِ «فی هر واحد» است → جمعِ طراحی = design_fee × تعداد
+    $unrealizedExpenseSql = "SELECT COALESCE(SUM(c.design_fee * c.quantity),0) + COALESCE(SUM({$outAmountExpr}),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
 } else {
     $b = (int) $bid;
     $unrealizedIncomeSql = "SELECT COALESCE(SUM(\n            CASE WHEN c.source_branch_id = $b AND (c.branch_id IS NULL OR c.branch_id <> $b)\n                 THEN $inboundAmountSql\n                 ELSE c.total_price END),0)\n        FROM cases c\n        WHERE c.received_date BETWEEN ? AND ? AND (c.branch_id = $b OR c.source_branch_id = $b)";
-    // هزینه‌ی تحقق‌نیافته = طراحی که «این شعبه» پرداخت‌کننده‌اش است + برون‌سپاریِ کیس‌هایِ مالِ این شعبه
-    $unrealizedExpenseSql = "SELECT\n            COALESCE(SUM(CASE WHEN ({$designPayerSql} = $b) THEN c.design_fee ELSE 0 END),0)\n          + COALESCE(SUM(CASE WHEN (c.branch_id = $b) THEN ({$outAmountExpr}) ELSE 0 END),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
+    // هزینهٔ تحقق‌نیافته = طراحی که «این شعبه» پرداخت‌کننده‌اش است + برون‌سپاریِ کیس‌های مالِ این شعبه
+    // (design_fee فی است → جمعِ طراحی = design_fee × تعداد)
+    $unrealizedExpenseSql = "SELECT\n            COALESCE(SUM(CASE WHEN ({$designPayerSql} = $b) THEN c.design_fee * c.quantity ELSE 0 END),0)\n          + COALESCE(SUM(CASE WHEN (c.branch_id = $b) THEN ({$outAmountExpr}) ELSE 0 END),0)\n        FROM cases c WHERE c.received_date BETWEEN ? AND ?";
 }
 
 $jalaliMonths = [
@@ -277,9 +279,10 @@ if ($startDate !== '' && $endDate !== '') {
 
     // در نمودارهای گروهی هم هزینه‌ی طراحی فقط برای کیس‌هایی شمرده می‌شود که این شعبه
     // پرداخت‌کننده‌ی طراحی‌شان باشد (برای مدیر کل/همه‌ی شعب = همه).
+    // design_fee فی است → جمعِ طراحی = design_fee × تعداد.
     $designFeeForGroup = ($bid === null)
-        ? 'c.design_fee'
-        : "CASE WHEN ({$designPayerSql} = " . (int) $bid . ") THEN c.design_fee ELSE 0 END";
+        ? '(c.design_fee * c.quantity)'
+        : "CASE WHEN ({$designPayerSql} = " . (int) $bid . ") THEN c.design_fee * c.quantity ELSE 0 END";
 
     foreach ($groupings as $key => $g) {
         if ($key === 'inbound') {
@@ -463,12 +466,20 @@ $debtCounts = ['doctor' => 0, 'clinic' => 0, 'lab' => 0];
 $debtPartyBranchCond = is_root_admin()
     ? ''
     : " AND COALESCE(i.branch_id, (SELECT u2.branch_id FROM users u2 WHERE u2.id = i.doctor_id)) = " . (int) $bid;
+// ⚠️ نکتهٔ مهم (رفع باگ «پرداخت‌شده = صفر»):
+// قبلاً شرطِ `payment_status <> 'paid'` باعث می‌شد فاکتورهای **کاملاً پرداخت‌شده**
+// و در نتیجه پرداختی‌های ثبت‌شده روی آن‌ها هم از گزارش حذف شوند؛ مثلاً برای کلینیک ۱۴
+// پرداختیِ ۳۱٬۸۰۰٬۰۰۰ روی فاکتور #۲۸ و برای کلینیک ۴۲ پرداختیِ ۵۶٬۵۰۰٬۰۰۰ روی فاکتور #۴۲
+// هر دو «صفر» نمایش داده می‌شد.
+// اصلاح: پرداختیِ هر طرف‌حساب از **همهٔ** فاکتورهایش (پرداخت‌شده و پرداخت‌نشده) جمع می‌شود،
+// اما ردیف‌ها فقط برای طرف‌حساب‌هایی نمایش داده می‌شوند که هنوز بدهیِ خالص > ۰ دارند.
 $debtSql = "SELECT CASE
                    WHEN i.invoice_number LIKE 'INV-CLN%' THEN 'clinic'
                    WHEN i.invoice_number LIKE 'INV-LAB%' THEN 'lab'
                    ELSE 'doctor' END AS kind,
                i.doctor_id,
                COALESCE(u.full_name, i.doctor_name, '—') AS party,
+               SUM(CASE WHEN i.total_amount - COALESCE(paid.applied, 0) > 0.01 THEN 1 ELSE 0 END) AS unpaid_count,
                COUNT(*) AS invoice_count,
                COALESCE(SUM(i.total_amount), 0) AS invoiced,
                COALESCE(SUM(COALESCE(paid.applied, 0)), 0) AS paid_amount,
@@ -477,7 +488,7 @@ $debtSql = "SELECT CASE
         LEFT JOIN users u ON u.id = i.doctor_id
         LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied FROM doctor_payment_invoices GROUP BY invoice_id) paid
                ON paid.invoice_id = i.id
-        WHERE i.payment_status <> 'paid'{$debtPartyBranchCond}
+        WHERE 1 = 1{$debtPartyBranchCond}
         GROUP BY kind, i.doctor_id, party
         HAVING debt > 0
         ORDER BY debt DESC";
@@ -486,13 +497,322 @@ try {
     foreach ($debtRows as $r) {
         $k = $r['kind'];
         $debtTotals[$k] = ($debtTotals[$k] ?? 0) + (float) $r['debt'];
-        $debtCounts[$k] = ($debtCounts[$k] ?? 0) + (int) $r['invoice_count'];
+        $debtCounts[$k] = ($debtCounts[$k] ?? 0) + (int) ($r['unpaid_count'] ?? 0);
     }
 } catch (\Throwable $e) {
     // اگر جدول پرداخت‌های جزئی هنوز ساخته نشده باشد، گزارش نباید صفحه را بشکند
     $debtRows = [];
 }
 $debtTotalAll = array_sum($debtTotals);
+
+// ═══════════════════════════════════════════════════════════════════════
+// تب «خالص بدهی هر شعبه» — بدهی/طلبِ هر شعبه با هر طرف‌حساب، به‌صورت مجزا
+// ═══════════════════════════════════════════════════════════════════════
+//
+// برای هر شعبه، خالص حساب با هر طرف‌حساب محاسبه می‌شود:
+//   • پزشک/کلینیک (فاکتور دریافتنیِ ما):  مبلغ فاکتور − پرداخت‌شده  → مثبت = به ما بدهکار
+//   • لابراتوار (دو طرفه):
+//       + فاکتورهای INV-LAB (کار از لابراتوار → به ما بدهکار)
+//       − فاکتورهای برون‌سپاری outsource_invoices (ما به آن‌ها بدهکار)
+//     ⇒ اگر بیشتر کار به لابراتوار بسپاریم، خالصش **منفی** می‌شود (مثل محمد محمدی).
+//   • شعبهٔ همکار (بین‌شعبه‌ای، دو طرفه):
+//       + branch_receivables که ما صادرکننده‌ایم (شعبهٔ همکار به ما بدهکار)
+//       − branch_receivables که شعبهٔ همکار برای ما صادر کرده (ما به آن بدهکار)
+//     ⇒ خالصِ هر دو شعبه با هم قرینه است (Σ = ۰).
+//
+// نکته: تخصیص شعبه لابراتوار از `users.branch_id` لابراتوار است و اگر NULL بود،
+// از شعبهٔ فاکتور برون‌سپاری (`outsource_invoices.branch_id`) استفاده می‌شود.
+
+$branchNet = [];   // [branchId]['doctors'|'clinics'|'labs'|'branches' => [ [name, amount, count] ... ]]
+
+try {
+    $allBranches = getAllBranches();
+} catch (\Throwable $e) {
+    $allBranches = [];
+}
+$branchNameMap = [];
+foreach ($allBranches as $br) {
+    $branchNameMap[(int) $br['id']] = (string) $br['name'];
+}
+// اطمینان از وجود شعبهٔ ۱ (مرکزی) حتی اگر در جدول نبود
+if (!isset($branchNameMap[1])) $branchNameMap[1] = 'شعبه اصلی';
+
+foreach ($branchNameMap as $bId => $bName) {
+    $branchNet[$bId] = ['doctors' => [], 'clinics' => [], 'labs' => [], 'branches' => []];
+}
+
+// ── ۱) پزشکان و کلینیک‌ها: از فاکتورهای doctor_invoices (به‌تفکیک شعبهٔ فاکتور) ──
+try {
+    $stmt = db()->query("
+        SELECT i.branch_id, i.doctor_id, i.invoice_number,
+               COALESCE(u.full_name, i.doctor_name, '—') AS party,
+               u.role AS urole,
+               i.total_amount, COALESCE(pa.applied, 0) AS applied
+        FROM doctor_invoices i
+        LEFT JOIN users u ON u.id = i.doctor_id
+        LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied
+                   FROM doctor_payment_invoices GROUP BY invoice_id) pa ON pa.invoice_id = i.id
+    ");
+    $agg = [];
+    foreach ($stmt->fetchAll() as $r) {
+        $bId = (int) ($r['branch_id'] ?? 0);
+        // فاکتورهای قدیمی بدون شعبه → شعبهٔ خودِ طرف‌حساب، وگرنه مرکزی (۱)
+        if ($bId <= 0) {
+            $bId = (int) (db()->query('SELECT branch_id FROM users WHERE id = ' . (int) $r['doctor_id'])->fetchColumn() ?: 0);
+        }
+        if ($bId <= 0) $bId = 1;
+        $net = (float) $r['total_amount'] - (float) $r['applied'];
+        $isLab = (strpos((string) $r['invoice_number'], 'INV-LAB') === 0);
+        $isClinic = ($r['urole'] === 'clinic') || (strpos((string) $r['invoice_number'], 'INV-CLN') === 0);
+        $group = $isClinic ? 'clinics' : 'doctors';
+        if ($isLab) continue;   // لابراتوارها جداگانه در بخش ۳ حساب می‌شوند
+        $uid = (int) $r['doctor_id'];
+        $key = $uid . '|' . $r['party'];
+        if (!isset($agg[$bId][$group][$key])) $agg[$bId][$group][$key] = ['name' => $r['party'], 'amount' => 0.0, 'count' => 0, 'uid' => $uid];
+        $agg[$bId][$group][$key]['amount'] += $net;
+        $agg[$bId][$group][$key]['count']++;
+    }
+    foreach ($agg as $bId => $groups) {
+        if (!isset($branchNet[$bId])) continue;
+        foreach ($groups as $g => $items) {
+            foreach ($items as $it) {
+                if (abs($it['amount']) < 0.01) continue;
+                $branchNet[$bId][$g][] = $it;
+            }
+        }
+    }
+} catch (\Throwable $e) { /* ignore */ }
+
+// ── ۲) لابراتوارها: طلبِ ما (کار از لابراتوار) منهای بدهیِ ما (برون‌سپاری) ──
+//    طلبِ ما = فاکتورهای INV-LAB + کارهای فاکتورنشدهٔ lab_in/lab_out (ارزشِ total_price)
+//    بدهیِ ما = فاکتورهای برون‌سپاری outsource_invoices + برون‌سپاریِ فاکتورنشده (نرخ × تعداد)
+try {
+    $labAgg = [];   // [branchId][labId|name] = ['name','recv','pay','count','uid']
+
+    // ۲-الف) فاکتورهای INV-LAB — لابراتوار به ما بدهکار است (کار از لابراتوار)
+    $stmt = db()->query("
+        SELECT i.branch_id, i.doctor_id, COALESCE(u.full_name, i.doctor_name, '—') AS party,
+               i.total_amount, COALESCE(pa.applied, 0) AS applied
+        FROM doctor_invoices i
+        LEFT JOIN users u ON u.id = i.doctor_id
+        LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied
+                   FROM doctor_payment_invoices GROUP BY invoice_id) pa ON pa.invoice_id = i.id
+        WHERE i.invoice_number LIKE 'INV-LAB%'
+    ");
+    foreach ($stmt->fetchAll() as $r) {
+        $bId = (int) ($r['branch_id'] ?? 0);
+        if ($bId <= 0) $bId = (int) (db()->query('SELECT branch_id FROM users WHERE id = ' . (int) $r['doctor_id'])->fetchColumn() ?: 0);
+        if ($bId <= 0) $bId = 1;
+        $labId = (int) ($r['doctor_id'] ?? 0);
+        $due = (float) $r['total_amount'] - (float) $r['applied'];
+        $key = ($labId ?: $r['party']) . '|' . $r['party'];
+        if (!isset($labAgg[$bId][$key])) $labAgg[$bId][$key] = ['name' => $r['party'], 'recv' => 0.0, 'pay' => 0.0, 'count' => 0, 'uid' => $labId];
+        $labAgg[$bId][$key]['recv'] += $due;
+        $labAgg[$bId][$key]['count']++;
+    }
+
+    // ۲-ب) کارهای فاکتورنشدهٔ لابراتوری (lab_id پر، هنوز فاکتور نشده)
+    //      • lab_in  → کار از لابراتوار می‌آید  → **طلبِ ما** (بر مبنای total_price)
+    //      • lab_out → ما کار به لابراتوار می‌دهیم → **بدهیِ ما** (بر مبنای نرخِ برون‌سپاری × تعداد)
+    $stmt = db()->query("
+        SELECT c.id, c.lab_id, c.branch_id, c.case_type, COALESCE(c.total_price, 0) AS price,
+               c.service_id, c.quantity, c.outsourced_rate,
+               COALESCE(u.full_name, CONCAT('لابراتوار #', c.lab_id)) AS party
+        FROM cases c
+        LEFT JOIN users u ON u.id = c.lab_id
+        WHERE c.lab_id IS NOT NULL
+          AND c.invoice_id IS NULL
+          AND c.status_id <> 5
+    ");
+    foreach ($stmt->fetchAll() as $r) {
+        $bId = (int) ($r['branch_id'] ?? 0);
+        if ($bId <= 0) $bId = (int) (db()->query('SELECT branch_id FROM users WHERE id = ' . (int) $r['lab_id'])->fetchColumn() ?: 0);
+        if ($bId <= 0) $bId = 1;
+        $labId = (int) $r['lab_id'];
+        $key = $labId . '|' . $r['party'];
+        if (!isset($labAgg[$bId][$key])) $labAgg[$bId][$key] = ['name' => $r['party'], 'recv' => 0.0, 'pay' => 0.0, 'count' => 0, 'uid' => $labId];
+        if ($r['case_type'] === 'lab_in') {
+            // لابراتوار به ما بدهکار است
+            $amt = (float) $r['price'];
+            if ($amt <= 0) continue;
+            $labAgg[$bId][$key]['recv'] += $amt;
+        } else {
+            // ما به لابراتوار بدهکاریم → نرخِ برون‌سپاری × تعداد
+            $qty  = max(1, (int) ($r['quantity'] ?? 1));
+            $rate = ($r['outsourced_rate'] !== null && $r['outsourced_rate'] !== '')
+                ? (float) $r['outsourced_rate']
+                : (float) (getOutsourceRate($labId, (int) ($r['service_id'] ?? 0), $bId) ?? 0.0);
+            $amt = round($rate * $qty);
+            if ($amt <= 0) continue;
+            $labAgg[$bId][$key]['pay'] += $amt;
+        }
+        $labAgg[$bId][$key]['count']++;
+    }
+
+    // ۲-ج) فاکتورهای برون‌سپاری — ما به لابراتوار بدهکاریم (هزینه)
+    $stmt = db()->query("
+        SELECT oi.id, oi.lab_id, oi.branch_id, oi.total_amount,
+               COALESCE(u.full_name, CONCAT('لابراتوار #', oi.lab_id)) AS party,
+               u.branch_id AS lab_branch,
+               COALESCE(ep.paid, 0) AS paid
+        FROM outsource_invoices oi
+        LEFT JOIN users u ON u.id = oi.lab_id
+        LEFT JOIN (SELECT invoice_id, SUM(amount) AS paid
+                   FROM expense_payments WHERE expense_type = 'outsource' GROUP BY invoice_id) ep ON ep.invoice_id = oi.id
+    ");
+    foreach ($stmt->fetchAll() as $r) {
+        $bId = (int) ($r['lab_branch'] ?? 0);
+        if ($bId <= 0) $bId = (int) ($r['branch_id'] ?? 0);
+        if ($bId <= 0) $bId = 1;
+        $labId = (int) $r['lab_id'];
+        $due = (float) $r['total_amount'] - (float) $r['paid'];
+        $key = $labId . '|' . $r['party'];
+        if (!isset($labAgg[$bId][$key])) $labAgg[$bId][$key] = ['name' => $r['party'], 'recv' => 0.0, 'pay' => 0.0, 'count' => 0, 'uid' => $labId];
+        $labAgg[$bId][$key]['pay'] += $due;
+        $labAgg[$bId][$key]['count']++;
+    }
+
+    // ۲-د) برون‌سپاریِ فاکتورنشدهٔ جانبی (outsourced_lab_id پر، هنوز فاکتور نشده) → بدهیِ ما
+    //       مقدار = نرخ برون‌سپاری × تعداد (همان منطق getUninvoicedCasesForLabAll)
+    $stmt = db()->query("
+        SELECT c.id, c.outsourced_lab_id, c.branch_id, c.outsourced_service_id,
+               c.outsourced_rate, c.outsourced_qty, c.case_type, c.lab_id,
+               COALESCE(u.full_name, CONCAT('لابراتوار #', c.outsourced_lab_id)) AS party
+        FROM cases c
+        LEFT JOIN users u ON u.id = c.outsourced_lab_id
+        WHERE c.outsourced_lab_id IS NOT NULL
+          AND c.outsource_invoice_id IS NULL
+          AND c.status_id <> 5
+          AND c.outsourced_service_id IS NOT NULL
+          AND COALESCE(c.outsourced_qty, 0) > 0
+    ");
+    foreach ($stmt->fetchAll() as $r) {
+        // اگر همین لابراتوار مالکِ خودِ کیس هم باشد، در قسمت طلب (۲-ب) آمده؛ اینجا فقط بدهیِ برون‌سپاری جانبی.
+        if ((int) ($r['lab_id'] ?? 0) === (int) $r['outsourced_lab_id']) continue;
+        $bId = (int) ($r['branch_id'] ?? 0);
+        if ($bId <= 0) $bId = (int) (db()->query('SELECT branch_id FROM users WHERE id = ' . (int) $r['outsourced_lab_id'])->fetchColumn() ?: 0);
+        if ($bId <= 0) $bId = 1;
+        $labId = (int) $r['outsourced_lab_id'];
+        $rate = ($r['outsourced_rate'] !== null && $r['outsourced_rate'] !== '')
+            ? (float) $r['outsourced_rate']
+            : (float) (getOutsourceRate($labId, (int) $r['outsourced_service_id'], $bId) ?? 0.0);
+        $amt = round($rate * (int) $r['outsourced_qty']);
+        if ($amt <= 0) continue;
+        $key = $labId . '|' . $r['party'];
+        if (!isset($labAgg[$bId][$key])) $labAgg[$bId][$key] = ['name' => $r['party'], 'recv' => 0.0, 'pay' => 0.0, 'count' => 0, 'uid' => $labId];
+        $labAgg[$bId][$key]['pay'] += $amt;
+        $labAgg[$bId][$key]['count']++;
+    }
+
+    foreach ($labAgg as $bId => $items) {
+        if (!isset($branchNet[$bId])) continue;
+        foreach ($items as $it) {
+            $net = $it['recv'] - $it['pay'];
+            if (abs($net) < 0.01) continue;
+            $branchNet[$bId]['labs'][] = [
+                'name'   => $it['name'],
+                'amount' => $net,
+                'recv'   => $it['recv'],
+                'pay'    => $it['pay'],
+                'count'  => $it['count'],
+                'uid'    => $it['uid'],
+            ];
+        }
+    }
+} catch (\Throwable $e) { /* ignore */ }
+
+// ── ۳) شعبه‌های همکار: فاکتورهای بین‌شعبه‌ای + کار بین‌شعبه‌ایِ فاکتورنشده (دوطرفه) ──
+try {
+    $brAgg = [];   // [ownBranch][partnerBranch] = ['recv','pay']
+
+    // ۳-الف) فاکتورهای بین‌شعبه‌ای (branch_receivables)
+    $stmt = db()->query("
+        SELECT br.branch_id, br.partner_branch_id, br.total_amount,
+               COALESCE(p.paid, 0) AS paid
+        FROM branch_receivables br
+        LEFT JOIN (SELECT receivable_id, SUM(amount) AS paid
+                   FROM branch_receivable_payments GROUP BY receivable_id) p ON p.receivable_id = br.id
+    ");
+    foreach ($stmt->fetchAll() as $r) {
+        $own = (int) ($r['branch_id'] ?? 0);
+        $partner = (int) ($r['partner_branch_id'] ?? 0);
+        if ($own <= 0 || $partner <= 0) continue;
+        $due = (float) $r['total_amount'] - (float) $r['paid'];
+        // own → partner : partner به ما بدهکار است
+        if (!isset($brAgg[$own][$partner])) $brAgg[$own][$partner] = ['recv' => 0.0, 'pay' => 0.0];
+        $brAgg[$own][$partner]['recv'] += $due;
+        // قرینه: ما به partner بدهکاریم
+        if (!isset($brAgg[$partner][$own])) $brAgg[$partner][$own] = ['recv' => 0.0, 'pay' => 0.0];
+        $brAgg[$partner][$own]['pay'] += $due;
+    }
+
+    // ۳-ب) کارهای بین‌شعبه‌ایِ فاکتورنشده: کیسی که مالکش شعبهٔ دیگری است
+    //       اما از این شعبه آمده (source_branch_id) → این شعبه کار را انجام داده (طلبِ ما از مالک)
+    //       مبلغ = نرخ برون‌سپاری × تعداد (همان منطق getUninvoicedInboundPartnerCases)
+    $stmt = db()->query("
+        SELECT c.id, c.branch_id AS owner_branch, c.source_branch_id, c.case_type,
+               c.lab_id, c.outsourced_lab_id, c.service_id, c.outsourced_service_id,
+               c.quantity, c.outsourced_qty, c.outsourced_rate, c.receivable_invoice_id
+        FROM cases c
+        WHERE c.source_branch_id IS NOT NULL
+          AND (c.branch_id IS NULL OR c.branch_id <> c.source_branch_id)
+          AND c.receivable_invoice_id IS NULL
+          AND c.status_id <> 5
+    ");
+    foreach ($stmt->fetchAll() as $r) {
+        $owner = (int) ($r['owner_branch'] ?? 0);      // شعبه‌ای که باید پرداخت کند
+        $maker = (int) ($r['source_branch_id'] ?? 0);  // شعبه‌ای که کار را انجام داده
+        if ($owner <= 0 || $maker <= 0 || $owner === $maker) continue;
+        $isLabOut = ($r['case_type'] === 'lab_out');
+        $qty   = $isLabOut ? (int) ($r['quantity'] ?? 1) : (int) ($r['outsourced_qty'] ?? 0);
+        $svcId = $isLabOut ? (int) ($r['service_id'] ?? 0) : (int) ($r['outsourced_service_id'] ?? 0);
+        $labId = $isLabOut ? (int) ($r['lab_id'] ?? 0) : (int) ($r['outsourced_lab_id'] ?? 0);
+        $rate = ($r['outsourced_rate'] !== null && $r['outsourced_rate'] !== '')
+            ? (float) $r['outsourced_rate']
+            : (float) (getOutsourceRate($labId, $svcId, $owner) ?? 0.0);
+        $amt = round($rate * max(0, $qty));
+        if ($amt <= 0) continue;
+        // maker کار را انجام داده → owner به maker بدهکار است (طلبِ maker)
+        if (!isset($brAgg[$maker][$owner])) $brAgg[$maker][$owner] = ['recv' => 0.0, 'pay' => 0.0];
+        $brAgg[$maker][$owner]['recv'] += $amt;
+        if (!isset($brAgg[$owner][$maker])) $brAgg[$owner][$maker] = ['recv' => 0.0, 'pay' => 0.0];
+        $brAgg[$owner][$maker]['pay'] += $amt;
+    }
+
+    foreach ($brAgg as $own => $partners) {
+        if (!isset($branchNet[$own])) continue;
+        foreach ($partners as $partnerId => $io) {
+            $net = $io['recv'] - $io['pay'];
+            if (abs($net) < 0.01) continue;
+            $branchNet[$own]['branches'][] = [
+                'name'   => $branchNameMap[$partnerId] ?? ('شعبه ' . $partnerId),
+                'amount' => $net,
+                'recv'   => $io['recv'],
+                'pay'    => $io['pay'],
+                'uid'    => $partnerId,
+                'count'  => 0,
+            ];
+        }
+    }
+} catch (\Throwable $e) { /* ignore */ }
+
+// ── محدودسازی دسترسی: مدیر شعبه فقط کارتِ شعبهٔ خودش را می‌بیند ──
+if (!is_root_admin() && is_branch_scoped()) {
+    $myBranch = currentBranchId();
+    if ($myBranch !== null && isset($branchNameMap[$myBranch])) {
+        $branchNameMap = [$myBranch => $branchNameMap[$myBranch]];
+    }
+}
+
+// مرتب‌سازی نزولی بر اساس قدرمطلق + جمع کل هر گروه
+$branchNetTotals = [];
+foreach ($branchNet as $bId => $groups) {
+    foreach ($groups as $g => $items) {
+        usort($branchNet[$bId][$g], fn($a, $b) => abs($b['amount']) <=> abs($a['amount']));
+        $branchNetTotals[$bId][$g] = array_sum(array_map(fn($x) => (float) $x['amount'], $items));
+    }
+    $branchNetTotals[$bId]['grand'] = array_sum($branchNetTotals[$bId] ?? []);
+}
 
 panel_layout_start('بررسی وضعیت درآمد و هزینه');
 ?>
@@ -546,6 +866,7 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
     <button type="button" id="fin-tab-overview" class="fin-tab" onclick="switchFinTab('overview')" style="background:#0F172A; color:#fff; border:none; padding:10px 20px; font-weight:700; cursor:pointer; border-radius:8px 8px 0 0;">خلاصه و نمودار ماهانه</button>
     <button type="button" id="fin-tab-cases" class="fin-tab" onclick="switchFinTab('cases')" style="background:#E5E7EB; color:#0F172A; border:none; padding:10px 20px; font-weight:700; cursor:pointer; border-radius:8px 8px 0 0;">بر اساس کیس (نمودار دایره‌ای)</button>
     <button type="button" id="fin-tab-debts" class="fin-tab" onclick="switchFinTab('debts')" style="background:#E5E7EB; color:#0F172A; border:none; padding:10px 20px; font-weight:700; cursor:pointer; border-radius:8px 8px 0 0;">🧾 بدهی پزشکان، کلینیک‌ها و لابراتوارها<?= $debtTotalAll > 0 ? ' (' . formatAmountToman($debtTotalAll) . ')' : '' ?></button>
+    <button type="button" id="fin-tab-net" class="fin-tab" onclick="switchFinTab('net')" style="background:#E5E7EB; color:#0F172A; border:none; padding:10px 20px; font-weight:700; cursor:pointer; border-radius:8px 8px 0 0;">⚖️ خالص بدهی هر شعبه</button>
 </div>
 
 <div id="fin-pane-overview">
@@ -787,7 +1108,7 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
                                     <?= htmlspecialchars($r['party']) ?>
                                 <?php endif; ?>
                             </td>
-                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:center;"><?= toPersianDigits((int) $r['invoice_count']) ?></td>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:center;"><?= toPersianDigits((int) ($r['unpaid_count'] ?? 0)) ?></td>
                             <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left;"><?= formatAmountToman((float) $r['invoiced']) ?></td>
                             <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; color:#166534;"><?= formatAmountToman((float) $r['paid_amount']) ?></td>
                             <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; font-weight:bold; color:#b91c1c;"><?= formatAmountToman((float) $r['debt']) ?></td>
@@ -808,6 +1129,100 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
     <?php endforeach; ?>
 </div>
 
+<!-- ═══ تب: خالص بدهی هر شعبه ═══ -->
+<div id="fin-pane-net" style="display:none;">
+    <p style="margin:0 0 14px; font-size:0.85rem; color:#525252; line-height:1.9;">
+        خالص حسابِ هر شعبه با هر طرف‌حساب، به‌تفکیک شعبه.
+        <b style="color:#166534;">عدد مثبت</b> = طرف‌حساب به این شعبه <b>بدهکار</b> است.
+        <b style="color:#b91c1c;">عدد منفی</b> = این شعبه به طرف‌حساب <b>بدهکار</b> است (مثل لابراتواری که کار به آن می‌سپاریم).
+        <br>مبنای محاسبه دقیقاً همان توابعِ صدور فاکتور است: فاکتورهای پزشک/کلینیک (دریافتنی)،
+        فاکتور INV-LAB منهای فاکتورهای برون‌سپاری (لابراتوار دوطرفه)، و فاکتورهای بین‌شعبه‌ای (شعبه‌ها دوطرفه).
+        مستقل از بازهٔ تاریخِ بالای صفحه (تصویر لحظه‌ای).
+    </p>
+
+    <?php foreach ($branchNameMap as $bId => $bName):
+        $g = $branchNet[$bId] ?? ['doctors' => [], 'clinics' => [], 'labs' => [], 'branches' => []];
+        $t = $branchNetTotals[$bId] ?? [];
+        $hasAny = !empty($g['doctors']) || !empty($g['clinics']) || !empty($g['labs']) || !empty($g['branches']);
+        $grand = (float) ($t['grand'] ?? 0);
+    ?>
+    <div class="form-card" style="margin-bottom:18px;">
+        <h4 style="margin-top:0;">
+            🏢 <?= htmlspecialchars($bName) ?>
+            <span style="float:left; font-size:0.95rem; color:<?= $grand > 0.01 ? '#166534' : ($grand < -0.01 ? '#b91c1c' : '#475569') ?>;">
+                خالص کل: <?= formatAmountToman($grand) ?>
+            </span>
+        </h4>
+
+        <?php if (!$hasAny): ?>
+            <p class="empty">حسابی برای این شعبه ثبت نشده است.</p>
+        <?php else: ?>
+        <?php
+        $sections = [
+            'doctors'  => ['label' => 'پزشکان',      'color' => '#0ea5e9', 'link' => 'doctor_view.php?id=', 'empty' => 'حساب پزشکی وجود ندارد.'],
+            'clinics'  => ['label' => 'کلینیک‌ها',    'color' => '#8b5cf6', 'link' => 'cases.php?clinic_id=', 'empty' => 'حساب کلینیکی وجود ندارد.'],
+            'labs'     => ['label' => 'لابراتوارها',  'color' => '#14b8a6', 'link' => null, 'empty' => 'حساب لابراتواری وجود ندارد.'],
+            'branches' => ['label' => 'شعبه‌های همکار', 'color' => '#f59e0b', 'link' => null, 'empty' => 'حساب بین‌شعبه‌ای وجود ندارد.'],
+        ];
+        ?>
+        <?php foreach ($sections as $sk => $sg): ?>
+            <?php if (empty($g[$sk])) continue; ?>
+            <div style="margin-top:12px;">
+                <div style="font-weight:700; color:<?= $sg['color'] ?>; margin-bottom:6px; border-right:4px solid <?= $sg['color'] ?>; padding-right:8px;">
+                    <?= htmlspecialchars($sg['label']) ?>
+                    <small style="color:#64748b; font-weight:400;">(خالص: <?= formatAmountToman((float) ($t[$sk] ?? 0)) ?>)</small>
+                </div>
+                <div class="table-scroll">
+                    <table style="width:100%; border-collapse:collapse; font-size:0.88rem;">
+                        <thead>
+                            <tr style="background:#f8fafc;">
+                                <th style="text-align:right; padding:7px 8px; border-bottom:1px solid #e5e7eb;">طرف‌حساب</th>
+                                <?php if ($sk === 'labs'): ?>
+                                    <th style="text-align:left; padding:7px 8px; border-bottom:1px solid #e5e7eb;">طلب ما (کار از او)</th>
+                                    <th style="text-align:left; padding:7px 8px; border-bottom:1px solid #e5e7eb;">بدهی ما (برون‌سپاری)</th>
+                                <?php else: ?>
+                                    <th style="text-align:left; padding:7px 8px; border-bottom:1px solid #e5e7eb;">مبلغ فاکتور / خالص</th>
+                                <?php endif; ?>
+                                <th style="text-align:left; padding:7px 8px; border-bottom:1px solid #e5e7eb;">خالص حساب</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        <?php foreach ($g[$sk] as $it):
+                            $amt = (float) $it['amount'];
+                            $col = $amt > 0.01 ? '#166534' : ($amt < -0.01 ? '#b91c1c' : '#475569');
+                        ?>
+                            <tr>
+                                <td style="padding:7px 8px; border-bottom:1px solid #f1f5f9;">
+                                    <?php if ($sg['link'] !== null && !empty($it['uid'])): ?>
+                                        <a href="<?= $sg['link'] . (int) $it['uid'] ?>"><?= htmlspecialchars($it['name']) ?></a>
+                                    <?php else: ?>
+                                        <?= htmlspecialchars($it['name']) ?>
+                                    <?php endif; ?>
+                                </td>
+                                <?php if ($sk === 'labs'): ?>
+                                    <td style="padding:7px 8px; border-bottom:1px solid #f1f5f9; text-align:left; color:#166534;"><?= formatAmountToman((float) ($it['recv'] ?? 0)) ?></td>
+                                    <td style="padding:7px 8px; border-bottom:1px solid #f1f5f9; text-align:left; color:#b91c1c;"><?= formatAmountToman((float) ($it['pay'] ?? 0)) ?></td>
+                                <?php else: ?>
+                                    <td style="padding:7px 8px; border-bottom:1px solid #f1f5f9; text-align:left; color:#64748b;">
+                                        <?= formatAmountToman(abs($amt)) ?>
+                                        <?php if (!empty($it['count'])): ?><small style="color:#94a3b8;"> (<?= toPersianDigits((int) $it['count']) ?>)</small><?php endif; ?>
+                                    </td>
+                                <?php endif; ?>
+                                <td style="padding:7px 8px; border-bottom:1px solid #f1f5f9; text-align:left; font-weight:700; color:<?= $col ?>;">
+                                    <?= ($amt > 0.01 ? '+' : '') . formatAmountToman($amt) ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        <?php endforeach; ?>
+        <?php endif; ?>
+    </div>
+    <?php endforeach; ?>
+</div>
+
 <!-- Interactive chart tooltip -->
 <div id="chart-tooltip" style="display:none; position:fixed; z-index:99999; pointer-events:none; background:#0F172A; color:#fff; border-radius:8px; padding:8px 12px; font-size:0.85rem; box-shadow:0 6px 18px rgba(0,0,0,0.25); max-width:260px;"></div>
 
@@ -824,16 +1239,20 @@ function switchFinTab(tab){
     var ov = document.getElementById('fin-pane-overview');
     var cs = document.getElementById('fin-pane-cases');
     var db = document.getElementById('fin-pane-debts');
+    var nt = document.getElementById('fin-pane-net');
     var tbO = document.getElementById('fin-tab-overview');
     var tbC = document.getElementById('fin-tab-cases');
     var tbD = document.getElementById('fin-tab-debts');
+    var tbN = document.getElementById('fin-tab-net');
     if (ov) ov.style.display = (tab === 'overview') ? '' : 'none';
     if (cs) cs.style.display = (tab === 'cases') ? '' : 'none';
     if (db) db.style.display = (tab === 'debts') ? '' : 'none';
+    if (nt) nt.style.display = (tab === 'net') ? '' : 'none';
     if (tbO) { tbO.style.background = (tab === 'overview') ? '#0F172A' : '#E5E7EB'; tbO.style.color = (tab === 'overview') ? '#fff' : '#0F172A'; }
     if (tbC) { tbC.style.background = (tab === 'cases') ? '#0F172A' : '#E5E7EB'; tbC.style.color = (tab === 'cases') ? '#fff' : '#0F172A'; }
     if (tbD) { tbD.style.background = (tab === 'debts') ? '#0F172A' : '#E5E7EB'; tbD.style.color = (tab === 'debts') ? '#fff' : '#0F172A'; }
-    try { if (tab === 'debts') { var el = document.getElementById('fin-tab-debts'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } } catch(e){}
+    if (tbN) { tbN.style.background = (tab === 'net') ? '#0F172A' : '#E5E7EB'; tbN.style.color = (tab === 'net') ? '#fff' : '#0F172A'; }
+    try { if (tab === 'debts' || tab === 'net') { var el = document.getElementById('fin-tab-' + tab); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } } catch(e){}
 }
 function switchPieDim(dim){
     document.querySelectorAll('.pie-dim-pane').forEach(function(p){ p.style.display = 'none'; });

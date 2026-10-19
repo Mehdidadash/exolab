@@ -51,6 +51,16 @@ if (empty($sessionToken) || !hash_equals($sessionToken, $token)) {
 $data = $_POST;
 $received_date = parseJalaliToGregorian($data['received_date'] ?? '');
 
+// ─── توکنِ یکتای ارسال (جلوگیری از کیسِ تکراری هنگام قطع/وصل اینترنت) ───
+// مرورگر هنگام باز کردن فرمِ «کیس جدید» یک توکنِ تصادفی می‌سازد و همراهِ درخواست
+// می‌فرستد. اگر پاسخ به کاربر نرسد و او دوباره «ذخیره» را بزند، همان توکن دوباره
+// می‌آید؛ این‌جا تشخیص می‌دهیم که کیس قبلاً ساخته شده و همان را برمی‌گردانیم
+// (به‌جای ساختن کیسِ دومِ ناقص).
+$submitToken = trim((string) ($data['submit_token'] ?? ''));
+if ($submitToken !== '' && !preg_match('/^[A-Za-z0-9\-]{8,64}$/', $submitToken)) {
+    $submitToken = '';   // فرمت نامعتبر → نادیده بگیر (مسیرهای برنامه‌ای دست‌نخورده بمانند)
+}
+
 $id = !empty($data['id']) ? (int)$data['id'] : null;
 $doctor_id = !empty($data['doctor_id']) ? (int)$data['doctor_id'] : null;
 $patient_name = trim($data['patient_name'] ?? '');
@@ -64,15 +74,21 @@ $teeth = str_replace(['،', ';'], ',', $teeth);
 $shade = trim($data['shade'] ?? '');
 // نوع اسکن‌بادی + نوع اتصال: فقط برای خدماتی که requires_scan_body دارند معنی دارند،
 // ولی اعتبارسنجی نهایی بعد از معلوم شدن service_id انجام می‌شود (پایین‌تر).
-$scanBodyTypeId = !empty($data['scan_body_type_id']) ? (int) $data['scan_body_type_id'] : null;
+// ⚠️ فقط یک متغیر برای نوع اسکن‌بادی نگه داشته می‌شود ($scan_body_type_id) تا
+// اعتبارسنجی و ذخیره‌سازی روی همان یکی انجام شود. (قبلاً دو متغیرِ موازی وجود داشت
+// که باعث می‌شد مقدارِ اعتبارسنجی‌نشده در دیتابیس ذخیره شود.)
 $connectionType = trim((string) ($data['connection_type'] ?? ''));
 $connectionType = isValidConnectionType($connectionType) ? $connectionType : null;
 // نوع اسکن‌بادی کیس (فقط برای خدماتی که requires_scan_body دارند — اباتمنت/فیکسچر ایمپلنت)
 $scan_body_type_id = !empty($data['scan_body_type_id']) ? (int) $data['scan_body_type_id'] : null;
+// نوع فیکسچر کیس (فقط برای خدماتی که requires_fixture_type دارند — کاستوم اباتمنت)
+$fixture_type_id = !empty($data['fixture_type_id']) ? (int) $data['fixture_type_id'] : null;
 $quantity = !empty($data['quantity']) ? (int)$data['quantity'] : 1;
 if ($quantity < 1) $quantity = 1;
 if ($quantity > 999) $quantity = 999;   // جلوگیری از اشتباه تایپی
 $unit_price = !empty($data['unit_price']) ? (float)$data['unit_price'] : 0;
+// هزینهٔ طراحی به‌صورت «فی» (نرخ هر واحد) ذخیره می‌شود، نه جمع کل.
+// جمع کل طراحی هرجا لازم شد با `design_fee * quantity` محاسبه می‌شود.
 $design_fee = !empty($data['design_fee']) ? (float)$data['design_fee'] : 0;
 // مبلغ کار فقط (هزینهٔ طراحی جدا محاسبه/فاکتور می‌شود).
 // اگر خدمت «قیمت پله‌ای» داشته باشد (قیمت پایه + قیمت هر واحد اضافه)، همان محاسبه می‌شود؛
@@ -159,12 +175,13 @@ if (!$editingCase && $currentUser['role'] === 'doctor') {
             $total_price = serviceTotalPrice($unit_price, $quantity, $service_id);
         }
     }
-    // هزینهٔ طراحی هم مثل فرمِ کارکنان محاسبه شود (نرخِ طراح × تعداد) — فرمِ پزشک
+    // هزینهٔ طراحی هم مثل فرمِ کارکنان محاسبه شود — فرمِ پزشک
     // فیلد هزینهٔ طراحی ندارد، پس سرور آن را از «نقشهٔ قیمت‌گذاری» می‌خواند.
+    // (design_fee = فی هر واحد، نه جمع کل)
     if ($designer_id && !array_key_exists('design_fee', $data)) {
         $unitDesignFee = getApplicableDesignFee((int) $designer_id, $service_id > 0 ? (int) $service_id : null);
         if ($unitDesignFee !== null) {
-            $design_fee = round((float) $unitDesignFee * (int) $quantity, 2);
+            $design_fee = round((float) $unitDesignFee, 2);
         }
     }
 }
@@ -177,7 +194,7 @@ $existingCaseRow = null;
 if ($id) {
     $exRow = db()->prepare('SELECT doctor_id, service_id, status_id, lab_id, case_type, branch_id, source_branch_id, clinic_id,
                                    designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate,
-                                   scan_body_type_id, connection_type
+                                   scan_body_type_id, connection_type, fixture_type_id
                             FROM cases WHERE id = ?');
     $exRow->execute([$id]);
     $existingCaseRow = $exRow->fetch() ?: null;
@@ -354,13 +371,10 @@ if (!$serviceRequiresDesign) {
 // اگر خدمت نیازمند اسکن‌بادی نباشد، هر دو مقدار پاک می‌شوند (مثل اعتبارسنجیِ نوبت اسکن).
 // در ویرایش، اگر خدمت نیاز نداشت مقدارِ قبلی حفظ نمی‌شود مگر خدمت هنوز نیازمند باشد —
 // چون فیلد به‌کلی بی‌معنی است.
+// ⚠️ نوع اسکن‌بادی همان‌جا در بلوکِ اختصاصیِ پایین‌تر ($scan_body_type_id) اعتبارسنجی
+// می‌شود و اینجا تکرار نمی‌شود.
 if (!serviceRequiresScanBody($service_id)) {
-    $scanBodyTypeId = null;
     $connectionType = null;
-} else {
-    if ($scanBodyTypeId !== null && !getScanBodyType($scanBodyTypeId)) {
-        $scanBodyTypeId = null;
-    }
 }
 
 // ─── نوع اسکن‌بادی کیس (service requires_scan_body) ───
@@ -377,6 +391,21 @@ if ($scan_body_type_id === null && $service_id && serviceRequiresScanBody($servi
     $prevBody = !empty($existingCaseRow['scan_body_type_id']) ? (int) $existingCaseRow['scan_body_type_id'] : null;
     if ($prevBody && getScanBodyType($prevBody)) {
         $scan_body_type_id = $prevBody;
+    }
+}
+
+// ─── نوع فیکسچر کیس (service requires_fixture_type) ───
+// مثل نوع اسکن‌بادی: فقط برای کاستوم اباتمنت (کره‌ای/اروپایی) معنی دارد.
+// پیش‌فرض هیچ چیزی انتخاب نمی‌شود؛ مقدار نامعتبر یا مربوط به خدمتِ بی‌ربط پاک می‌شود.
+if ($fixture_type_id !== null) {
+    if (!serviceRequiresFixtureType($service_id) || !getFixtureType($fixture_type_id)) {
+        $fixture_type_id = null;
+    }
+}
+if ($fixture_type_id === null && $service_id && serviceRequiresFixtureType($service_id) && $existingCaseRow) {
+    $prevFixture = !empty($existingCaseRow['fixture_type_id']) ? (int) $existingCaseRow['fixture_type_id'] : null;
+    if ($prevFixture && getFixtureType($prevFixture)) {
+        $fixture_type_id = $prevFixture;
     }
 }
 
@@ -526,17 +555,60 @@ function handleCaseFileUploads(int $caseId, array $files, array $relPaths = [], 
 }
 
 try {
+    // ─── بررسی تکرارِ ارسال (idempotency) ───
+    // اگر همین توکن قبلاً برای ساخت کیس استفاده شده باشد، همان کیس برگردانده می‌شود
+    // و هیچ INSERT دومی انجام نمی‌شود.
+    if (!$id && $submitToken !== '') {
+        $dup = db()->prepare('SELECT id FROM cases WHERE submit_token = ? LIMIT 1');
+        $dup->execute([$submitToken]);
+        $dupCaseId = (int) $dup->fetchColumn();
+        if ($dupCaseId > 0) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode([
+                'success'   => true,
+                'id'        => $dupCaseId,
+                'duplicate' => true,
+                'message'   => 'این کیس قبلاً ثبت شده بود (بازیابیِ ارسالِ قطع‌شده)؛ همان کیس بازگردانده شد.',
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
+
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, clinic_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, scan_body_type_id = ?, connection_type = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, updated_at = NOW() WHERE id = ?';
-        $params = [$doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scanBodyTypeId, $connectionType, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $id];
+        $sql = 'UPDATE cases SET doctor_id = ?, clinic_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, scan_body_type_id = ?, connection_type = ?, fixture_type_id = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, updated_at = NOW() WHERE id = ?';
+        // ⚠️ از $scan_body_type_id استفاده می‌شود (نه $scanBodyTypeId) — همان متغیری که
+        // در بلوکِ اعتبارسنجی «نوع اسکن‌بادی/اتصال» پاک‌سازی و بازگردانی شده است.
+        $params = [$doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, clinic_id, patient_name, receipt_number, service_id, location_type, teeth, shade, scan_body_type_id, connection_type, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scanBodyTypeId, $connectionType, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, clinic_id, patient_name, receipt_number, service_id, location_type, teeth, shade, scan_body_type_id, connection_type, fixture_type_id, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, submit_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id, ($submitToken !== '' ? $submitToken : null)];
         $stmt = db()->prepare($sql);
-        $stmt->execute($params);
+        try {
+            $stmt->execute($params);
+        } catch (\PDOException $dupEx) {
+            // مسابقهٔ هم‌زمانی: دو درخواست با یک توکن؛ دومی به UNIQUE می‌خورد →
+            // کیسِ ساخته‌شدهٔ اولی برگردانده می‌شود (نه خطا و نه کیسِ تکراری).
+            if ($submitToken !== ''
+                && ($dupEx->getCode() === '23000' || (int) $dupEx->errorInfo[1] === 1062)) {
+                $dup = db()->prepare('SELECT id FROM cases WHERE submit_token = ? LIMIT 1');
+                $dup->execute([$submitToken]);
+                $dupCaseId = (int) $dup->fetchColumn();
+                if ($dupCaseId > 0) {
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'success'   => true,
+                        'id'        => $dupCaseId,
+                        'duplicate' => true,
+                        'message'   => 'این کیس قبلاً ثبت شده بود؛ همان کیس بازگردانده شد.',
+                    ], JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+            }
+            throw $dupEx;
+        }
         $caseId = (int) db()->lastInsertId();
     }
 
@@ -566,6 +638,9 @@ try {
 
     header('Content-Type: application/json; charset=utf-8');
     $response = ['success' => true, 'id' => $caseId];
+    if (!$id && $submitToken !== '') {
+        $response['submit_token'] = $submitToken;   // مصرف‌شده — کلاینت دیگر نباید دوباره بفرستد
+    }
     if (!empty($uploadErrors)) {
         $response['upload_errors'] = $uploadErrors;
         $response['message'] = 'کیس ذخیره شد اما برخی فایل‌ها آپلود نشدند.';

@@ -46,6 +46,80 @@ if (!function_exists('flIsKeepRow')) {
     }
 }
 
+if (!function_exists('flFileTypeLabel')) {
+    /**
+     * برچسبِ فارسی + رنگِ یک نوع فایل (برای نشان دادن «نوع پوشه»).
+     * از caseFileTypeConfig() استفاده می‌کند تا برچسب‌ها همه‌جا یکسان بمانند.
+     * خروجی: ['label' => '…', 'badge' => '#rrggbb', 'text' => '#rrggbb'] یا null.
+     */
+    function flFileTypeLabel(?string $type): ?array {
+        $type = trim((string) $type);
+        if ($type === '') { return null; }
+        if (function_exists('caseFileTypeConfig')) {
+            $cfg = caseFileTypeConfig();
+            // ساختار: ['options' => [type => label], 'badge' => [type => [label, bg, text]]]
+            $badge = $cfg['badge'][$type] ?? null;
+            if (is_array($badge) && count($badge) >= 3) {
+                return [
+                    'label' => (string) $badge[0],
+                    'badge' => (string) $badge[1],
+                    'text'  => (string) $badge[2],
+                ];
+            }
+            $label = $cfg['options'][$type] ?? null;
+            if (is_string($label)) {
+                return ['label' => $label, 'badge' => '#e2e8f0', 'text' => '#0f172a'];
+            }
+        }
+        return ['label' => $type, 'badge' => '#e2e8f0', 'text' => '#0f172a'];
+    }
+}
+
+if (!function_exists('flFolderTypeFromNode')) {
+    /**
+     * «نوع پوشه» را از محتوایش استنتاج می‌کند.
+     *
+     * قاعده:
+     *   ۱) اگر ردیفِ نشانگرِ پوشه (ZIP آپلودشده با rel_path = نام پوشه) نوعِ صریحی داشته
+     *      باشد، همان «نوع اعلام‌شدهٔ پوشه» است.
+     *   ۲) وگرنه اگر همهٔ فایل‌های داخل پوشه یک نوعِ مشترک داشته باشند، همان نوع.
+     *   ۳) وگرنه اگر چند نوع متفاوت باشد → ['mixed' => true].
+     *
+     * @param array $node  گرهٔ پوشه در درخت (کلید 'files') — فقط فایل‌های همان پوشه
+     * @return array{label:string,badge:string,text:string,mixed?:bool}|null
+     */
+    function flFolderTypeFromNode(array $node): ?array {
+        $declared = null;    // نوعِ صریحِ ردیفِ نشانگرِ پوشه (اگر باشد)
+        $found    = [];      // نوع‌های دیده‌شده در فایل‌های واقعی
+
+        foreach (($node['files'] ?? []) as $f) {
+            $t = trim((string) ($f['file_type'] ?? ''));
+            if ($t === '') { continue; }
+            // ردیفِ نشانگرِ پوشه: mime=zip و نامش با نام پوشه یکی است (rel_path تک‌سگمنت)
+            $isMarker = !empty($f['is_folder_marker']);
+            if ($isMarker) {
+                $declared = $t;
+                continue;
+            }
+            $found[$t] = true;
+        }
+
+        if ($declared !== null && $declared !== '') {
+            $lbl = flFileTypeLabel($declared);
+            if ($lbl) { return $lbl; }
+        }
+        if (count($found) === 1) {
+            $only = array_key_first($found);
+            $lbl = flFileTypeLabel((string) $only);
+            if ($lbl) { return $lbl; }
+        }
+        if (count($found) > 1) {
+            return ['label' => 'چند نوع', 'badge' => '#f1f5f9', 'text' => '#475569', 'mixed' => true];
+        }
+        return null;
+    }
+}
+
 if (!function_exists('flBuildFolderTree')) {
     /**
      * ساختِ درختِ پوشه از روی rel_path فایل‌ها — پشتیبانی از چند سطح تودرتو.
@@ -102,6 +176,19 @@ if (!function_exists('flBuildFolderTree')) {
             }
             // تک‌سگمنت: اگر پوشهٔ هم‌نام وجود دارد عضو آن است، وگرنه فایل تکی
             if (isset($folders[$rel])) {
+                // «نشانگرِ نوعِ پوشه» = ردیفی که خودْ نشان‌دهندهٔ خودِ پوشه است، نه یک
+                // فایلِ داخلش. دو حالت:
+                //   • نامش با نام پوشه یکی است (پوشهٔ ساخته‌شده با «📁 پوشه جدید»)،
+                //   • یا بایگانیِ ZIP همان آپلودِ پوشه است (mime=application/zip).
+                $isMarker = (strcasecmp((string) ($r['name'] ?? ''), $rel) === 0)
+                            || (strcasecmp(basename((string) ($r['name'] ?? '')), $rel) === 0);
+                $mime = strtolower((string) ($r['mime'] ?? ''));
+                $ft   = strtolower((string) ($r['file_type'] ?? ''));
+                $extOfName = strtolower((string) pathinfo((string) ($r['name'] ?? ''), PATHINFO_EXTENSION));
+                if (!$isMarker && $mime === 'application/zip' && $extOfName === 'zip') {
+                    $isMarker = true;   // بایگانی ZIPِ آپلودِ همان پوشه
+                }
+                if ($isMarker) { $r['is_folder_marker'] = true; }
                 $folders[$rel]['files'][] = $r;
             } else {
                 $flat[] = $r;
@@ -221,6 +308,18 @@ if (!function_exists('renderFileDetailsView')) {
                             <span class="fl-badge"><?= toPersianDigits((string) $total) ?> فایل</span>
                             <?php if ($subDirs > 0): ?>
                                 <span class="fl-badge fl-badge--sub"><?= toPersianDigits((string) $subDirs) ?> زیرپوشه</span>
+                            <?php endif; ?>
+                            <?php
+                            // ── «نوع پوشه» ──
+                            // پوشه خودش ستونِ نوع ندارد؛ نوعش از محتوایش استنتاج می‌شود:
+                            //   ۱) نوعِ صریحِ ردیفِ نشانگرِ پوشه (ZIP آپلودشده)،
+                            //   ۲) نوعِ مشترک همهٔ فایل‌های داخلش،
+                            //   ۳) «چند نوع» اگر متفاوت باشند.
+                            $fType = flFolderTypeFromNode($node);
+                            if ($fType !== null): ?>
+                                <span class="fl-badge fl-badge--type"
+                                      style="background:<?= htmlspecialchars($fType['badge']) ?>; color:<?= htmlspecialchars($fType['text']) ?>;"
+                                      title="نوع پوشه (از محتوای آن استنتاج شده)"><?= htmlspecialchars($fType['label']) ?></span>
                             <?php endif; ?>
                         </span>
                         <span class="fl-size fl-meta"><?= $gSize ? formatFileSize($gSize) : '—' ?></span>

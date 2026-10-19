@@ -24,6 +24,13 @@ if (empty($caseIds) || !is_array($caseIds)) {
     die('No cases selected');
 }
 
+// مجوز: مجوزِ export_csv، یا کاربرِ طراح (طراح‌ها هم می‌توانند خروجی CSV بگیرند).
+$csvUser = current_user();
+if (!has_permission('export_csv') && !is_designer_user($csvUser) && !is_admin()) {
+    http_response_code(403);
+    die('دسترسی غیرمجاز — شما مجوز خروجی CSV را ندارید.');
+}
+
 $caseIds = array_map('intval', $caseIds);
 $placeholders = implode(',', array_fill(0, count($caseIds), '?'));
 
@@ -38,6 +45,18 @@ $stmt = db()->prepare("
 ");
 $stmt->execute($caseIds);
 $cases = $stmt->fetchAll();
+
+// فقط کیس‌هایی که کاربر اجازهٔ دیدنشان را دارد (شعبه/رابطه/مجوز).
+// بدون این فیلتر، کاربری با مجوزِ export_csv می‌توانست با فرستادن شناسهٔ دلخواه،
+// دادهٔ کیس‌های نامرتبط را از خروجی بگیرد.
+$cases = array_values(array_filter($cases, static function ($c) use ($csvUser) {
+    return userCanViewCase((int) ($c['id'] ?? 0), $csvUser, $c);
+}));
+
+if (empty($cases)) {
+    http_response_code(403);
+    die('دسترسی غیرمجاز به کیس‌های انتخاب‌شده.');
+}
 
 // Build CSV
 $filename = 'cases_export_' . date('Y-m-d') . '.csv';
