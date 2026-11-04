@@ -47,5 +47,20 @@ if (!empty($_POST['id'])) {
 }
 
 $savedId = saveDoctor($data);
+
+// ── طراح پیش‌فرضِ اختصاصیِ این پزشک ──
+// فقط وقتی فیلد در فرم بوده ذخیره می‌شود (فرم‌های دیگرِ ذخیرهٔ پزشک ممکن است آن را نفرستند).
+// مقدار نامعتبر / غیرطراح → خالی (یعنی «استفاده از پیش‌فرضِ شعبه»).
+if (array_key_exists('default_designer_id', $_POST)) {
+    $did = (int) ($_POST['default_designer_id'] ?? 0);
+    if ($did > 0 && !isValidDesignerId($did)) $did = 0;
+    try {
+        $upd = db()->prepare('UPDATE users SET default_designer_id = ? WHERE id = ?');
+        $upd->execute([$did > 0 ? $did : null, $savedId]);
+    } catch (\Throwable $e) {
+        error_log('save_doctor default_designer_id: ' . $e->getMessage());
+    }
+}
+
 audit_log_save('doctor', $savedId, 'پزشک');
 header('Location: doctors.php');

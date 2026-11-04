@@ -45,6 +45,24 @@ panel_layout_start($id ? 'ویرایش شعبه' : 'افزودن شعبه');
             </select>
             <small style="display:block; color:#525252; margin-top:4px;">کاربر انتخاب‌شده باید در صفحه «شعبه‌ها» نیز به همین شعبه متصل شود (branch_id).</small>
         </div>
+        <?php
+        // ── طراح پیش‌فرضِ اختصاصیِ این شعبه ──
+        // برای کیس‌هایی که پزشکشان طراح پیش‌فرضِ اختصاصی ندارد، این طراح انتخاب می‌شود.
+        $brDefaultDesignerId = $id ? getBranchDefaultDesignerId((int) $id) : 0;
+        $designersForBranchForm = getAllDesigners();
+        ?>
+        <div class="form-group">
+            <label><?= field_icon('compass-drafting') ?> طراح پیش‌فرضِ شعبه</label>
+            <select name="default_designer_id">
+                <option value="">— استفاده از پیش‌فرضِ سراسری —</option>
+                <?php foreach ($designersForBranchForm as $des): ?>
+                    <option value="<?= (int) $des['id'] ?>" <?= $brDefaultDesignerId === (int) $des['id'] ? 'selected' : '' ?>><?= htmlspecialchars($des['full_name']) ?><?= !empty($des['is_default_designer']) ? ' (پیش‌فرضِ سراسری)' : '' ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; color:#525252; margin-top:4px;">
+                هنگام ثبت کیس جدید در این شعبه، اگر پزشکِ کیس طراح پیش‌فرضِ اختصاصی نداشته باشد، این طراح انتخاب می‌شود.
+            </small>
+        </div>
         <div class="form-group">
             <label style="display:flex; align-items:center; gap:8px;">
                 <input type="checkbox" name="active" value="1" style="width:auto;" <?= !isset($branch['active']) || $branch['active'] ? 'checked' : '' ?>>

@@ -22,8 +22,20 @@ if ($lab_id > 0) {
 }
 
 if ($doctor_id <= 0) {
+    // ⚠️ پزشک/لابراتوار انتخاب نشده: قبلاً همیشه `price:null` برمی‌گشت و در فرمِ کیس
+    // فی خالی می‌ماند (و کیس با فی ۰ ذخیره می‌شد). حالا فیِ عمومی/شعبه برمی‌گردد.
+    if ($service_id <= 0 || $price_type === 'design_fee') {
+        header('Content-Type: application/json');
+        echo json_encode(['price' => null]);
+        exit;
+    }
+    $price = getBranchServiceCustomPrice($service_id);
+    if ($price === null) {
+        $row = getPrice($service_id);
+        $price = $row ? (float) $row['price'] : null;
+    }
     header('Content-Type: application/json');
-    echo json_encode(['price' => null]);
+    echo json_encode(['price' => $price !== null ? round((float) $price) : null]);
     exit;
 }
 

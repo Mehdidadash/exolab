@@ -7,6 +7,8 @@ require_once __DIR__ . '/icons.php';
 // پس بارگذاریشان برای همهٔ صفحات بی‌خطر است و همه‌جا در دسترس خواهند بود.
 require_once __DIR__ . '/invoice_types.php';
 require_once __DIR__ . '/invoice_items_table.php';
+// منطقِ مشترکِ تب‌های «نرخ اختصاصی» در prices.php (font/doctor/clinic/lab/branch)
+require_once __DIR__ . '/price_tabs.php';
 
 function toPersianDigits($input) {
     $numbers = ['0','1','2','3','4','5','6','7','8','9'];
@@ -346,6 +348,38 @@ function jalaliDateForFilename($gregorianDate): string {
 }
 
 /**
+ * دسته‌های مجازِ خدمت — همه‌جا یکسان (فرم قیمت، جدول قیمت‌ها، لیست قیمت PDF).
+ *   دندانپزشکان = خدماتِ اصلیِ مطب/کلینیک
+ *   همکاری      = خدماتی که برای لابراتوارهای همکار انجام می‌شود
+ *   عمومی       = خدمات عمومی/سایر
+ *   مشترک       = بین دندانپزشک و همکار مشترک است
+ */
+function serviceCategories(): array {
+    return ['دندانپزشکان', 'همکاری', 'عمومی', 'مشترک'];
+}
+
+/**
+ * نگاشتِ دسته‌های قدیمی/آزاد به دسته‌های مجاز.
+ * (قبلاً دسته متنِ آزاد بود: «پزشکان»، «همکار»، ... → اکنون فقط چهار مقدارِ بالا.)
+ * مقدارِ ناشناخته/خالی → «عمومی».
+ */
+function normalizeServiceCategory(?string $category): string {
+    $c = trim((string) $category);
+    if ($c === '') return 'عمومی';
+    $map = [
+        'پزشکان'      => 'دندانپزشکان',
+        'پزشک'        => 'دندانپزشکان',
+        'دندانپزشک'  => 'دندانپزشکان',
+        'همکار'       => 'همکاری',
+        'عمومی'       => 'عمومی',
+        'مشترک'       => 'مشترک',
+        'دندانپزشکان' => 'دندانپزشکان',
+        'همکاری'      => 'همکاری',
+    ];
+    return $map[$c] ?? 'عمومی';
+}
+
+/**
  * رنگ‌های استاندارد سایه (VITA/Bleach). فقط همین‌ها در فرم کیس قابل انتخاب‌اند؛
  * سایه‌های غیراستاندارد (مثل نوریتاکه NW0/NW0.5) باید در «توضیحات» نوشته شوند.
  */
@@ -543,6 +577,66 @@ function caseFileNamingPrefix(array $caseRow, ?string $suffix = null): string {
 }
 
 /**
+ * نامِ پایهٔ فایل‌های ZIP دانلود — خوانا و شاملِ شمارهٔ کیس:
+ *   {شماره کیس}_{نام بیمار (فینگلیش)}_{سایه}_{دندان}[_{نام پوشه}]
+ *
+ * مثال: `1481_KarimPoor_BL1_44` یا `1481_KarimPoor_BL1_44_اسکن-فک-بالا`
+ *
+ * چرا: قبلاً ZIPِ «دانلود پوشه» به نامِ خودِ پوشهٔ آپلودی ذخیره می‌شد؛ اگر آن پوشه
+ * خروجیِ دستگاه اسکن بود (مثل `P2026-10-29_143404-karimpour-rabiei-rabiei`) هیچ
+ * نشانی از شمارهٔ کیس و نام بیمار در نامِ فایل نبود و طراح نمی‌توانست کارها را
+ * از هم تشخیص دهد.
+ *
+ * @param int         $caseId     شناسهٔ کیس
+ * @param string|null $folderName نام پوشه (اختیاری — برای ZIPهای تک‌پوشه‌ای)
+ */
+function caseDownloadBaseName(int $caseId, ?string $folderName = null): string
+{
+    if ($caseId <= 0) {
+        return 'case';
+    }
+    $row = [];
+    try {
+        $st = db()->prepare('SELECT id, patient_name, shade, teeth FROM cases WHERE id = ? LIMIT 1');
+        $st->execute([$caseId]);
+        $row = $st->fetch() ?: [];
+    } catch (Throwable $e) {
+        $row = [];
+    }
+
+    $patient = '';
+    if (function_exists('persian_to_finglish')) {
+        $patient = trim((string) persian_to_finglish((string) ($row['patient_name'] ?? '')));
+    }
+    $patient = trim((string) preg_replace('/\s+/u', '-', $patient), '-');
+
+    $shade = trim((string) ($row['shade'] ?? ''));
+
+    // دندان‌ها: «26،42_43_44» → «26-42-43-44» (کاما/آندرلاین/فاصله → خط تیره)
+    $teeth = trim((string) ($row['teeth'] ?? ''));
+    if ($teeth !== '') {
+        $teeth = (string) preg_replace('/[\s_,،]+/u', '-', $teeth);
+        $teeth = trim((string) preg_replace('/-{2,}/', '-', $teeth), '-');
+    }
+
+    $folder = trim((string) $folderName);
+    $folder = (string) preg_replace('/\s+/u', '-', $folder);
+
+    $parts = array_filter(
+        [(string) $caseId, $patient, $shade, $teeth, $folder],
+        fn($p) => $p !== ''
+    );
+
+    $base = implode('_', $parts);
+    // فقط کاراکترهای امنِ نام فایل
+    $base = (string) preg_replace('/[<>:"\/\\\\|?*\x00-\x1F]+/u', '_', $base);
+    $base = (string) preg_replace('/_+/', '_', $base);
+    $base = trim($base, " _.");
+
+    return $base !== '' ? $base : ('case_' . $caseId);
+}
+
+/**
  * افزودن پیشوندِ نام‌گذاری به یک نام فایل — بدون دوباره‌کاری اگر از قبل پیشوند دارد.
  *   addCaseFilePrefix('scan.stl', '1252_A2_Fatemeh-Khani_14')
  *      → '1252_A2_Fatemeh-Khani_14_scan.stl'
@@ -569,24 +663,72 @@ function addCaseFilePrefix(string $fileName, string $prefix): string {
 }
 
 /**
+ * پیشوندِ نام فایل برای «فایل‌های خام (اسکن) که داخل یک پوشه آپلود شده‌اند»:
+ *   {نام پوشه}_{شماره کیس}_{نام پوشه}
+ *
+ * ساختارِ نهاییِ نام نمایشی = «پیشوند + '_' + نام اصلیِ فایل»، یعنی:
+ *   اسکن‌فک‌بالا_1252_اسکن‌فک‌بالا_scan.stl
+ *
+ * (درخواست کاربر: اول نام پوشه، بعد شماره کیس، بعد آندرلاین، بعد تکرارِ نام پوشه.)
+ *
+ * @param string $folderName نام پوشهٔ ریشه (مثلاً «اسکن فک بالا»)
+ * @param int    $caseId     شناسهٔ کیس
+ * @return string پیشوند (یا '' اگر نام پوشه یا شماره کیس موجود نباشد)
+ */
+function caseFolderFilePrefix(string $folderName, int $caseId): string
+{
+    $folder = trim($folderName);
+    if ($folder === '' || $caseId <= 0) {
+        return '';
+    }
+    // داخلِ نام فایل، فاصله → '-' (همان قاعدهٔ بقیهٔ نام‌گذاری‌ها)
+    $folder = (string) preg_replace('/\s+/u', '-', $folder);
+    // فقط کاراکترهای امنِ نام فایل
+    $folder = (string) preg_replace('/[<>:"\/\\\\|?*\x00-\x1F]+/u', '-', $folder);
+    $folder = trim($folder, " _-.");
+
+    if ($folder === '' || mb_strlen($folder) > 120) {
+        $folder = mb_substr($folder, 0, 120);
+    }
+    if ($folder === '') {
+        return '';
+    }
+    return $folder . '_' . $caseId . '_' . $folder;
+}
+
+/**
  * ★ نقطهٔ واحدِ نام‌گذاری خودکار فایل‌های کیس ★
  *
  * همهٔ مسیرهای آپلود (صفحهٔ کیس‌ها، مشاهدهٔ کیس، کتابخانه) باید **فقط** از این
  * تابع استفاده کنند تا نام‌گذاری در همه‌جا یکسان بماند و هرگز از هم دور نشود.
  *
- * @param int         $caseId   شناسهٔ کیس
- * @param string|null $fileType نوع فایل (فقط 'final_design' پیشوند می‌گیرد)
+ * قواعدِ نام‌گذاری:
+ *   • نوع «طراحی نهایی»          → {شماره کیس}_{سایه}_{بیمار}_{قبض}_{نام فایل}
+ *   • فایلِ خام داخل پوشه        → {نام پوشه}_{شماره کیس}_{نام پوشه}_{نام فایل}
+ *   • فایلِ خام تکی (بدون پوشه)  → بدون پیشوند (نام اصلی حفظ می‌شود)
+ *
+ * @param int         $caseId     شناسهٔ کیس
+ * @param string|null $fileType   نوع فایل ('final_design' / 'raw_scan' / …)
+ * @param string|null $folderName نام پوشهٔ ریشه (برای فایل‌های داخل پوشه)
+ * @param bool        $isInFolder آیا فایل عضو یک پوشهٔ آپلودشده است؟
  * @return string پیشوند آماده (یا '' اگر نام‌گذاری لازم نیست)
  */
-function caseFilePrefixForUpload(int $caseId, ?string $fileType): string
+function caseFilePrefixForUpload(int $caseId, ?string $fileType, ?string $folderName = null, bool $isInFolder = false): string
 {
-    if ($fileType !== 'final_design') {
-        return '';
+    // فایل‌های «طراحی نهایی» همیشه پیشوندِ کاملِ کیس را می‌گیرند
+    if ($fileType === 'final_design') {
+        $st = db()->prepare('SELECT id, patient_name, shade, receipt_number FROM cases WHERE id = ? LIMIT 1');
+        $st->execute([$caseId]);
+        $row = $st->fetch();
+        return $row ? caseFileNamingPrefix($row) : '';
     }
-    $st = db()->prepare('SELECT id, patient_name, shade, receipt_number FROM cases WHERE id = ? LIMIT 1');
-    $st->execute([$caseId]);
-    $row = $st->fetch();
-    return $row ? caseFileNamingPrefix($row) : '';
+
+    // فایل‌های خامِ داخل پوشه: «نام پوشه_شماره کیس_نام پوشه»
+    if ($isInFolder && $folderName !== null && $folderName !== '') {
+        return caseFolderFilePrefix((string) $folderName, $caseId);
+    }
+
+    return '';
 }
 
 /**
@@ -599,10 +741,11 @@ function caseFilePrefixForUpload(int $caseId, ?string $fileType): string
  * @param string      $fileName   نام اصلیِ فایل
  * @param string|null $fileType   نوع فایل
  * @param bool        $isInFolder آیا فایل داخل یک پوشهٔ آپلودشده است؟
+ * @param string|null $folderName نام پوشهٔ ریشه (برای نام‌گذاری فایل‌های خام پوشه‌ای)
  */
-function caseFileDisplayName(int $caseId, string $fileName, ?string $fileType, bool $isInFolder = false): string
+function caseFileDisplayName(int $caseId, string $fileName, ?string $fileType, bool $isInFolder = false, ?string $folderName = null): string
 {
-    $prefix = caseFilePrefixForUpload($caseId, $fileType);
+    $prefix = caseFilePrefixForUpload($caseId, $fileType, $folderName, $isInFolder);
     if ($prefix === '') {
         return uniqueCaseFileName($caseId, $fileName);
     }
@@ -1015,6 +1158,55 @@ function getCaseActivityLog(int $caseId): array
     $stmt = db()->prepare('SELECT l.*, u.full_name AS user_name, u.role AS user_role FROM case_activity_log l LEFT JOIN users u ON u.id = l.user_id WHERE l.case_id = ? ORDER BY l.id DESC LIMIT 500');
     $stmt->execute([$caseId]);
     return $stmt->fetchAll();
+}
+
+// =====================================================
+// «درخواست کست از طراح» روی کیس
+// =====================================================
+// وقتی بخشی از کار (کست/مدل) به طراح یا لابراتوار سپرده می‌شود، کیس با پرچمِ
+// cases.case_cast_requested = ۱ نشانه‌گذاری می‌شود. طراحِ کیس در لیست کیس‌ها
+// نشانِ «کست» می‌بیند و می‌تواند با فیلتر «درخواست کست» کارهایش را جدا کند.
+
+/** آیا روی این کیس درخواست کست ثبت شده است؟ */
+function caseHasCastRequest(?array $case): bool
+{
+    if (!is_array($case)) return false;
+    return !empty($case['case_cast_requested']);
+}
+
+/**
+ * تنظیم/برداشتنِ درخواست کست روی یک کیس.
+ * @param int    $caseId  شناسهٔ کیس
+ * @param bool   $on      true = فعال، false = برداشتن
+ * @param int    $userId  کاربرِ ثبت‌کننده
+ */
+function setCaseCastRequest(int $caseId, bool $on, int $userId = 0): void
+{
+    if ($caseId <= 0) return;
+    if ($userId <= 0 && function_exists('current_user')) {
+        $u = current_user();
+        $userId = (int) ($u['id'] ?? 0);
+    }
+    try {
+        if ($on) {
+            $st = db()->prepare('UPDATE cases SET case_cast_requested = 1, cast_requested_at = NOW(), cast_requested_by = ?, updated_at = NOW() WHERE id = ?');
+            $st->execute([$userId ?: null, $caseId]);
+        } else {
+            $st = db()->prepare('UPDATE cases SET case_cast_requested = 0, cast_requested_at = NULL, cast_requested_by = NULL, updated_at = NOW() WHERE id = ?');
+            $st->execute([$caseId]);
+        }
+    } catch (\Throwable $e) {
+        // ستون هنوز ساخته نشده (دیتابیسِ قدیمی) → بی‌صدا نادیده بگیر تا ذخیرهٔ کیس نشکند
+        error_log('setCaseCastRequest: ' . $e->getMessage());
+    }
+}
+
+/** برچسبِ کوچکِ «کست» برای جدول‌ها و صفحهٔ کیس. */
+function caseCastBadge(): string
+{
+    return '<span class="case-cast-badge" title="برای این کیس درخواست کست ثبت شده است" '
+        . 'style="display:inline-block; background:#ede9fe; color:#5b21b6; border:1px solid #ddd6fe; '
+        . 'border-radius:6px; padding:1px 7px; font-size:0.72rem; font-weight:700; white-space:nowrap;">🦷 کست</span>';
 }
 
 /**

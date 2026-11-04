@@ -66,13 +66,21 @@ if ($zip->open($outPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
 
 $added = 0;
 $used = [];
+$baseNames = [];   // کشِ نام پایهٔ هر کیس (یک کوئری به‌ازای هر کیس، نه هر فایل)
 foreach ($rows as $r) {
     $filePath = resolve_upload_path('cases/' . $r['case_id'] . '/' . $r['filename']);
     if (!file_exists($filePath)) continue;
-    // نام داخل زیپ: scan_<تاریخ دریافت>.ext (در صورت تکرار: scan_<تاریخ>_2.ext)
+    // پوشهٔ داخل زیپ: «{شماره کیس}_{نام بیمار}_{سایه}_{دندان}» — تا وقتی کاربر فایل را
+    // از ZIP خارج می‌کند، نامِ پوشه هم نشانی از کیس/بیمار داشته باشد.
+    $cid = (int) $r['case_id'];
+    if (!isset($baseNames[$cid])) {
+        $baseNames[$cid] = caseDownloadBaseName($cid);
+    }
+    $caseBase = $baseNames[$cid];
+    // نام داخل زیپ: scan_<تاریخ دریافت>.ext (در صورت تکرار: scan_<تاریخ>_(1).ext)
     $dateStr = jalaliDateForFilename($r['received_date'] ?: ($r['file_created'] ?? date('Y-m-d')));
     $fe = pathinfo($r['original_name'], PATHINFO_EXTENSION);
-    $entryBase = 'case_' . $r['case_id'] . '/scan_' . $dateStr . ($fe !== '' ? '.' . $fe : '');
+    $entryBase = $caseBase . '/scan_' . $dateStr . ($fe !== '' ? '.' . $fe : '');
     $entry = $entryBase;
     $i = 1;
     while (isset($used[$entry])) {
@@ -103,7 +111,11 @@ foreach ($rows as $r) {
 
 header('Content-Type: application/zip');
 // نامِ یکتا در هر دانلود تا دانلود‌منیجر (IDM) فایل را «قبلاً دانلودشده» نبیند.
-$dlName = 'scan_' . jalaliDateForFilename(date('Y-m-d')) . '_' . date('His') . '.zip';
+// برای یک کیس، نامِ خوانا مثل «1481_KarimPoor_BL1_44.zip» و برای چند کیس، نامِ تاریخ‌دار.
+$dlBase = (count($caseIds) === 1)
+    ? caseDownloadBaseName((int) reset($caseIds))
+    : 'scan_' . jalaliDateForFilename(date('Y-m-d')) . '_' . date('His');
+$dlName = $dlBase . '.zip';
 header('Content-Disposition: attachment; filename="' . $dlName . '"; filename*=UTF-8\'\'' . rawurlencode($dlName));
 header('Content-Length: ' . filesize($outPath));
 header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');

@@ -2,13 +2,12 @@
 // panel/download_design_files.php
 // دانلود تجمیعی فایل‌های آپلودشده توسط «طراح» کیس‌های انتخابی به‌صورت ZIP.
 //
-// ★ ساختار ZIP دقیقاً مطابق صفحهٔ «مشاهدهٔ کیس» است:
-//     case_{id}/<پوشهٔ طراحی>/<زیرپوشه‌ها...>/<نام نهاییِ فایل>
-//   - فایل‌های داخل پوشهٔ آپلودشده، ساختار درختِ rel_path را حفظ می‌کنند.
-//   - فایل‌های «تکی» (بدون rel_path) مستقیم زیر case_{id}/ قرار می‌گیرند.
+// ★ ساختار ZIP:
+//   - اگر فایل‌های طراحی داخل یک پوشه باشند، **نامِ همان پوشه** در ریشهٔ ZIP می‌آید
+//     (مثلاً `1382_Ali Akabar Hamazah Ai_A3_25_26/...`) و زیرپوشه‌های داخلش حفظ می‌شوند.
+//   - اگر فایل در ریشهٔ آپلود باشد (بدون rel_path) → زیر پوشهٔ `case_{id}/` می‌رود.
 //   - نام هر فایل همان نامی است که در صفحهٔ مشاهدهٔ کیس دیده می‌شود
 //     (پیشوندِ {شماره‌کیس}_{سایه}_{بیمار}_{قبض} + نام اصلی).
-// پوشهٔ case_{id} برای جلوگیری از تداخل فایل‌های هم‌نام بین کیس‌های انتخابی است.
 require_once __DIR__ . '/auth.php';
 require_login();
 
@@ -27,7 +26,11 @@ if (empty($caseIds)) {
 }
 
 $ph = implode(',', array_fill(0, count($caseIds), '?'));
-// فقط فایل‌هایی که توسط طراحِ (فعلی) همان کیس آپلود شده‌اند.
+// فایل‌های «طراحی نهایی» کیس‌های انتخابی.
+// ⚠️ قبلاً شرطِ `cf.uploader_id = c.designer_id` هم بود؛ ولی در عمل مدیر/کارمند
+// (یا هر کاربرِ دیگری) هم فایل طراحی را آپلود می‌کند و آن شرط باعث می‌شد برای
+// بسیاری از کیس‌ها هیچ فایلی پیدا نشود (صفحهٔ «فایل طراحی یافت نشد»). نوعِ فایل
+// (`final_design`) به‌تنهایی مرجعِ درست است.
 // ستون‌های نام‌گذاری کیس هم لازم است تا نام داخل ZIP با صفحهٔ مشاهدهٔ کیس یکسان شود.
 $stmt = db()->prepare("
     SELECT cf.case_id, cf.filename, cf.original_name, cf.rel_path, cf.file_type,
@@ -36,8 +39,6 @@ $stmt = db()->prepare("
     FROM case_files cf
     JOIN cases c ON c.id = cf.case_id
     WHERE cf.case_id IN ($ph)
-      AND cf.uploader_id IS NOT NULL
-      AND cf.uploader_id = c.designer_id
       AND (cf.file_type = 'final_design'
            OR (cf.file_type IS NULL AND LOWER(RIGHT(cf.filename, 4)) = '.rar'))
     ORDER BY cf.case_id ASC, cf.id ASC
@@ -64,7 +65,37 @@ if ($zip->open($outPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
 
 $added = 0;
 $used = [];
-$multiCase = (count(array_unique(array_column($rows, 'case_id'))) > 1);
+
+// ── نامِ پوشهٔ هر کیس داخل ZIP ──
+// قاعدهٔ کاربر:
+//   • اگر فایل‌های طراحی داخل یک پوشه باشند (rel_path دارای ریشه مثل
+//     «1382_Ali Akabar Hamazah Ai_A3_25_26/...») → همان نامِ پوشه به‌جای case_{id}
+//     قرار می‌گیرد و محتویاتش مستقیم داخل آن می‌رود.
+//   • اگر فایل‌ها در ریشهٔ آپلود باشند (بدون rel_path) → case_{id} ساخته می‌شود.
+// نامِ پوشه از اولین فایلِ آن کیس که rel_path دارد گرفته می‌شود. اگر برای چند کیس
+// نامِ پوشه یکسان بود، برای جلوگیری از ادغام/تداخل، case_{id} پیشوند می‌شود.
+$caseFolder = [];   // case_id => نام پوشه (root)
+foreach ($rows as $r) {
+    $cid = (int) $r['case_id'];
+    if (isset($caseFolder[$cid])) continue;
+    $rpFx = relPathRoot($r['rel_path'] ?? null);
+    // مثل منطقِ پایین: پوشه است اگر چندبخشی باشد یا تک‌بخشیِ بدون پسوند
+    $isFolderFx = $rpFx && ($rpFx['rest'] !== '' || pathinfo($rpFx['root'], PATHINFO_EXTENSION) === '');
+    $caseFolder[$cid] = $isFolderFx ? (string) $rpFx['root'] : '';
+}
+// یکتاسازی: حذفِ تکراری‌ها و خالی‌ها
+$seenFolders = [];
+foreach ($caseFolder as $cid => $name) {
+    if ($name === '') continue;
+    $key = mb_strtolower($name);
+    if (isset($seenFolders[$key])) {
+        // نام تکراری بین دو کیس → برای دومی از case_{id} استفاده کن
+        $caseFolder[$cid] = '';
+    } else {
+        $seenFolders[$key] = $cid;
+    }
+}
+
 foreach ($rows as $r) {
     $filePath = resolve_upload_path('cases/' . $r['case_id'] . '/' . $r['filename']);
     if (!file_exists($filePath)) continue;
@@ -94,21 +125,20 @@ foreach ($rows as $r) {
         || pathinfo($rp['root'], PATHINFO_EXTENSION) === ''
     );
 
-    if ($isFolder) {
-        // ⚠️ پوشهٔ ریشهٔ آپلود (مثلاً «طراحی») دور ریخته می‌شود؛ فقط زیرپوشه‌ها حفظ می‌شوند
-        // تا کاربر مجبور نباشد یک سطح اضافه را باز کند. (درخواست کاربر)
+    $cid = (int) $r['case_id'];
+    $folderName = $caseFolder[$cid] ?? '';
+
+    if ($isFolder && $folderName !== '') {
+        // ریشهٔ پوشه = خودِ نامِ پوشهٔ طراحی (جای case_{id})؛ فقط زیرپوشه‌های داخلش حفظ می‌شوند
         $rel = sanitizeRelPath($r['rel_path']);
         $rest = ($rel !== null && str_contains($rel, '/')) ? substr($rel, strpos($rel, '/') + 1) : '';
         $dir = ($rest !== '' && str_contains($rest, '/')) ? dirname($rest) : '';
         $inner = ($dir !== '' && $dir !== '.') ? $dir . '/' . $baseName : $baseName;
+        $entryBase = $folderName . '/' . ltrim(str_replace('\\', '/', $inner), '/');
     } else {
-        // فایل تکی → مستقیم در ریشهٔ ZIP
-        $inner = $baseName;
+        // فایل در ریشهٔ آپلود → داخل پوشهٔ case_{id}
+        $entryBase = 'case_' . $cid . '/' . ltrim(str_replace('\\', '/', $baseName), '/');
     }
-
-    // ⚠️ پوشهٔ «case_{id}» فقط وقتی لازم است که بیش از یک کیس انتخاب شده باشد
-    // (برای جلوگیری از تداخل فایل‌های هم‌نام). برای یک کیس، فایل‌ها مستقیم در ریشهٔ ZIP می‌آیند.
-    $entryBase = ($multiCase ? 'case_' . $r['case_id'] . '/' : '') . ltrim(str_replace('\\', '/', $inner), '/');
 
     // ── یکتا‌سازی نامِ تکراری داخل ZIP ──
     $entry = $entryBase;

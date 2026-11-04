@@ -121,11 +121,16 @@ $designer_id = !empty($data['designer_id']) ? (int)$data['designer_id'] : null;
 // کلینیکِ صاحبِ کار (اختیاری): یکی از کلینیک‌های پزشک یا هر کلینیکی برای مدیران.
 // خالی باشد → «کلینیک اصلیِ» پزشک به‌عکس پیش‌فرض انتخاب می‌شود.
 $clinic_id = !empty($data['clinic_id']) ? (int) $data['clinic_id'] : null;
+// ── درخواست کست از طراح ──
+// فیلد چک‌باکس در فرمِ کیس؛ اگر ارسال شود مقدارش ۱/۰ است. برای کاربران بیرونی
+// این فیلد رندر نمی‌شود و مقدارِ قبلیِ کیس دست‌نخورده می‌ماند (پایین‌تر).
+$castRequestedSent = array_key_exists('case_cast_requested', $data);
+$castRequested = $castRequestedSent ? (!empty($data['case_cast_requested']) ? 1 : 0) : null;
 // اگر فیلدِ «طراح» اصلاً ارسال نشده باشد (فرمِ محدودِ پزشک یا فراخوانی برنامه‌ای)،
-// «طراح پیش‌فرض» (is_default_designer=1) انتخاب می‌شود تا کیس همیشه طراح داشته باشد.
+// «طراح پیش‌فرض» انتخاب می‌شود تا کیس همیشه طراح داشته باشد.
 // اگر فرم فیلد را فرستاده و کاربر عمداً «بدون طراح» را انتخاب کرده، همان خالی می‌ماند.
 if (!$designer_id && !$editingCase && !array_key_exists('designer_id', $data)) {
-    $defaultDesigner = getDefaultDesigner();
+    $defaultDesigner = getDefaultDesignerFor($doctor_id);
     if ($defaultDesigner) {
         $designer_id = (int) $defaultDesigner['id'];
     }
@@ -194,7 +199,7 @@ $existingCaseRow = null;
 if ($id) {
     $exRow = db()->prepare('SELECT doctor_id, service_id, status_id, lab_id, case_type, branch_id, source_branch_id, clinic_id,
                                    designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate,
-                                   scan_body_type_id, connection_type, fixture_type_id
+                                   scan_body_type_id, connection_type, fixture_type_id, case_cast_requested
                             FROM cases WHERE id = ?');
     $exRow->execute([$id]);
     $existingCaseRow = $exRow->fetch() ?: null;
@@ -250,6 +255,13 @@ if ($existingCaseRow) {
             $outsourced_rate = null;
         }
     }
+    // درخواست کست: اگر فرم فیلد را نداشت (پزشک/کلینیک و فرم‌های برنامه‌ای)، مقدار قبلی حفظ شود
+    if (!$castRequestedSent) {
+        $castRequested = !empty($existingCaseRow['case_cast_requested']) ? 1 : 0;
+    }
+}
+if ($castRequested === null) {
+    $castRequested = 0;
 }
 
 // ─── Branch assignment ───
@@ -304,6 +316,18 @@ if ($isCrossBranchEdit && $source_branch_id === null && ($existingCaseRow['sourc
 // چنین مقداری بی‌معنی است و نشانهٔ داده‌ی خراب/اشتباه است → NULL ذخیره می‌شود.
 if ($source_branch_id !== null && (int) $source_branch_id === (int) $branch_id) {
     $source_branch_id = null;
+}
+
+// ─── تثبیتِ نرخِ برون‌سپاریِ کامل (lab_out) در همان لحظهٔ ثبت ───
+// ستون `cases.outsourced_rate` باید «نرخِ همین کیس» را نگه دارد؛ وگرنه گزارش‌های مخارج
+// نرخ را همان لحظه از جدول نرخ‌ها می‌خوانند و با تغییرِ نرخ‌ها، مخارجِ کیس‌های قدیمی هم
+// عوض می‌شود (باگِ گزارش‌شده: کیس ۱۱۸۰ با تاریخ ۱۴۰۵/۰۶/۰۹).
+// اگر کاربر خودش نرخی وارد کرده باشد (فرم) همان حفظ می‌شود؛ فقط حالتِ خالی پر می‌شود.
+if ($case_type === 'lab_out' && $lab_id && $service_id && $outsourced_rate === null) {
+    $frozenRate = getOutsourceRate((int) $lab_id, (int) $service_id, $branch_id > 0 ? (int) $branch_id : null);
+    if ($frozenRate !== null && $frozenRate > 0) {
+        $outsourced_rate = round((float) $frozenRate, 2);
+    }
 }
 
 // ─── برون‌سپاری / دریافت کار از لابراتوارها ───
@@ -477,19 +501,21 @@ if ($service_id === null) {
 
 /**
  * Upload case files to the server
- * @param array       $relPaths مسیرهای نسبیِ آپلود پوشه‌ای، هم‌ترتیب با $files['name']
- * @param string|null $fileType نوع فایل گروه (برای نام‌گذاری خودکار پوشهٔ طراحی نهایی)
+ * @param array       $relPaths   مسیرهای نسبیِ آپلود پوشه‌ای، هم‌ترتیب با $files['name']
+ * @param string|null $fileType   نوع فایل گروه (برای نام‌گذاری خودکار)
+ * @param string|null $folderName نام پوشهٔ ریشه (برای نام‌گذاری فایل‌های خامِ پوشه‌ای)
  * @return array List of errors (empty if all OK)
  */
-function handleCaseFileUploads(int $caseId, array $files, array $relPaths = [], ?string $fileType = null): array
+function handleCaseFileUploads(int $caseId, array $files, array $relPaths = [], ?string $fileType = null, ?string $folderName = null): array
 {
     $errors = [];
     if (empty($files) || empty($files['name'])) return $errors;
 
-    // نام‌گذاری خودکار فایل‌های «طراحی نهایی»:
-    //   {شماره کیس}_{سایه}_{نام بیمار}_{شماره قبض}_نام اصلی
+    // نام‌گذاری خودکار فایل‌ها:
+    //   • طراحی نهایی         → {شماره کیس}_{سایه}_{نام بیمار}_{شماره قبض}_نام اصلی
+    //   • خامِ داخل پوشه        → {نام پوشه}_{شماره کیس}_{نام پوشه}_نام اصلی
     // ⚠️ از تابع مشترک می‌آید تا با صفحهٔ مشاهدهٔ کیس **دقیقاً یکسان** بماند.
-    $namingPrefix = caseFilePrefixForUpload($caseId, $fileType);
+    $namingPrefix = caseFilePrefixForUpload($caseId, $fileType, $folderName, $folderName !== null && $folderName !== '');
 
     $uploadDir = ensure_uploads_dir('cases/' . $caseId) . '/';
 
@@ -529,7 +555,7 @@ function handleCaseFileUploads(int $caseId, array $files, array $relPaths = [], 
 
         // Dedup display name: if a file with the same name already exists for this case, append _YYYYMMDD
         // نام‌گذاری خودکار (تابع مشترک با بقیهٔ مسیرهای آپلود)
-        $displayName = caseFileDisplayName($caseId, $orig, $fileType, isFolderUploadFile($relPath));
+        $displayName = caseFileDisplayName($caseId, $orig, $fileType, isFolderUploadFile($relPath), $folderName);
 
         $safe = bin2hex(random_bytes(8)) . '.' . $ext;
         $dest = $uploadDir . $safe;
@@ -575,16 +601,16 @@ try {
     }
 
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, clinic_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, scan_body_type_id = ?, connection_type = ?, fixture_type_id = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, updated_at = NOW() WHERE id = ?';
+        $sql = 'UPDATE cases SET doctor_id = ?, clinic_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, scan_body_type_id = ?, connection_type = ?, fixture_type_id = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, design_fee_is_unit = 1, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, case_cast_requested = ?, updated_at = NOW() WHERE id = ?';
         // ⚠️ از $scan_body_type_id استفاده می‌شود (نه $scanBodyTypeId) — همان متغیری که
         // در بلوکِ اعتبارسنجی «نوع اسکن‌بادی/اتصال» پاک‌سازی و بازگردانی شده است.
-        $params = [$doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $id];
+        $params = [$doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $castRequested, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, clinic_id, patient_name, receipt_number, service_id, location_type, teeth, shade, scan_body_type_id, connection_type, fixture_type_id, quantity, unit_price, total_price, design_fee, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, submit_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id, ($submitToken !== '' ? $submitToken : null)];
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, clinic_id, patient_name, receipt_number, service_id, location_type, teeth, shade, scan_body_type_id, connection_type, fixture_type_id, quantity, unit_price, total_price, design_fee, design_fee_is_unit, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, case_cast_requested, submit_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id, $castRequested, ($submitToken !== '' ? $submitToken : null)];
         $stmt = db()->prepare($sql);
         try {
             $stmt->execute($params);
@@ -614,6 +640,27 @@ try {
 
     log_case_activity($caseId, $id ? 'update' : 'create', $id ? 'ویرایش کیس' : 'ایجاد کیس');
 
+    // ── درخواست کست: ثبتِ رویداد + اعلان به طراحِ همان کیس ──
+    // (فقط وقتی مقدار واقعاً تغییر کرده باشد تا لاگ/اعلان تکراری ساخته نشود.)
+    if ($id) {
+        $prevCast = !empty($existingCaseRow['case_cast_requested']) ? 1 : 0;
+        if ($prevCast !== $castRequested) {
+            log_case_activity($caseId, 'cast_request', $castRequested ? 'درخواست کست از طراح فعال شد' : 'درخواست کست لغو شد');
+        }
+    } elseif ($castRequested) {
+        log_case_activity($caseId, 'cast_request', 'درخواست کست از طراح فعال شد');
+    }
+    if ($castRequested && $designer_id && (!isset($prevCast) || $prevCast !== $castRequested)) {
+        $castTitle = $patient_name ?: 'کیس #' . $caseId;
+        createNotification(
+            (int) $designer_id,
+            "درخواست کست: {$castTitle}",
+            'برای این کیس درخواست کست ثبت شده است (کست/مدل آماده و ارسال شود).',
+            $caseId,
+            'cast_request'
+        );
+    }
+
     // Handle file uploads
     $uploadErrors = [];
     if (!empty($_FILES['case_files'])) {
@@ -622,7 +669,12 @@ try {
         if (!is_array($relPathsRaw)) $relPathsRaw = [$relPathsRaw];
         // نوع فایلِ گروه: اگر فرم چندگروهی است، فایل‌های هر گروه جدا ارسال می‌شوند
         $uploadFileType = trim((string) ($_POST['file_type'] ?? ''));
-        $uploadErrors = handleCaseFileUploads($caseId, $_FILES['case_files'], $relPathsRaw, $uploadFileType !== '' ? $uploadFileType : null);
+        // نام پوشهٔ ریشه (آپلود پوشه‌ای) — برای نام‌گذاری «نام پوشه_شماره کیس_نام پوشه_فایل»
+        $uploadFolderName = sanitizeRelPath((string) ($_POST['folder_name'] ?? ''));
+        if ($uploadFolderName !== null) {
+            $uploadFolderName = relPathRoot($uploadFolderName)['root'] ?? null;
+        }
+        $uploadErrors = handleCaseFileUploads($caseId, $_FILES['case_files'], $relPathsRaw, $uploadFileType !== '' ? $uploadFileType : null, $uploadFolderName);
         if (empty($uploadErrors)) log_case_activity($caseId, 'file_upload', 'آپلود فایل هنگام ذخیره کیس');
     }
 

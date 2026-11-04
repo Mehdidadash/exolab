@@ -73,7 +73,16 @@ $uploadFileType = trim((string) ($_POST['file_type'] ?? ''));
 if ($uploadFileType !== '' && !in_array($uploadFileType, array_keys(caseFileTypeConfig()['options']), true)) {
     $uploadFileType = '';
 }
-$namingPrefix = ($caseId && $uploadFileType !== '') ? caseFilePrefixForUpload($caseId, $uploadFileType) : '';
+// نوع «خام» را هم برای نام‌گذاریِ پوشه‌ای می‌پذیریم (نام پوشه_شماره کیس_نام پوشه)
+$isRawFolderUpload = ($hasFolderFiles && $folderName !== null && $folderName !== ''
+    && ($uploadFileType === '' || $uploadFileType === 'raw_scan'));
+$namingPrefix = '';
+if ($caseId && $uploadFileType !== '') {
+    $namingPrefix = caseFilePrefixForUpload($caseId, $uploadFileType, $folderName, $hasFolderFiles);
+} elseif ($caseId && $isRawFolderUpload) {
+    // بدون انتخاب نوع فایل، ولی آپلود پوشه‌ای → پیشوندِ «نام پوشه_شماره کیس_نام پوشه»
+    $namingPrefix = caseFolderFilePrefix($folderName, (int) $caseId);
+}
 
 // فقط فایل‌های سالم
 $files = array_values(array_filter($incoming, function ($f) { return $f['error'] === UPLOAD_ERR_OK; }));
@@ -146,9 +155,16 @@ if ($compress) {
         $pname = persian_to_finglish((string) ($cs->fetchColumn() ?: ''));
         if ($pname !== '') { $zipBase = $caseId . '_' . $pname; }
     }
-    // پوشهٔ طراحی نهایی → پیشوند نام‌گذاری به نام ZIP هم اضافه می‌شود
+    // پوشه/طراحی نهایی → پیشوند نام‌گذاری به نام ZIP هم اضافه می‌شود
+    // ⚠️ اگر پیشوند از قبل نام پوشه را دارد (فایل خامِ پوشه‌ای)، دوباره اضافه نشود؛
+    //     وگرنه نامِ ZIP سه‌بار نام پوشه را تکرار می‌کند.
     if ($namingPrefix !== '') {
-        $zipBase = $namingPrefix . ($folderName ? '_' . $folderName : '_design');
+        $zipBase = ($folderName !== null && $folderName !== '' && str_contains($namingPrefix, $folderName))
+            ? $namingPrefix
+            : $namingPrefix . ($folderName ? '_' . $folderName : '_design');
+    } elseif ($folderName !== null && $folderName !== '' && $caseId) {
+        // آپلود پوشه‌ای بدون پیشوند → «نام پوشه_شماره کیس_نام پوشه»
+        $zipBase = caseFolderFilePrefix($folderName, (int) $caseId);
     }
     $zipName = uniqueUserUploadName((int) $user['id'], $caseId, $zipBase . '.zip');
     $safe = bin2hex(random_bytes(8)) . '.zip';

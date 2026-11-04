@@ -25,7 +25,7 @@ if ($shortNameProvided) {
 }
 $description = trim($_POST['description'] ?? '');
 $price = trim($_POST['price'] ?? '');
-$category = trim($_POST['category'] ?? '');
+$category = normalizeServiceCategory($_POST['category'] ?? '');
 $active = isset($_POST['active']) && $_POST['active'] === '1' ? 1 : 0;
 $hideOnSiteProvided = array_key_exists('hide_on_site', $_POST);
 $hideOnSite = $hideOnSiteProvided ? ((isset($_POST['hide_on_site']) && $_POST['hide_on_site'] === '1') ? 1 : 0) : 0;

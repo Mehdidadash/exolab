@@ -19,14 +19,18 @@ $finDocInvoiceFilter = $bid === null ? '' : " AND COALESCE(doctor_invoices.branc
 $finCaseFilter    = $bid === null ? '' : ' AND c.branch_id = ' . (int) $bid;  // cases (alias c)
 $finCaseFilterNoAlias = $bid === null ? '' : ' AND branch_id = ' . (int) $bid; // cases (no alias)
 
+// نرخِ ثبت‌شدهٔ برون‌سپاری (روی خود کیس یا در فاکتور برون‌سپاری) — همهٔ محاسباتِ
+// هزینه باید اول این را ببینند تا تغییرِ "نرخ‌های فعلی" گزارش‌های تاریخی را عوض نکند.
+$storedOutRate = caseOutsourceStoredRateSql('c');
+
 // Inbound cross-branch amount = what a partner branch owes us for a case it
 // outsourced to us (source_branch_id = ours). Mirrors their outsource expense.
 // Phase 3: prefers the unified price_links rate, falls back to outsource_rates.
 $plInbound = priceLinkOutsourceSqlExpr("IF(c.case_type = 'lab_out', c.lab_id, c.outsourced_lab_id)", "IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)");
 $inboundLegacy = "(SELECT r.rate FROM outsource_rates r\n      WHERE r.lab_id = IF(c.case_type = 'lab_out', c.lab_id, c.outsourced_lab_id)\n        AND r.service_id = IF(c.case_type = 'lab_out', c.service_id, c.outsourced_service_id)\n      ORDER BY (r.branch_id = c.branch_id) DESC, (r.branch_id IS NULL) DESC LIMIT 1)";
 $inboundRate = $plInbound !== null
-    ? "COALESCE(c.outsourced_rate, COALESCE($plInbound, $inboundLegacy), 0)"
-    : "COALESCE(c.outsourced_rate, $inboundLegacy, 0)";
+    ? "COALESCE($storedOutRate, COALESCE($plInbound, $inboundLegacy), 0)"
+    : "COALESCE($storedOutRate, $inboundLegacy, 0)";
 $inboundAmountSql = $inboundRate . " * IF(c.case_type = 'lab_out', c.quantity, c.outsourced_qty)";
 
 // Unrealized income: owned cases count their total_price; inbound shared cases
@@ -37,20 +41,20 @@ $inboundAmountSql = $inboundRate . " * IF(c.case_type = 'lab_out', c.quantity, c
 $plSide = priceLinkOutsourceSqlExpr('c.outsourced_lab_id', 'c.outsourced_service_id');
 $sideLegacy = "(SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.outsourced_lab_id AND r.service_id = c.outsourced_service_id)";
 $sideRate = $plSide !== null
-    ? "COALESCE(c.outsourced_rate, COALESCE($plSide, $sideLegacy), 0)"
-    : "COALESCE(c.outsourced_rate, $sideLegacy, 0)";
+    ? "COALESCE($storedOutRate, COALESCE($plSide, $sideLegacy), 0)"
+    : "COALESCE($storedOutRate, $sideLegacy, 0)";
 $plFull = priceLinkOutsourceSqlExpr('c.lab_id', 'c.service_id');
 $fullLegacy = "(SELECT r.rate FROM outsource_rates r WHERE r.lab_id = c.lab_id AND r.service_id = c.service_id)";
 $fullRate = $plFull !== null
-    ? "COALESCE($plFull, $fullLegacy, 0)"
-    : "COALESCE($fullLegacy, 0)";
+    ? "COALESCE($storedOutRate, COALESCE($plFull, $fullLegacy), 0)"
+    : "COALESCE($storedOutRate, $fullLegacy, 0)";
 $outAmountExpr = "CASE
             WHEN c.outsourced_lab_id IS NOT NULL AND c.outsourced_qty > 0 AND c.case_type <> 'lab_out' THEN c.outsourced_qty * {$sideRate}
             WHEN c.case_type = 'lab_out' THEN c.quantity * {$fullRate}
             ELSE 0 END";
 // پرداخت‌کننده‌ی هزینه‌ی طراحیِ هر کیس = شعبه‌ی لابراتوارِ انجام‌دهنده (وگرنه صاحب کیس).
 // کیس‌هایی که لابراتوار مرکزی انجامشان می‌دهد (حتی مالِ شعب دیگر) → پرداخت‌کننده = مرکزی.
-$designPayerSql = "COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id)";
+$designPayerSql = designPayerBranchSql('c');
 if ($bid === null) {
     $unrealizedIncomeSql = 'SELECT COALESCE(SUM(total_price),0) FROM cases WHERE received_date BETWEEN ? AND ?';
     // design_fee ستونِ «فی هر واحد» است → جمعِ طراحی = design_fee × تعداد

@@ -287,19 +287,36 @@ function serviceScanBodyMap(): array {
 }
 
 /**
+ * آیا این خدمت «کاستوم اباتمنت» است (کره‌ای / اروپایی)؟
+ *
+ * چنین خدماتی همیشه — علاوه بر «نوع اسکن‌بادی» — به «نوع فیکسچر» هم نیاز دارند.
+ * این قاعده در PHP اعمال می‌شود (و نه فقط با تیکِ `requires_fixture_type`) چون
+ * روی دیتابیس‌های موجود، تیکِ این خدمات صفر مانده بود و در نتیجه فیلدِ «نوع
+ * فیکسچر» در فرمِ کیس هیچ‌وقت نمایش داده نمی‌شد.
+ */
+function isCustomAbutmentService(?array $priceRow): bool {
+    if (!$priceRow) return false;
+    $title = trim((string) ($priceRow['title'] ?? ''));
+    if ($title === '') return false;
+    return mb_stripos($title, 'کاستوم اباتمنت') !== false;
+}
+
+/**
  * آیا خدمتِ داده‌شده نیازمند انتخاب «نوع فیکسچر» است؟
- * (کاستوم اباتمنت کره‌ای/اروپایی و هر خدمتی که در price_form.php تیک خورده باشد.)
+ * (کاستوم اباتمنت کره‌ای/اروپایی — به‌صورت خودکار — و هر خدمتی که در
+ *  price_form.php تیکِ «نیازمند انتخاب نوع فیکسچر» خورده باشد.)
  */
 function serviceRequiresFixtureType(?int $serviceId, ?array $priceRow = null): bool {
     if ($serviceId === null || $serviceId <= 0) return false;
     if ($priceRow !== null) {
-        return !empty($priceRow['requires_fixture_type']);
+        return !empty($priceRow['requires_fixture_type']) || isCustomAbutmentService($priceRow);
     }
     try {
-        $st = db()->prepare('SELECT requires_fixture_type FROM site_prices WHERE id = ? LIMIT 1');
+        $st = db()->prepare('SELECT * FROM site_prices WHERE id = ? LIMIT 1');
         $st->execute([(int) $serviceId]);
-        $v = $st->fetchColumn();
-        return $v !== false && (int) $v === 1;
+        $row = $st->fetch();
+        if (!$row) return false;
+        return !empty($row['requires_fixture_type']) || isCustomAbutmentService($row);
     } catch (Throwable $e) {
         return false;
     }
@@ -309,8 +326,8 @@ function serviceRequiresFixtureType(?int $serviceId, ?array $priceRow = null): b
 function serviceFixtureTypeMap(): array {
     $out = [];
     try {
-        foreach (db()->query('SELECT id, requires_fixture_type FROM site_prices')->fetchAll() as $r) {
-            $out[(int) $r['id']] = (int) (!empty($r['requires_fixture_type']));
+        foreach (db()->query('SELECT id, title, requires_fixture_type FROM site_prices')->fetchAll() as $r) {
+            $out[(int) $r['id']] = (!empty($r['requires_fixture_type']) || isCustomAbutmentService($r)) ? 1 : 0;
         }
     } catch (Throwable $e) {
         // ستون هنوز ساخته نشده
@@ -1805,6 +1822,121 @@ function getDefaultDesigner() {
     return $stmt->fetch();
 }
 
+// ---------------------------------------------------------------
+// «طراح پیش‌فرضِ اختصاصی» پزشک و شعبه
+// ---------------------------------------------------------------
+// هر پزشک و هر شعبه می‌تواند طراحِ پیش‌فرضِ خودش را داشته باشد
+// (users.default_designer_id / branches.default_designer_id).
+// زنجیرهٔ انتخاب در getDefaultDesignerFor():
+//   ۱) طراح پیش‌فرضِ اختصاصیِ پزشکِ کیس
+//   ۲) طراح پیش‌فرضِ اختصاصیِ شعبهٔ مالکِ کیس
+//   ۳) طراح پیش‌فرضِ سراسری (users.is_default_designer = 1)
+// هر مرحله فقط اگر طراح فعال و دارای is_designer = 1 باشد پذیرفته می‌شود.
+
+/** آیا این کاربر یک طراحِ معتبر (فعال و is_designer=1) است؟ */
+function isValidDesignerId($id): bool {
+    $id = (int) $id;
+    if ($id <= 0) return false;
+    try {
+        $st = db()->prepare('SELECT 1 FROM users WHERE id = ? AND is_designer = 1 AND active = 1 LIMIT 1');
+        $st->execute([$id]);
+        return (bool) $st->fetchColumn();
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/** طراح پیش‌فرضِ اختصاصیِ یک کاربر (پزشک/کلینیک). */
+function getUserDefaultDesignerId(int $userId): int {
+    if ($userId <= 0) return 0;
+    try {
+        $st = db()->prepare('SELECT default_designer_id FROM users WHERE id = ? LIMIT 1');
+        $st->execute([$userId]);
+        $v = (int) $st->fetchColumn();
+        return isValidDesignerId($v) ? $v : 0;
+    } catch (Throwable $e) {
+        return 0;   // ستون هنوز ساخته نشده (دیتابیس قدیمی)
+    }
+}
+
+/** طراح پیش‌فرضِ اختصاصیِ یک شعبه. */
+function getBranchDefaultDesignerId(int $branchId): int {
+    if ($branchId <= 0) return 0;
+    try {
+        $st = db()->prepare('SELECT default_designer_id FROM branches WHERE id = ? LIMIT 1');
+        $st->execute([$branchId]);
+        $v = (int) $st->fetchColumn();
+        return isValidDesignerId($v) ? $v : 0;
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+/**
+ * طراحِ پیش‌فرضِ مناسب برای یک کیسِ در حال ایجاد.
+ * @param int|null $doctorId پزشکِ کیس
+ * @param int|null $branchId شعبهٔ مالکِ کیس (پیش‌فرض: شعبهٔ کاربرِ جاری)
+ * @return array|false ردیفِ طراح (id, full_name) یا false
+ */
+function getDefaultDesignerFor(?int $doctorId = null, ?int $branchId = null) {
+    $bid = $branchId;
+    if ($bid === null) {
+        $bid = currentBranchId() ?? 1;
+    }
+    $candidates = [];
+    if (!empty($doctorId)) $candidates[] = getUserDefaultDesignerId((int) $doctorId);
+    if (!empty($bid))      $candidates[] = getBranchDefaultDesignerId((int) $bid);
+    foreach ($candidates as $did) {
+        if ($did > 0) {
+            $st = db()->prepare('SELECT id, full_name FROM users WHERE id = ? AND is_designer = 1 AND active = 1 LIMIT 1');
+            $st->execute([$did]);
+            if ($row = $st->fetch()) return $row;
+        }
+    }
+    return getDefaultDesigner();
+}
+
+/**
+ * شناسهٔ طراح‌پیش‌فرضِ مؤثر به ازای هر پزشک (برای فرمِ کیس — یک کوئری، بدون کوئری درون‌حلقه).
+ * @return array<int,int> doctorId => designerId
+ */
+function getDoctorDefaultDesignerMap(): array {
+    $map = [];
+    try {
+        $rows = db()->query("SELECT u.id, COALESCE(NULLIF(u.default_designer_id, 0), NULLIF(b.default_designer_id, 0), NULLIF(g.id, 0)) AS did
+                             FROM users u
+                             LEFT JOIN branches b ON b.id = u.branch_id
+                             LEFT JOIN users g ON g.is_designer = 1 AND g.active = 1 AND g.is_default_designer = 1
+                             WHERE u.role = 'doctor'")->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+    // اعتبارسنجی نهایی: طراح باید فعال و is_designer باشد
+    $valid = [];
+    foreach (db()->query('SELECT id FROM users WHERE is_designer = 1 AND active = 1')->fetchAll(PDO::FETCH_COLUMN) as $d) {
+        $valid[(int) $d] = true;
+    }
+    foreach ($rows as $r) {
+        $did = (int) ($r['did'] ?? 0);
+        if ($did > 0 && isset($valid[$did])) $map[(int) $r['id']] = $did;
+    }
+    return $map;
+}
+
+/** طراح پیش‌فرضِ مؤثرِ هر شعبه → [branchId => designerId] */
+function getBranchDefaultDesignerMap(): array {
+    $out = [];
+    try {
+        foreach (db()->query('SELECT id, default_designer_id FROM branches')->fetchAll() as $b) {
+            $did = (int) ($b['default_designer_id'] ?? 0);
+            if ($did > 0 && isValidDesignerId($did)) $out[(int) $b['id']] = $did;
+        }
+    } catch (Throwable $e) {
+        return [];
+    }
+    return $out;
+}
+
 /**
  * برچسبی که به کاربران بیرونی (پزشک/کلینیک/لابراتوار) به‌جای نام طراح نشان داده می‌شود.
  *
@@ -2803,6 +2935,9 @@ function getInvoice($id) {
 }
 
 function getInvoiceItems($invoice_id) {
+    // ترتیب چاپ: در فاکتورهای گروهی (کلینیک/لابراتوار) اول به ترتیب نام پزشک،
+    // بعد به ترتیب تاریخ دریافت کیس. در فاکتورهای تک‌پزشک همان ترتیب تاریخ.
+    // ردیف‌های بدون کیس (مانده از قبل / تخفیف) همیشه آخر می‌آیند.
     $stmt = db()->prepare('SELECT ii.*, p.title AS price_title, c.received_date AS case_received_date,
                   c.received_date AS received_date,
                   c.case_type, u.full_name AS case_doctor_name
@@ -2811,7 +2946,11 @@ function getInvoiceItems($invoice_id) {
         LEFT JOIN cases c ON ii.case_id = c.id
         LEFT JOIN users u ON c.doctor_id = u.id
         WHERE ii.invoice_id = ?
-        ORDER BY (c.received_date IS NULL) ASC, c.received_date ASC, ii.id ASC');
+        ORDER BY (c.id IS NULL) ASC,
+                 (c.received_date IS NULL) ASC,
+                 (u.full_name COLLATE utf8mb4_persian_ci) ASC,
+                 c.received_date ASC,
+                 ii.id ASC');
     $stmt->execute([(int) $invoice_id]);
     $items = $stmt->fetchAll();
     // Round amounts to integers (Toman has no decimals)
@@ -3297,6 +3436,28 @@ function getServiceDefaultDesignFeeMap(): array {
 // =====================================================
 
 /**
+ * عبارتِ SQLِ «شعبه‌ای که هزینهٔ طراحیِ این کیس را می‌پردازد».
+ *
+ * قاعدهٔ کسب‌وکار: **شعبهٔ اصلی (۱)** ماشین فرز را دارد؛ پس اگر در کیس دخیل باشد
+ * (مالک، یا لابراتوارِ انجام‌دهنده، یا لابراتوارِ برون‌سپاریِ جانبی)، طراحی را همان
+ * شعبهٔ اصلی می‌پردازد. اگر شعبهٔ اصلی طرفِ کیس نباشد، لابراتوارِ انجام‌دهنده
+ * (وگرنه صاحبِ کیس) پرداخت‌کننده است.
+ *
+ * ⚠️ نسخهٔ قبلی «شعبهٔ `outsourced_lab_id`» را بی‌قیدوشرط مقدم می‌کرد؛ نتیجه اینکه
+ * طراحیِ کیسِ تحتِ مالکیتِ شعبهٔ اصلی که فقط بخشی از کارش به لابراتوارِ شعبهٔ دیگر
+ * (کاربر ۱۳ = مدیر شعبهٔ قزوین به‌عنوان «لابراتوار») داده شده بود، در مخارجِ قزوین
+ * می‌افتاد — در حالی که قزوین در آن معامله فقط **طلبکار** است، نه بدهکار.
+ * (کیس‌های نمونه: ۱۱۱۰ و ۱۱۶۰)
+ */
+function designPayerBranchSql(string $alias = 'c'): string {
+    $a = preg_replace('/[^a-zA-Z0-9_]/', '', $alias) ?: 'c';
+    $labBr = "(SELECT lb.branch_id FROM users lb WHERE lb.id = {$a}.lab_id)";
+    $outBr = "(SELECT lob.branch_id FROM users lob WHERE lob.id = {$a}.outsourced_lab_id)";
+    return "CASE WHEN {$labBr} = 1 OR {$outBr} = 1 OR {$a}.branch_id = 1 THEN 1"
+         . " ELSE COALESCE({$labBr}, {$outBr}, {$a}.branch_id) END";
+}
+
+/**
  * Uninvoiced cases done by a designer within a date range.
  * Each case's per-unit design fee is resolved from the designer's override.
  * When $payerBranch is given, only cases whose DESIGN is paid by that branch are
@@ -3306,7 +3467,7 @@ function getServiceDefaultDesignFeeMap(): array {
  */
 function getUninvoicedCasesForDesigner(int $designerId, string $startDate, string $endDate, ?int $payerBranch = null): array {
     $payerCond = $payerBranch !== null
-        ? " AND (COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id) = ?)"
+        ? ' AND (' . designPayerBranchSql('c') . ' = ?)'
         : '';
     $stmt = db()->prepare('
         SELECT c.*, p.title AS service_title, u.full_name AS doctor_name
@@ -3479,7 +3640,7 @@ function saveDesignerInvoiceEdit(int $invoiceId, string $invoiceDate, ?string $p
  */
 function getUninvoicedCasesForDesignerAll(int $designerId, ?int $payerBranch = null): array {
     $payerCond = $payerBranch !== null
-        ? " AND (COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id) = ?)"
+        ? ' AND (' . designPayerBranchSql('c') . ' = ?)'
         : '';
     $stmt = db()->prepare('
         SELECT c.id, c.patient_name, c.service_id, c.quantity, c.received_date, c.doctor_id,
@@ -3793,6 +3954,23 @@ function addCasesToOutsourceInvoice(int $invoiceId, array $caseIds): int {
 // =====================================================
 
 /**
+ * مقایسهٔ دو کیس برای ترتیب چاپ در فاکتورهای گروهی:
+ * اول بر اساس نام پزشک، سپس تاریخ دریافت، سپس شناسهٔ کیس.
+ * کیس‌های بدون پزشک همیشه آخر می‌آیند.
+ */
+function compareInvoiceCaseByDoctorThenDate(array $a, array $b): int {
+    $aHas = !empty($a['doctor_id']) && trim((string) ($a['doctor_name'] ?? '')) !== '';
+    $bHas = !empty($b['doctor_id']) && trim((string) ($b['doctor_name'] ?? '')) !== '';
+    if ($aHas !== $bHas) return $aHas ? -1 : 1;
+    $nameCmp = strcmp(trim((string) ($a['doctor_name'] ?? '')), trim((string) ($b['doctor_name'] ?? '')));
+    if ($nameCmp !== 0) return $nameCmp;
+    $dateA = substr((string) ($a['received_date'] ?? ''), 0, 10);
+    $dateB = substr((string) ($b['received_date'] ?? ''), 0, 10);
+    if ($dateA !== $dateB) return strcmp($dateA, $dateB);
+    return ((int) ($a['id'] ?? 0)) <=> ((int) ($b['id'] ?? 0));
+}
+
+/**
  * Uninvoiced doctor-type cases of a clinic in a date range.
  * The clinic (not the individual doctors) is the payer → فقط کیس‌هایی که کلینیکِ همان کار هستند
  * (cases.clinic_id = این کلینیک) در فاکتور می‌آیند، نه همهٔ کارهای پزشکانِ عضوِ کلینیک.
@@ -3808,7 +3986,9 @@ function getUninvoicedCasesForClinic(int $clinicId, string $startDate, string $e
           AND c.invoice_id IS NULL
           AND c.received_date BETWEEN ? AND ?
           AND ' . $scope['sql'] . '
-        ORDER BY c.received_date ASC, c.id ASC
+        ORDER BY (c.doctor_id IS NULL) ASC,
+                 (u.full_name COLLATE utf8mb4_persian_ci) ASC,
+                 c.received_date ASC, c.id ASC
     ');
     $stmt->execute(array_merge([$startDate, $endDate], $scope['params']));
     return $stmt->fetchAll();
@@ -3920,6 +4100,7 @@ function createClinicInvoice(int $clinicId, array $cases, string $invoiceDate, ?
     $invoiceId = (int) db()->lastInsertId();
 
     $ins = db()->prepare('INSERT INTO invoice_items (invoice_id, price_id, case_id, item_title, item_description, patient_name, quantity, unit_price, total_amount, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    usort($cases, 'compareInvoiceCaseByDoctorThenDate');
     foreach ($cases as $c) {
         $desc = trim((string) ($c['doctor_name'] ?? ''));
         $location = formatCaseLocation($c['location_type'] ?? null, $c['teeth'] ?? null);
@@ -3970,7 +4151,21 @@ function priceLinkOutsourceSqlExpr(string $labCol, string $svcCol, string $payer
 }
 
 /**
- * Get the outsourcing rate for a lab+service (what the PAYER branch pays the lab).
+ * نرخِ «ثبت‌شده»ی هر واحدِ برون‌سپاری برای یک کیس:
+ *   ۱) نرخ ذخیره‌شده روی خودِ کیس (`cases.outsourced_rate`)
+ *   ۲) نرخِ زمانِ صدورِ فاکتور برون‌سپاری (`outsource_invoice_items.unit_rate`)
+ * اگر هیچ‌کدام نباشد NULL می‌دهد تا فراخوان به «نرخ روز» بیفتد.
+ *
+ * چرا لازم است: مخارجِ کیس‌های تاریخی نباید با تغییرِ "نرخ‌های فعلی" عوض شوند.
+ * (باگ گزارش‌شده: کیس ۱۱۸۰ با تاریخ ۱۴۰۵/۰۶/۰۹ بعد از به‌روزرسانیِ نرخ‌ها از
+ *  ۱٬۰۰۰٬۰۰۰ به ۱٬۱۵۰٬۰۰۰ پرید، در حالی که فاکتورِ برون‌سپاری‌اش ۱٬۰۰۰٬۰۰۰ بود.)
+ */
+function caseOutsourceStoredRateSql(string $alias = 'c'): string {
+    $a = preg_replace('/[^a-zA-Z0-9_]/', '', $alias) ?: 'c';
+    return "COALESCE({$a}.outsourced_rate, (SELECT oi.unit_rate FROM outsource_invoice_items oi WHERE oi.case_id = {$a}.id ORDER BY oi.id DESC LIMIT 1))";
+}
+
+/**
  * Phase 3: when USE_PRICE_LINKS is on, price_links is authoritative first
  * (direct lab-provider link, then branch-provider link for the lab's own branch);
  * falls back to the legacy outsource_rates table.
@@ -4391,7 +4586,20 @@ function getInboundReceivableAmount(array $case): float {
     // پرداخت‌کننده = شعبهٔ مالکِ کیس (نه شعبهٔ بیننده). بدون این، وقتی بیننده خودِ
     // شعبهٔ انجام‌دهنده (لابراتوار) باشد نرخ پیدا نمی‌شد و مبلغ صفر نمایش داده می‌شد.
     $payerBranch = (int) ($case['branch_id'] ?? 0);
-    $rate = $case['outsourced_rate'] !== null ? (float) $case['outsourced_rate'] : getOutsourceRate($labId, $svcId, $payerBranch > 0 ? $payerBranch : null);
+    // ترتیب: نرخِ ثبت‌شدهٔ کیس → نرخِ زمانِ صدورِ فاکتور برون‌سپاری → نرخ روز.
+    // (بدونِ ملاک دوم، فاکتورهای تاریخی با تغییرِ نرخ‌ها عوض می‌شدند — باگ کیس ۱۱۸۰)
+    $rate = null;
+    if (($case['outsourced_rate'] ?? null) !== null) {
+        $rate = (float) $case['outsourced_rate'];
+    } elseif (!empty($case['id'])) {
+        $st = db()->prepare('SELECT unit_rate FROM outsource_invoice_items WHERE case_id = ? ORDER BY id DESC LIMIT 1');
+        $st->execute([(int) $case['id']]);
+        $v = $st->fetchColumn();
+        if ($v !== false && $v !== null) $rate = (float) $v;
+    }
+    if ($rate === null) {
+        $rate = getOutsourceRate($labId, $svcId, $payerBranch > 0 ? $payerBranch : null);
+    }
     if ($rate === null) $rate = 0.0;
     return round($rate * $qty);
 }
@@ -5266,7 +5474,9 @@ function getUninvoicedCasesForLab(int $labId, string $startDate, string $endDate
           AND c.invoice_id IS NULL
           AND c.received_date BETWEEN ? AND ?
           AND c.case_type IN (\'lab_in\', \'lab_out\')
-        ORDER BY c.received_date ASC, c.id ASC
+        ORDER BY (c.doctor_id IS NULL) ASC,
+                 (u.full_name COLLATE utf8mb4_persian_ci) ASC,
+                 c.received_date ASC, c.id ASC
     ');
     $stmt->execute([$labId, $startDate, $endDate]);
     return $stmt->fetchAll();
@@ -5390,9 +5600,10 @@ function createMonthlyLabInvoice(int $labId, array $cases, float $balance, strin
     ]);
     $invoiceId = (int) db()->lastInsertId();
 
-    // Insert items – one per case
+    // Insert items – one per case (ترتیب: اول نام پزشک، بعد تاریخ دریافت)
     $ins = db()->prepare('INSERT INTO invoice_items (invoice_id, price_id, case_id, item_title, item_description, patient_name, quantity, unit_price, total_amount, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    usort($cases, 'compareInvoiceCaseByDoctorThenDate');
     foreach ($cases as $c) {
         $price = getLabApplicablePrice($labId, (int) $c['service_id']);
         $qty = (int) ($c['quantity'] ?? 1);

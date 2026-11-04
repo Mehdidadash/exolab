@@ -23,7 +23,11 @@ if (empty($sessionToken) || !hash_equals($sessionToken, $token)) {
 }
 
 // Check permission
-if (!has_permission('update_case_status') && !has_permission('edit_cases') && !has_role('admin')) {
+// طراح‌ها هم می‌توانند وضعیت گروهی را تغییر دهند (فقط وضعیت‌های مجازِ خودشان —
+// پایین‌تر با canUserSetStatus بررسی می‌شود) و فقط روی کیس‌هایی که به آن‌ها مربوط است.
+$isDesignerUser = is_designer_user(current_user());
+if (!has_permission('update_case_status') && !has_permission('edit_cases') && !has_role('admin')
+    && !has_permission('batch_update_status') && !$isDesignerUser) {
     http_response_code(403);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => false, 'error' => 'forbidden']);
@@ -73,23 +77,11 @@ foreach ($caseIds as $cid) {
     $cid = (int) $cid;
     if ($cid <= 0) continue;
 
-    // Check access
-    if ($isDoctor) {
-        $check = db()->prepare('SELECT id FROM cases WHERE id = ? AND doctor_id = ?');
-        $check->execute([$cid, $doctorId]);
-    } elseif (!$isAdmin) {
-        $check = db()->prepare('SELECT id FROM cases WHERE id = ?');
-        $check->execute([$cid]);
-    }
-    // For admin, no check needed
-
-    if (!$isAdmin && !$isDoctor) {
-        // For other roles, check if they have access
-        $check = db()->prepare('SELECT id FROM cases WHERE id = ?');
-        $check->execute([$cid]);
-    }
-
-    if (!$isAdmin && !$check->fetch()) {
+    // ── کنترل دسترسی به کیس ──
+    // یک تابعِ واحد (userCanViewCase) شاملِ پزشک/طراح/کلینیک/لابراتوار/شعبه/مجوزها.
+    // (قبلاً برای نقش‌های غیرمدیر فقط وجودِ کیس چک می‌شد و هر کاربری می‌توانست
+    //  وضعیتِ هر کیس را — حتی خارج از دسترسی‌اش — عوض کند.)
+    if (!$isAdmin && !userCanViewCase($cid, $user)) {
         $errors[] = "کیس #{$cid} یافت نشد یا دسترسی ندارید";
         continue;
     }

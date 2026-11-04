@@ -73,6 +73,8 @@ $upLinkLabels = function (int $uploadId): array {
 };
 
 panel_layout_start('آپلود فایل');
+// مودالِ مسدودکنندهٔ خطای آپلود — تا وقتی کاربر خطا را تأیید نکند، صفحه باز می‌ماند
+require_once __DIR__ . '/../includes/upload_error_modal.php';
 ?>
 <?php
 // ─── پیام‌های نتیجهٔ عملیات (تغییر نام پوشه و ...) ───
@@ -114,7 +116,7 @@ $upErrText = [
                 می‌توانید یک <b>پوشه</b> را با همهٔ محتویات و زیرپوشه‌هایش انتخاب کنید (یا پوشه را با ماوس داخل صفحه رها کنید).
                 ساختار پوشه‌ها در فهرست فایل‌ها حفظ می‌شود.
                 اگر فایل‌ها را به یک کیس متصل کنید و داخل پوشه باشند، نام هر فایل خودکار با
-                <b>شماره کیس_سایه_نام بیمار_شماره قبض_</b> شروع می‌شود.
+                <b>نام پوشه_شماره کیس_نام پوشه_</b> شروع می‌شود.
             </small>
             <div id="upload-folder-list" style="display:none; margin-top:8px; max-height:170px; overflow:auto; border:1px solid #e2e8f0; border-radius:8px; padding:6px;"></div>
         </div>
@@ -133,10 +135,13 @@ $upErrText = [
         </div>
         <div class="form-group" id="upload-zip-group" style="display:none;">
             <label style="display:flex; align-items:center; gap:8px; font-weight:400; cursor:pointer;">
-                <input type="checkbox" id="upload-zip" checked>
+                <input type="checkbox" id="upload-zip">
                 بسته‌بندی همهٔ فایل‌های انتخاب‌شده در یک فایل ZIP
             </label>
-            <small style="display:block; margin-top:6px; color:#525252;">مثل صفحهٔ کیس‌ها/مشاهدهٔ کیس: همهٔ فایل‌ها در یک ZIP با نام خوانا ذخیره می‌شوند.</small>
+            <small style="display:block; margin-top:6px; color:#525252;">
+                به‌صورت پیش‌فرض خاموش است تا فایل‌های پوشه <b>جداگانه و با نام‌گذاری خودکار</b> ذخیره شوند
+                و ساختار پوشه‌ها حفظ شود. اگر تیک بزنید، همهٔ فایل‌ها در یک ZIP بسته‌بندی می‌شوند.
+            </small>
         </div>
         <div class="form-group">
             <label for="upload-case">اتصال به کیس (اختیاری)</label>
@@ -509,10 +514,28 @@ $upErrText = [
                 setTimeout(function(){ location.reload(); }, 800);
             } else {
                 if (progressWrap) progressWrap.style.display = 'none';
-                if (msgEl) { msgEl.textContent = 'خطا در آپلود: ' + ((resp && resp.message) ? resp.message : 'نامشخص'); msgEl.style.color = '#b91c1c'; }
+                var upMsg = (resp && resp.message) ? resp.message : 'نامشخص';
+                if (msgEl) { msgEl.textContent = 'خطا در آپلود: ' + upMsg; msgEl.style.color = '#b91c1c'; }
+                // خطا مسدودکننده است: کاربر تا تأیید نکرده نمی‌تواند از آن رد شود
+                if (window.UploadError) {
+                    window.UploadError.show({
+                        title: 'آپلود ناموفق بود',
+                        message: 'فایل‌ها ذخیره نشدند. لطفاً علت را برطرف کنید و دوباره تلاش کنید.',
+                        details: [upMsg]
+                    });
+                }
             }
         };
-        xhr.onerror = function(){ if (progressWrap) progressWrap.style.display = 'none'; if (msgEl) { msgEl.textContent = 'خطا در اتصال به سرور.'; msgEl.style.color = '#b91c1c'; } };
+        xhr.onerror = function(){
+            if (progressWrap) progressWrap.style.display = 'none';
+            if (msgEl) { msgEl.textContent = 'خطا در اتصال به سرور.'; msgEl.style.color = '#b91c1c'; }
+            if (window.UploadError) {
+                window.UploadError.show({
+                    title: 'ارتباط با سرور قطع شد',
+                    message: 'آپلود به پایان نرسید. اتصال اینترنت را بررسی کنید و دوباره تلاش کنید. اگر فایل‌های حجیمی دارید، آن‌ها را دسته‌دسته آپلود کنید.'
+                });
+            }
+        };
         xhr.send(fd);
     });
 })();

@@ -37,6 +37,16 @@ if ($currentRole !== '' && !array_key_exists($currentRole, $roleOptions)) {
     $roleOptions[$currentRole] = $currentRole;
 }
 
+// نقشِ پیش‌فرضِ فرمِ «کاربر جدید» = دندانپزشک؛ چون فیلدِ «کلینیک اصلی» فقط برای
+// پزشک معنا دارد و باید از همان ابتدا در فرم دیده شود (قبلاً هیچ گزینه‌ای selected
+// نبود و نقشِ خالی باعث می‌شد فیلدِ کلینیک پنهان بماند).
+$defaultRole = $currentRole;
+if ($defaultRole === '') {
+    $defaultRole = array_key_exists('doctor', $roleOptions)
+        ? 'doctor'
+        : (string) (array_key_first($roleOptions) ?? '');
+}
+
 panel_layout_start($editing ? 'ویرایش کاربر' : 'افزودن کاربر جدید');
 ?>
 <?php
@@ -84,7 +94,7 @@ $frmErrMsg = [
             <label for="role">نقش</label>
             <select id="role" name="role" required onchange="toggleClinicField(this.value)">
                 <?php foreach ($roleOptions as $key => $label): ?>
-                    <option value="<?= $key ?>" <?= ($user['role'] ?? '') === $key ? 'selected' : '' ?>>
+                    <option value="<?= $key ?>" <?= (string) $defaultRole === (string) $key ? 'selected' : '' ?>>
                         <?= htmlspecialchars((string) $label) ?>
                     </option>
                 <?php endforeach; ?>
@@ -164,12 +174,17 @@ $frmErrMsg = [
             <?php endif; ?>
         </div>
         <script>
+        // مقدارِ اولیه بر اساس «نقشِ انتخاب‌شدهٔ همان لحظه» ساخته می‌شود (و نه نقشِ
+        // خالیِ کاربر جدید) تا فیلدِ کلینیک برای دندانپزشک از ابتدا دیده شود.
         function toggleClinicField(role) {
             document.getElementById('clinic-field').style.display = (role === 'doctor') ? 'block' : 'none';
             var extra = document.getElementById('clinic-extra-field');
             if (extra) extra.style.display = (role === 'doctor') ? 'block' : 'none';
         }
-        toggleClinicField('<?= htmlspecialchars($user['role'] ?? '') ?>');
+        (function () {
+            var roleSel = document.getElementById('role');
+            toggleClinicField(roleSel ? roleSel.value : '');
+        })();
         </script>
         <div class="form-group">
             <label for="password">
@@ -203,7 +218,10 @@ $frmErrMsg = [
             var hiddenRoles = ['doctor', 'clinic'];
             document.getElementById('designer-field').style.display = hiddenRoles.includes(role) ? 'none' : 'block';
         }
-        toggleDesignerField('<?= htmlspecialchars($user['role'] ?? '') ?>');
+        (function () {
+            var roleSelD = document.getElementById('role');
+            toggleDesignerField(roleSelD ? roleSelD.value : '');
+        })();
         document.getElementById('role').addEventListener('change', function(){ toggleDesignerField(this.value); });
         </script>
         <div class="form-group">

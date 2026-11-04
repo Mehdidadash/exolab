@@ -102,7 +102,12 @@ foreach ($toLog as $f) {
 }
 
 // ─── ارسال به کاربر ───
-$downloadName = $safeRoot . '.zip';
+// نامِ فایل ZIP: {شماره کیس}_{نام بیمار}_{سایه}_{دندان}_{نام پوشه}
+// مثال: 1481_KarimPoor_BL1_44_اسکن-فک-بالا.zip
+// ⚠️ قبلاً نامِ پوشهٔ ریشه (که اغلب خروجیِ دستگاه اسکن است، مثل
+//    «P2026-10-29_143404-karimpour-rabiei-rabiei») روی ZIP گذاشته می‌شد و
+//    شمارهٔ کیس/نام بیمار در نام فایل نبود.
+$downloadName = caseDownloadBaseName($caseId, $root) . '.zip';
 while (ob_get_level() > 0) { ob_end_clean(); }
 header('Content-Type: application/zip');
 header('Content-Disposition: attachment; filename="' . str_replace(["\r", "\n", '"'], '', $downloadName) . '"');

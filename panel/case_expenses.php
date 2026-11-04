@@ -27,8 +27,8 @@ $effBranch = currentBranchId() ?? 1;
 
 // ردیف‌های برون‌سپاری: پرداخت‌کننده = صاحب کیس
 $ceOwnerFilter = ' AND c.branch_id = ' . (int) $effBranch;
-// ردیف‌های طراحی: پرداخت‌کننده = شعبه‌ی لابراتوارِ انجام‌دهنده (وگرنه صاحب کیس)
-$designPayerSql = "COALESCE((SELECT lb.branch_id FROM users lb WHERE lb.id = c.lab_id), c.branch_id)";
+// ردیف‌های طراحی: پرداخت‌کننده = شعبه‌ی لابراتوارِ انجام‌دهنده (یا لابراتوارِ برون‌سپاری جانبی)، وگرنه صاحب کیس
+$designPayerSql = designPayerBranchSql('c');
 $ceDesignFilter = ' AND ' . $designPayerSql . ' = ' . (int) $effBranch;
 
 // 1) Design-fee rows — design_fee ستونِ «فی هر واحد» است، جمع = فی × تعداد
@@ -46,8 +46,11 @@ $stmt = db()->query("
 foreach ($stmt->fetchAll() as $r) $rows[] = $r;
 
 // 2) Side-outsourcing rows (uses per-case outsourced_rate when set, else the outsource_rates lookup)
+// ⚠️ ترتیب مهم است: نرخِ ثبت‌شده (روی کیس یا فاکتور برون‌سپاری) مقدم بر نرخ روز است؛
+// وگرنه تغییرِ نرخ‌ها، مخارجِ کیس‌های قدیمی را هم عوض می‌کند.
+$storedRate = caseOutsourceStoredRateSql('c');
 $plExprSide = priceLinkOutsourceSqlExpr('c.outsourced_lab_id', 'c.outsourced_service_id');
-$plUnit = $plExprSide ? "COALESCE(c.outsourced_rate, COALESCE($plExprSide, r.rate), 0)" : "COALESCE(c.outsourced_rate, r.rate, 0)";
+$plUnit = $plExprSide ? "COALESCE($storedRate, COALESCE($plExprSide, r.rate), 0)" : "COALESCE($storedRate, r.rate, 0)";
 $stmt = db()->query("
     SELECT c.id AS case_id, c.patient_name, c.received_date, u.full_name AS doctor_name,
            'برون‌سپاری جانبی' AS exp_type, olab.full_name AS party_name, os.title AS service_title,
@@ -68,7 +71,9 @@ foreach ($stmt->fetchAll() as $r) $rows[] = $r;
 
 // 3) Fully-outsourced (lab_out) rows
 $plExprFull = priceLinkOutsourceSqlExpr('c.lab_id', 'c.service_id');
-$plUnitFull = $plExprFull ? "COALESCE($plExprFull, r.rate, 0)" : "COALESCE(r.rate,0)";
+// ⚠️ قبلاً نرخِ ثبت‌شدهٔ کیس (outsourced_rate) در این شاخه اصلاً خوانده نمی‌شد و
+// مخارجِ کیس‌های تاریخی با هر تغییرِ نرخ عوض می‌شد.
+$plUnitFull = $plExprFull ? "COALESCE($storedRate, COALESCE($plExprFull, r.rate), 0)" : "COALESCE($storedRate, r.rate, 0)";
 $stmt = db()->query("
     SELECT c.id AS case_id, c.patient_name, c.received_date, u.full_name AS doctor_name,
            'برون‌سپاری کامل' AS exp_type, lab.full_name AS party_name, p.title AS service_title,

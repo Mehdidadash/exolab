@@ -129,6 +129,11 @@ if (!empty($_GET['uninvoiced'])) {
 if (!empty($_GET['unprinted_labels'])) {
     $whereClauses[] = '(c.label_printed_at IS NULL OR c.label_printed_at = \'\')';
 }
+// فیلتر «درخواست کست»: فقط کیس‌هایی که از طراح درخواست کست شده است.
+// (طراح برای پیدا کردن کارهایی که باید کست/مدل تحویل دهد استفاده می‌کند.)
+if (!empty($_GET['cast_requested'])) {
+    $whereClauses[] = 'c.case_cast_requested = 1';
+}
 // Filter by shade
 if (isset($_GET['shade']) && trim((string) $_GET['shade']) !== '') {
     $whereClauses[] = 'c.shade LIKE ?';
@@ -270,17 +275,26 @@ foreach ($rows as $r) {
         $providerLabId = (int) $r['outsourced_lab_id'];
     }
     if ($providerLabId > 0) {
-        $isProvider = $isLab && $providerLabId === (int) $user['id'];
-        if (!$isProvider) {
-            $plabSt = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
-            $plabSt->execute([$providerLabId]);
-            $plabBranch = (int) $plabSt->fetchColumn();
-            $myBr = currentBranchId();
-            if ($myBr === null && is_root_admin()) $myBr = 1;   // مدیر کل = شعبهٔ مرکزی
-            $isProvider = ($myBr !== null && $plabBranch > 0 && $plabBranch === $myBr);
-        }
-        if ($isProvider) {
-            $price = formatAmountToman(getInboundReceivableAmount($r));
+        $myBr = currentBranchId();
+        if ($myBr === null && is_root_admin()) $myBr = 1;   // مدیر کل = شعبهٔ مرکزی
+        // ⚠️ صاحبِ خودِ کیس همیشه «قیمتِ کیس» را می‌بیند؛ نرخِ برون‌سپاری فقط برای
+        // طرفِ انجام‌دهنده/شعبهٔ همکار معنا دارد. بدون این شرط، وقتی لابراتوارِ انجام‌دهنده
+        // به همان شعبهٔ مالکِ کیس تعلق داشت، مدیر آن شعبه به‌جای فیِ دریافتی (۱٬۰۰۰٬۰۰۰)
+        // نرخِ مخارج (۸۰۰٬۰۰۰) را در ستون «قیمت» می‌دید. (باگِ گزارش‌شده: کیس‌های 1514/1516)
+        $isLabRoleUser = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
+        $caseOwnerBr = (int) ($r['branch_id'] ?? 0);
+        $viewerOwnsCase = !$isLabRoleUser && $myBr !== null && $caseOwnerBr > 0 && $myBr === $caseOwnerBr;
+        if (!$viewerOwnsCase) {
+            $isProvider = $isLab && $providerLabId === (int) $user['id'];
+            if (!$isProvider) {
+                $plabSt = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+                $plabSt->execute([$providerLabId]);
+                $plabBranch = (int) $plabSt->fetchColumn();
+                $isProvider = ($myBr !== null && $plabBranch > 0 && $plabBranch === $myBr);
+            }
+            if ($isProvider) {
+                $price = formatAmountToman(getInboundReceivableAmount($r));
+            }
         }
     }
     // ستون فاکتور: برای کاربران داخلی (مدیر/کارمند) لینک به فرم فاکتور؛ برای پزشک/کلینیک/
@@ -426,7 +440,8 @@ foreach ($rows as $r) {
         $r['design_downloaded'] ? 1 : 0,
         $hasUpdates,
         $r['service_short'] ?? '',
-        (int) ($r['quantity'] ?? 0)   // 21: تعداد واحد (برای جمعِ زیر جدول)
+        (int) ($r['quantity'] ?? 0),  // 21: تعداد واحد (برای جمعِ زیر جدول)
+        !empty($r['case_cast_requested']) ? 1 : 0   // 22: درخواست کست از طراح
     ];
 }
 

@@ -71,7 +71,16 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
         </div>
         <div class="form-group">
             <label for="category">دسته</label>
-            <input type="text" id="category" name="category" value="<?= htmlspecialchars($price['category'] ?? 'عمومی') ?>">
+            <?php $currentCategory = normalizeServiceCategory($price['category'] ?? ''); ?>
+            <select id="category" name="category">
+                <?php foreach (serviceCategories() as $catOpt): ?>
+                    <option value="<?= htmlspecialchars($catOpt) ?>" <?= $catOpt === $currentCategory ? 'selected' : '' ?>><?= htmlspecialchars($catOpt) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; color:#525252; margin-top:4px;">
+                «دندانپزشکان» برای مطب/کلینیک، «همکاری» برای کارِ لابراتوارهای همکار،
+                «مشترک» برای خدماتِ مشترکِ هر دو، «عمومی» برای بقیه.
+            </small>
         </div>
         <div class="form-group">
             <label for="active">فعال</label>
@@ -112,6 +121,10 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
                 انواع تعریف‌شده در <a href="scan_body_types.php">انواع و کتابخانه اسکن‌بادی</a> یکی انتخاب می‌شود.
                 با تیکِ «نیازمند انتخاب نوع فیکسچر» هم فیلدِ «نوع فیکسچر» باز می‌شود
                 (<a href="fixture_types.php">انواع فیکسچر</a>). برای خدماتِ دیگری هم که در آینده نیاز داشتند، همین تیک‌ها را بزنید.
+                <?php if (isCustomAbutmentService($price ?? null)): ?>
+                    <br><b>توجه:</b> چون عنوانِ این خدمت «کاستوم اباتمنت» است، فیلدِ «نوع فیکسچر» در فرم کیس
+                    حتی بدونِ این تیک هم نمایش داده می‌شود (قاعدهٔ خودکار برای کاستوم اباتمنت کره‌ای/اروپایی).
+                <?php endif; ?>
             </small>
         </div>
         <button type="submit"><?= $editing ? 'بروزرسانی' : 'ذخیره' ?></button>

@@ -22,6 +22,10 @@ require_once __DIR__ . '/../panel/db.php';
 // ── Detect CLI vs Web ──
 $isCli = (PHP_SAPI === 'cli');
 
+// `php database/migrate.php --dry` → فقط فهرستِ مهاجرت‌های در انتظار را نشان بده،
+// هیچ فایلی اجرا/ثبت نشود. (برای بازبینیِ قبل از اجرا روی هاست مفید است.)
+$dryRun = $isCli && in_array('--dry', $argv ?? [], true);
+
 if (!$isCli) {
     $key = (string) (MIGRATE_KEY ?? '');
     if ($key === '' || !hash_equals($key, (string) ($_GET['key'] ?? ''))) {
@@ -87,9 +91,16 @@ while ($row = $stmt->fetch()) {
 }
 
 // Scan migration files
+//  • `*.sql`  → SQL معمولی
+//  • `*.php`  → مهاجرت‌های منطقی (وقتی کار با SQL خالص خوانا/امن نیست؛ مثل بازنرخ‌گذاری
+//               کیس‌ها که باید از همان توابعِ قیمت‌گذاریِ برنامه استفاده کند)
+// ترتیب = حروف‌الفباییِ نامِ فایل، پس پیش‌شمارهٔ عددی (081_...) ترتیب را تضمین می‌کند.
 $migrationsDir = __DIR__ . '/migrations';
-$files = glob($migrationsDir . '/*.sql');
-sort($files); // alphabetical = chronological order
+$files = array_merge(
+    glob($migrationsDir . '/*.sql') ?: [],
+    glob($migrationsDir . '/*.php') ?: []
+);
+sort($files, SORT_STRING); // alphabetical = chronological order
 
 // ── تطبیق خودکار (Reconcile) ─────────────────────────────────────────────
 // اگر دیتابیسی را برگردانده باشیم که اسکیمای یک مهاجرت را «از قبل» دارد ولی
@@ -139,6 +150,12 @@ $ALREADY_CHECKS = [
     // ⚠️ بدون این چک، برگرداندنِ ردیف از _migrations یا دیتابیسِ ناقص، نرخ طراحی را دوباره تقسیم می‌کرد.
     '074_design_fee_to_unit_rate.sql' => "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='cases' AND COLUMN_NAME='design_fee_is_unit'",
     '075_site_prices_default_design_fee.sql' => "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='site_prices' AND COLUMN_NAME='default_design_fee'",
+    // 079: ستون‌های «درخواست کست» و «طراح پیش‌فرض اختصاصی». هر سه بخش باید موجود باشند؛
+    // برای سادگی فقط ستونِ نشانهٔ اصلی (users.default_designer_id) بررسی می‌شود و اگر
+    // نبود، همهٔ ALTERها (که هر کدام جدا هستند و خطای تکراری‌بودن تحمل می‌شود) اجرا می‌شوند.
+    '079_cast_request_and_default_designers.sql' => "SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='users' AND COLUMN_NAME='default_designer_id'",
+    // 080: مجوزِ «تغییر وضعیت گروهی» برای نقش طراح
+    '080_designer_batch_status_permission.sql' => "SELECT 1 FROM roles WHERE name='designer' AND permissions LIKE '%batch_update_status%'",
 ];
 
 $count = 0;
@@ -169,7 +186,26 @@ foreach ($files as $file) {
 
     out("[→] Applying: {$filename} ...", 'info');
 
+    if ($dryRun) {
+        out("    (dry-run) skipped — not executed, not recorded", 'skip');
+        $count++;
+        continue;
+    }
+
     try {
+        // ── مهاجرتِ PHP: منطقِ کامل داخل خودِ فایل است (db() در دسترس است) ──
+        if (strtolower((string) pathinfo($filename, PATHINFO_EXTENSION)) === 'php') {
+            (static function (string $__migrationFile): void {
+                include $__migrationFile;
+            })($file);
+
+            $ins = db()->prepare("INSERT INTO `_migrations` (filename) VALUES (?)");
+            $ins->execute([$filename]);
+            out("    DONE ✓", 'ok');
+            $count++;
+            continue;
+        }
+
         $sql = file_get_contents($file);
         if ($sql === false || trim($sql) === '') {
             out("    SKIPPED (empty file)", 'skip');
@@ -236,6 +272,8 @@ out("", 'info');
 out("============================================", 'info');
 if ($count === 0) {
     out("  No new migrations to apply.", 'info');
+} elseif ($dryRun) {
+    out("  {$count} migration(s) pending — dry-run: nothing was applied or recorded.", 'skip');
 } else {
     out("  Applied {$count} migration(s) successfully.", 'ok');
 }

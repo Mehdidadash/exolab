@@ -135,6 +135,8 @@ $canLinkFiles = is_admin()
     || is_designer_user($user) || in_array($user['role'] ?? '', ['doctor'], true);
 
 panel_layout_start('مشاهده کیس');
+// مودالِ مسدودکنندهٔ خطای آپلود — تا وقتی کاربر خطا را تأیید نکند، صفحه باز می‌ماند
+require_once __DIR__ . '/../includes/upload_error_modal.php';
 ?>
 <style>
     /* ── بزرگ‌ترکردن کلیِ فونت‌های صفحهٔ مشاهدهٔ کیس ──
@@ -256,18 +258,25 @@ panel_layout_start('مشاهده کیس');
             $provLabId = (int) $case['outsourced_lab_id'];
         }
         if ($provLabId > 0) {
-            $isCaseProvider = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true)
-                && $provLabId === (int) $user['id'];
-            if (!$isCaseProvider) {
-                $plb = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
-                $plb->execute([$provLabId]);
-                $plbId = (int) $plb->fetchColumn();
-                $mbx = currentBranchId();
-                if ($mbx === null && is_root_admin()) $mbx = 1;   // مدیر کل = شعبهٔ مرکزی
-                $isCaseProvider = ($mbx !== null && $plbId > 0 && $plbId === $mbx);
-            }
-            if ($isCaseProvider) {
-                $viewerProviderFee = getInboundReceivableAmount($case);
+            $mbx = currentBranchId();
+            if ($mbx === null && is_root_admin()) $mbx = 1;   // مدیر کل = شعبهٔ مرکزی
+            // ⚠️ صاحبِ کیس همیشه «قیمتِ خودِ کیس» را می‌بیند؛ نرخِ برون‌سپاری فقط برای
+            // طرفِ انجام‌دهنده/شعبهٔ همکار معنا دارد. (باگ: مدیر شعبه‌ای که لابراتوارِ
+            // انجام‌دهنده هم به همان شعبه تعلق داشت، نرخِ مخارج را به‌جای فیِ دریافتی می‌دید.)
+            $isLabRoleUser = in_array($user['role'] ?? '', ['lab', 'outsource_lab', 'customer_lab', 'partner_lab'], true);
+            $caseOwnerBr = (int) ($case['branch_id'] ?? 0);
+            $viewerOwnsCase = !$isLabRoleUser && $mbx !== null && $caseOwnerBr > 0 && $mbx === $caseOwnerBr;
+            if (!$viewerOwnsCase) {
+                $isCaseProvider = $isLabRoleUser && $provLabId === (int) $user['id'];
+                if (!$isCaseProvider) {
+                    $plb = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+                    $plb->execute([$provLabId]);
+                    $plbId = (int) $plb->fetchColumn();
+                    $isCaseProvider = ($mbx !== null && $plbId > 0 && $plbId === $mbx);
+                }
+                if ($isCaseProvider) {
+                    $viewerProviderFee = getInboundReceivableAmount($case);
+                }
             }
         }
         ?>
@@ -363,6 +372,20 @@ panel_layout_start('مشاهده کیس');
             $infoItems[] = [
                 'label' => 'طراح',
                 'value' => '<span style="color:#64748b;">' . htmlspecialchars($extDesignerName !== '' ? $extDesignerName : '—') . '</span>',
+            ];
+        }
+        // ── درخواست کست از طراح ──
+        // طراح (و کاربران داخلی) باید فوراً ببینند که این کیس به کست نیاز دارد.
+        if (caseHasCastRequest($case)) {
+            $castWhen = !empty($case['cast_requested_at']) ? toJalaliDateTimeFormatted((string) $case['cast_requested_at']) : '';
+            $infoItems[] = [
+                'label' => 'درخواست کست',
+                'value' => caseCastBadge()
+                    . ' <span style="color:#5b21b6; font-weight:700;">درخواست کست ثبت شده است</span>'
+                    . ($castWhen !== '' ? '<small style="display:block; font-weight:400; color:#6b7280; margin-top:2px;">زمان درخواست: ' . htmlspecialchars($castWhen) . '</small>' : ''),
+                'wide' => true,
+                'style' => 'background:#faf5ff; border-right:4px solid #8b5cf6;',
+                'itemClass' => 'ci-cast-item',
             ];
         }
         // کلینیک: کلینیکِ ثبت‌شده روی خودِ کیس (cases.clinic_id)؛ اگر خالی بود، کلینیک‌های
@@ -1368,20 +1391,45 @@ panel_layout_start('مشاهده کیس');
                     } else if (resp && resp.partial) {
                         // بعضی فایل‌ها ذخیره شده‌اند → پیام واضح بده و لیست را به‌روز کن
                         if (progressWrap) progressWrap.style.display = 'none';
-                        var pm = (resp.error_messages && resp.error_messages.length) ? resp.error_messages.join(' | ') : 'برخی فایل‌ها آپلود نشدند.';
-                        if (msgEl) { msgEl.textContent = '⚠️ ' + (resp.uploaded || 0) + ' فایل ذخیره شد اما: ' + pm; msgEl.style.color = '#b45309'; }
+                        var pm = (resp.error_messages && resp.error_messages.length) ? resp.error_messages : ['برخی فایل‌ها آپلود نشدند.'];
+                        if (msgEl) { msgEl.textContent = '⚠️ ' + (resp.uploaded || 0) + ' فایل ذخیره شد اما: ' + pm.join(' | '); msgEl.style.color = '#b45309'; }
                         showHelp('error');
-                        setTimeout(function(){ location.reload(); }, 2500);
+                        // خطای جزئی هم مسدودکننده است تا کاربر بی‌توجه رد نشود
+                        if (window.UploadError) {
+                            window.UploadError.show({
+                                title: 'برخی فایل‌ها ذخیره نشدند',
+                                message: (resp.uploaded || 0) + ' فایل ذخیره شد، اما بقیه ناموفق بودند. لیست خطاها:',
+                                details: pm
+                            });
+                        }
+                        setTimeout(function(){ location.reload(); }, 3000);
                     } else {
                         if (progressWrap) progressWrap.style.display = 'none';
                         var list = (resp && resp.error_messages && resp.error_messages.length)
-                            ? resp.error_messages.join(' | ')
-                            : ((resp && resp.errors && resp.errors.length) ? resp.errors.join(' | ') : 'نامشخص');
-                        if (msgEl) { msgEl.textContent = 'خطا در آپلود: ' + list; msgEl.style.color = '#b91c1c'; }
+                            ? resp.error_messages
+                            : ((resp && resp.errors && resp.errors.length) ? resp.errors : ['نامشخص']);
+                        if (msgEl) { msgEl.textContent = 'خطا در آپلود: ' + list.join(' | '); msgEl.style.color = '#b91c1c'; }
                         showHelp('error');
+                        if (window.UploadError) {
+                            window.UploadError.show({
+                                title: 'آپلود ناموفق بود',
+                                message: 'هیچ فایلی ذخیره نشد. لطفاً علت را برطرف کنید و دوباره تلاش کنید.',
+                                details: list
+                            });
+                        }
                     }
                 };
-                xhr.onerror = function(){ if (progressWrap) progressWrap.style.display = 'none'; if (msgEl) { msgEl.textContent = 'خطا در اتصال به سرور.'; msgEl.style.color = '#b91c1c'; } showHelp('error'); };
+                xhr.onerror = function(){
+                    if (progressWrap) progressWrap.style.display = 'none';
+                    if (msgEl) { msgEl.textContent = 'خطا در اتصال به سرور.'; msgEl.style.color = '#b91c1c'; }
+                    showHelp('error');
+                    if (window.UploadError) {
+                        window.UploadError.show({
+                            title: 'ارتباط با سرور قطع شد',
+                            message: 'آپلود به پایان نرسید. اتصال اینترنت را بررسی کنید و دوباره تلاش کنید. اگر فایل‌های حجیمی دارید، آن‌ها را دسته‌دسته آپلود کنید.'
+                        });
+                    }
+                };
                 xhr.send(fd);
             });
         })();
@@ -3050,6 +3098,21 @@ panel_layout_start('مشاهده کیس');
                     <label><?= field_icon('comment-dots') ?> توضیحات</label>
                     <textarea name="description" rows="3" style="width:100%;"><?= htmlspecialchars($case['description'] ?? '') ?></textarea>
                 </div>
+                <?php // ── درخواست کست از طراح (قابل ویرایش در همین فرم) ── ?>
+                <?php if (!$isExternalViewer || $isDoctor): ?>
+                <div class="form-group" style="grid-column:1 / -1; border:1px solid #ddd6fe; border-radius:8px; background:#faf5ff; padding:10px 12px;">
+                    <input type="hidden" name="case_cast_requested" value="0">
+                    <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-weight:700; color:#5b21b6; margin:0;">
+                        <input type="checkbox" name="case_cast_requested" value="1" style="width:auto; margin-top:3px;" <?= caseHasCastRequest($case) ? 'checked' : '' ?>>
+                        <span>
+                            🦷 درخواست کست از طراح
+                            <small style="display:block; font-weight:400; color:#6b7280; margin-top:2px;">
+                                با تیک زدن، طراحِ کیس نشان «کست» را در لیست کیس‌ها می‌بیند و اعلان دریافت می‌کند.
+                            </small>
+                        </span>
+                    </label>
+                </div>
+                <?php endif; ?>
             </div>
             <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
                 <button type="button" id="edit-case-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
@@ -3093,14 +3156,17 @@ panel_layout_start('مشاهده کیس');
         JSON_UNESCAPED_UNICODE
     ) ?>;
     // خدماتی که فیلدِ «نوع فیکسچر» لازم دارند (کاستوم اباتمنت کره‌ای/اروپایی).
-    var SVC_REQUIRES_FIXTURE = <?= json_encode(
-        array_map(function ($p) { return (int) (!empty($p['requires_fixture_type'])); }, array_column($prices, null, 'id')),
-        JSON_UNESCAPED_UNICODE
-    ) ?>;
+    // (نقطهٔ واحدِ قاعده: serviceFixtureTypeMap — شامل خدماتِ «کاستوم اباتمنت» حتی
+    //  وقتی تیکِ requires_fixture_type در دیتابیس خورده نباشد.)
+    var SVC_REQUIRES_FIXTURE = <?= json_encode(serviceFixtureTypeMap(), JSON_UNESCAPED_UNICODE) ?>;
     var DEFAULT_CONNECTION_TYPE = 'cement-retained';   // «چسب‌شونده»
     // فی طراحی پیش‌فرض هر خدمت (site_prices.default_design_fee) — فالبکِ نرخ اختصاصی.
     var SVC_DEFAULT_DESIGN_FEE = <?= json_encode(getServiceDefaultDesignFeeMap(), JSON_UNESCAPED_UNICODE) ?>;
     var DEFAULT_DESIGNER_ID = <?= (int) $defaultDesignerId ?>;
+    // طراح پیش‌فرضِ اختصاصیِ پزشک/شعبه (برای انتخاب خودکار در فرمِ ویرایش)
+    var DOC_DEFAULT_DESIGNER = <?= json_encode(getDoctorDefaultDesignerMap(), JSON_UNESCAPED_UNICODE) ?>;
+    var BRANCH_DEFAULT_DESIGNER = <?= json_encode(getBranchDefaultDesignerMap(), JSON_UNESCAPED_UNICODE) ?>;
+    var MY_BRANCH_ID = <?= (int) (currentBranchId() ?? 1) ?>;
     var ecDesignerEl = document.getElementById('ec-designer-id');
     var ecDesignFeeEl = document.getElementById('ec-design-fee');
     var ecDesignNoteEl = document.getElementById('ec-design-note');
@@ -3171,10 +3237,24 @@ panel_layout_start('مشاهده کیس');
             ecSetNote(ecDesignNoteEl, 'برای این خدمت طراحی لازم نیست؛ کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.');
         } else {
             ecSetNote(ecDesignNoteEl, '');
-            if (serviceChanged && ecDesignerEl && !ecDesignerEl.value && DEFAULT_DESIGNER_ID) {
-                ecDesignerEl.value = String(DEFAULT_DESIGNER_ID);
+            // اگر خدمت طراحی لازم دارد ولی طرحری انتخاب نشده، پیش‌فرضِ پزشک/شعبه/سراسری
+            if (serviceChanged && ecDesignerEl && !ecDesignerEl.value) {
+                var defId = ecDoctorBranchDefaultDesigner();
+                if (defId) ecDesignerEl.value = String(defId);
             }
         }
+    }
+
+    /**
+     * طراحِ پیش‌فرضِ مؤثر: پزشکِ کیس → شعبهٔ کیس → پیش‌فرضِ سراسری.
+     * (mirror of getDefaultDesignerFor() در PHP)
+     */
+    function ecDoctorBranchDefaultDesigner(){
+        var docEl = document.querySelector('#edit-case-form [name="doctor_id"], #ec-doctor-id');
+        var docId = docEl ? String(docEl.value || '') : '';
+        if (!docId) docId = String(<?= (int) ($case['doctor_id'] ?? 0) ?>);
+        var caseBranch = <?= (int) ($case['branch_id'] ?? 0) ?>;
+        return Number(DOC_DEFAULT_DESIGNER[docId] || BRANCH_DEFAULT_DESIGNER[caseBranch] || DEFAULT_DESIGNER_ID || 0) || 0;
     }
     function ecServiceDefaultDesignFee(){
         var svcEl = ecServiceEl();

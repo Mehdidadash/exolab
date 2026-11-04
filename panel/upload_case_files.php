@@ -282,7 +282,8 @@ foreach ($files['error'] as $idx => $err) {
 
     // Dedup display name: if a file with the same name exists for this case, append _YYYYMMDD
     // نام‌گذاری خودکار (مشترک با صفحهٔ کیس‌ها — تابع واحد caseFileDisplayName)
-    $displayName = caseFileDisplayName($caseId, $orig, $fileType, isFolderUploadFile($relPath));
+    // فایلِ خام داخل پوشه → «نام پوشه_شماره کیس_نام پوشه_نام فایل»
+    $displayName = caseFileDisplayName($caseId, $orig, $fileType, isFolderUploadFile($relPath), $folderName);
 
     $safe = bin2hex(random_bytes(8)) . '.' . $ext;
     $dest = $uploadDir . $safe;

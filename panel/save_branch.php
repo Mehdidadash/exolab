@@ -49,5 +49,18 @@ if ($ownerUserId) {
     }
 }
 
+// ── طراح پیش‌فرضِ اختصاصیِ شعبه ──
+// فقط وقتی فیلد در فرم بوده ذخیره می‌شود. مقدار نامعتبر/غیرطراح → خالی.
+if (array_key_exists('default_designer_id', $_POST)) {
+    $brDefDesigner = (int) ($_POST['default_designer_id'] ?? 0);
+    if ($brDefDesigner > 0 && !isValidDesignerId($brDefDesigner)) $brDefDesigner = 0;
+    try {
+        db()->prepare('UPDATE branches SET default_designer_id = ? WHERE id = ?')
+            ->execute([$brDefDesigner > 0 ? $brDefDesigner : null, $bid]);
+    } catch (\Throwable $e) {
+        error_log('save_branch default_designer_id: ' . $e->getMessage());
+    }
+}
+
 header('Location: branches.php');
 exit;

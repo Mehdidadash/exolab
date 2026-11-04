@@ -101,6 +101,29 @@ panel_layout_start($editing ? 'ویرایش پزشک' : 'افزودن پزشک �
             </small>
         </div>
 
+        <?php
+        // ── طراح پیش‌فرضِ اختصاصیِ این پزشک ──
+        // هنگام ثبتِ کیس برای این پزشک، این طراح به‌جای «طراح پیش‌فرضِ سراسری» انتخاب می‌شود.
+        // خالی = استفاده از طراح پیش‌فرضِ شعبه و در نهایت طراح پیش‌فرضِ سراسری.
+        $docDefaultDesignerId = $editing ? getUserDefaultDesignerId((int) $doctor['id']) : 0;
+        $designersForDoctorForm = getAllDesigners();
+        ?>
+        <div class="form-group">
+            <label for="default_designer_id"><?= field_icon('compass-drafting') ?> طراح پیش‌فرض (اختصاصی این پزشک)</label>
+            <select id="default_designer_id" name="default_designer_id">
+                <option value="">— استفاده از پیش‌فرضِ شعبه —</option>
+                <?php foreach ($designersForDoctorForm as $des): ?>
+                    <option value="<?= (int) $des['id'] ?>" <?= $docDefaultDesignerId === (int) $des['id'] ? 'selected' : '' ?>>
+                        <?= htmlspecialchars($des['full_name']) ?><?= !empty($des['is_default_designer']) ? ' (پیش‌فرضِ سراسری)' : '' ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; margin-top:6px; color:#525252;">
+                برای کیس‌هایی که این پزشک ثبت می‌کند (یا برایش ثبت می‌شود)، همین طراح به‌طور خودکار انتخاب می‌شود.
+                با خالی گذاشتن، ابتدا طراح پیش‌فرضِ شعبه و سپس طراح پیش‌فرضِ سراسری اعمال می‌شود.
+            </small>
+        </div>
+
         <div class="form-group">
             <label for="notes">یادداشت‌ها</label>
             <textarea id="notes" name="notes" rows="4"><?= htmlspecialchars($doctor['notes'] ?? '') ?></textarea>

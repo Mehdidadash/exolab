@@ -45,7 +45,14 @@ $prices = getAllPrices();
             <td class="price-index"><?= $index + 1 ?></td>
             <td><input type="text" class="ed-title" value="<?= htmlspecialchars($price['title']) ?>" style="width:96%; min-width:160px;"></td>
             <td><input type="text" class="ed-short" value="<?= htmlspecialchars((string) ($price['short_name'] ?? '')) ?>" maxlength="24" placeholder="ML" style="width:110px; font-family:monospace; direction:ltr; text-align:center; font-weight:bold;" title="نام اختصاری (خالی = نمایش عنوان کامل)"></td>
-            <td><input type="text" class="ed-category" value="<?= htmlspecialchars($price['category']) ?>" style="width:96%; min-width:100px;"></td>
+            <td>
+                <?php $rowCategory = normalizeServiceCategory($price['category'] ?? ''); ?>
+                <select class="ed-category" style="width:96%; min-width:120px;">
+                    <?php foreach (serviceCategories() as $catOpt): ?>
+                        <option value="<?= htmlspecialchars($catOpt) ?>" <?= $catOpt === $rowCategory ? 'selected' : '' ?>><?= htmlspecialchars($catOpt) ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </td>
             <td><input type="number" class="ed-price" value="<?= htmlspecialchars(formatTomanInput($price['price'])) ?>" min="0" step="1" style="width:170px; font-weight:bold;"></td>
             <td style="text-align:center;"><input type="checkbox" class="ed-qtymanual" <?= !empty($price['qty_manual']) ? 'checked' : '' ?> style="width:auto;" title="تعداد در فرم کیس دستی قابل تغییر باشد"></td>
             <td style="text-align:center;"><input type="number" class="ed-baseunits" value="<?= max(1, (int) ($price['base_units'] ?? 1)) ?>" min="1" step="1" style="width:64px;"></td>
