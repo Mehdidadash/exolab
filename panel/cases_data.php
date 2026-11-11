@@ -134,6 +134,10 @@ if (!empty($_GET['unprinted_labels'])) {
 if (!empty($_GET['cast_requested'])) {
     $whereClauses[] = 'c.case_cast_requested = 1';
 }
+// فیلتر «فوری»: فقط کیس‌هایی که به‌عنوان فوری (اولویتِ طراحی) علامت خورده‌اند.
+if (!empty($_GET['urgent'])) {
+    $whereClauses[] = 'c.is_urgent = 1';
+}
 // Filter by shade
 if (isset($_GET['shade']) && trim((string) $_GET['shade']) !== '') {
     $whereClauses[] = 'c.shade LIKE ?';
@@ -214,7 +218,7 @@ $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, p.
         cs.icon AS status_icon, cs.color AS status_color,
         di.invoice_number, di.id AS invoice_id, lab.full_name AS lab_name, olab.full_name AS outsourced_lab_name,
         des.full_name AS designer_name,
-        b.name AS branch_name, sb.name AS source_branch_name,
+        b.name AS branch_name, sb.name AS source_branch_name, cl.full_name AS clinic_name,
         (SELECT COUNT(*) FROM case_files cf WHERE cf.case_id = c.id) AS file_count,
         (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"design\"%') AS design_downloaded,
         (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"raw\"%') AS raw_downloaded,
@@ -231,6 +235,7 @@ $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, p.
     LEFT JOIN users des ON c.designer_id = des.id
     LEFT JOIN branches b ON c.branch_id = b.id
     LEFT JOIN branches sb ON c.source_branch_id = sb.id
+    LEFT JOIN users cl ON c.clinic_id = cl.id
     WHERE " . implode(' AND ', $whereClauses) . "
     ORDER BY $orderBy $orderDir";
 
@@ -407,6 +412,11 @@ foreach ($rows as $r) {
         $shadeHtml = '<span data-shade-color="' . htmlspecialchars($shadeHex, ENT_QUOTES) . '">' . htmlspecialchars($shadeCode) . '</span>';
     }
 
+    // ستون «کلینیک»: نامِ کاربرِ کلینیک (cases.clinic_id). اگر کیس کلینیک نداشته باشد «—».
+    $clinicHtml = !empty($r['clinic_name'])
+        ? htmlspecialchars((string) $r['clinic_name'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+        : '—';
+
     // نشانگر «کامنت/فایل جدید» از آخرین بازدید این کاربر از صفحهٔ کیس
     $hasUpdates = 0;
     $lv = $r['my_last_view'] ?? null;
@@ -441,7 +451,9 @@ foreach ($rows as $r) {
         $hasUpdates,
         $r['service_short'] ?? '',
         (int) ($r['quantity'] ?? 0),  // 21: تعداد واحد (برای جمعِ زیر جدول)
-        !empty($r['case_cast_requested']) ? 1 : 0   // 22: درخواست کست از طراح
+        !empty($r['case_cast_requested']) ? 1 : 0,   // 22: درخواست کست از طراح
+        !empty($r['is_urgent']) ? 1 : 0,           // 23: فوری (اولویتِ طراحی)
+        $clinicHtml                               // 24: نام کلینیک صاحبِ کیس
     ];
 }
 

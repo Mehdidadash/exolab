@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "/^php -l panel/price_list_pdf\\.php; cmd /c \"php storage\\\\_pdf_fa_test\\.php > storage\\\\_fa\\.pdf 2> storage\\\\_fa_err\\.txt\"; php -r \"echo filesize\\('storage/_fa\\.pdf'\\), PHP_EOL, substr\\(file_get_contents\\('storage/_fa\\.pdf'\\),0,5\\), PHP_EOL;\" 2>\\$null; Get-Content storage\\\\_fa_err\\.txt \\| Select-Object -First 5$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    },
+    "python.terminal.useEnvFile": true
+}

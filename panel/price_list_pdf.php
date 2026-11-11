@@ -173,9 +173,10 @@ if ($isPost && $in('action') === 'generate') {
         die('هیچ خدمتی برای ساخت PDF انتخاب نشده است.');
     }
 
-    $money = fn(float $v): string => number_format($v, 0, '.', ',');
+    // همهٔ اعدادِ PDF با ارقام فارسی و جداکنندهٔ هزارگانِ فارسی (٬) چاپ می‌شوند
+    $money = fn(float $v): string => toPersianDigits(str_replace(',', '٬', number_format($v, 0, '.', ',')));
     $docTitleSafe = $docTitle !== '' ? htmlspecialchars($docTitle, ENT_QUOTES, 'UTF-8') : 'لیست قیمت خدمات';
-    $today = Jalalian::fromDateTime(new DateTime())->format('Y/m/d');
+    $today = toPersianDigits(Jalalian::fromDateTime(new DateTime())->format('Y/m/d'));
 
     $metaParts = [$sources[$src]];
     if ($showParty) {
@@ -193,10 +194,10 @@ if ($isPost && $in('action') === 'generate') {
     $meta = implode(' — ', $metaParts);
 
     $priceLabel = $showDesign ? 'نرخ با طراحی' : 'نرخ';
-    $multLabel  = rtrim(rtrim(number_format($designMult, 2, '.', ''), '0'), '.');
+    $multLabel  = toPersianDigits(rtrim(rtrim(number_format($designMult, 2, '.', ''), '0'), '.'));
     $formulaText = $showDesign
         ? ('نرخ پایه + ' . ($designMult == 1 ? 'فی طراحی' : 'فی طراحی × ' . $multLabel)
-            . ($designRound > 0 ? ' (رند به بالا به مضربِ ' . number_format($designRound) . ')' : '') . ' — تومان')
+            . ($designRound > 0 ? ' (رند به بالا به مضربِ ' . toPersianDigits(number_format($designRound)) . ')' : '') . ' — تومان')
         : 'تومان';
 
     $thead = '<tr><th style="width:24px;">#</th><th>خدمت</th>'
@@ -209,7 +210,7 @@ if ($isPost && $in('action') === 'generate') {
     foreach ($lines as $l) {
         $i++;
         $tbody .= '<tr>'
-            . '<td style="text-align:center;">' . $i . '</td>'
+            . '<td style="text-align:center;">' . toPersianDigits((string) $i) . '</td>'
             . '<td>' . htmlspecialchars($l['title'], ENT_QUOTES, 'UTF-8') . '</td>'
             . ($showShort ? '<td style="text-align:center;font-family:monospace;">' . htmlspecialchars($l['short'], ENT_QUOTES, 'UTF-8') . '</td>' : '')
             . ($showDesc ? '<td style="font-size:8.5px;color:#374151;">' . nl2br(htmlspecialchars($l['desc'], ENT_QUOTES, 'UTF-8')) . '</td>' : '')

@@ -160,6 +160,9 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
     <?php else: ?>
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
             <h3 style="margin:0; font-size:1.85rem; line-height:1.6;">
+                <?php if (caseIsUrgent($case)): ?>
+                    <span style="vertical-align:middle; margin-left:6px;"><?= caseUrgentBadge(true) ?></span>
+                <?php endif; ?>
                 کیس #<?= htmlspecialchars($case['id']) ?> — <?= htmlspecialchars($case['patient_name']) ?>
                 <?php if (!empty($case['service_title'])): ?><span style="font-size:1.15rem; font-weight:700; color:#0369a1;">| خدمت: <?= htmlspecialchars($case['service_title']) ?></span><?php endif; ?>
                 <?php if (!empty($case['receipt_number'])): ?><span style="font-size:1rem; font-weight:600; color:#64748b;">/ <?= htmlspecialchars($case['receipt_number']) ?></span><?php endif; ?>
@@ -3108,6 +3111,21 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
                             🦷 درخواست کست از طراح
                             <small style="display:block; font-weight:400; color:#6b7280; margin-top:2px;">
                                 با تیک زدن، طراحِ کیس نشان «کست» را در لیست کیس‌ها می‌بیند و اعلان دریافت می‌کند.
+                            </small>
+                        </span>
+                    </label>
+                </div>
+                <?php endif; ?>
+                <?php // ── فوری (اولویتِ طراحی) — قابل تغییر در همین فرم ── ?>
+                <?php if (!$isExternalViewer || $isDoctor): ?>
+                <div class="form-group" style="grid-column:1 / -1; border:1px solid #fecaca; border-radius:8px; background:#fff1f2; padding:10px 12px;">
+                    <input type="hidden" name="is_urgent" value="0">
+                    <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-weight:700; color:#b91c1c; margin:0;">
+                        <input type="checkbox" name="is_urgent" value="1" style="width:auto; margin-top:3px;" <?= caseIsUrgent($case) ? 'checked' : '' ?>>
+                        <span>
+                            🔥 فوری
+                            <small style="display:block; font-weight:400; color:#6b7280; margin-top:2px;">
+                                با تیک زدن، این کیس در اولویتِ طراحی قرار می‌گیرد و طراح نشانِ «فوری» را در لیست کیس‌ها می‌بیند.
                             </small>
                         </span>
                     </label>

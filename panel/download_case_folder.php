@@ -107,10 +107,38 @@ foreach ($toLog as $f) {
 // ⚠️ قبلاً نامِ پوشهٔ ریشه (که اغلب خروجیِ دستگاه اسکن است، مثل
 //    «P2026-10-29_143404-karimpour-rabiei-rabiei») روی ZIP گذاشته می‌شد و
 //    شمارهٔ کیس/نام بیمار در نام فایل نبود.
-$downloadName = caseDownloadBaseName($caseId, $root) . '.zip';
+// ⚠️ ۲۰۲۶-۱۱-۰۸: نامِ ماشینیِ دستگاه اسکن دیگر در نامِ ZIP نمی‌آید (نام کوتاه‌تر)؛
+//    اگر همین کیس چند پوشهٔ اسکن داشته باشد و نامشان یکی شود، شمارهٔ ترتیبی می‌گیرند.
+$zipBaseName = caseDownloadBaseName($caseId, $root);
+try {
+    $siblings = [];
+    $sst = db()->prepare('SELECT DISTINCT rel_path FROM case_files WHERE case_id = ? AND rel_path IS NOT NULL AND rel_path <> ""');
+    $sst->execute([$caseId]);
+    foreach ($sst->fetchAll(PDO::FETCH_COLUMN) as $rp) {
+        $r = relPathRoot($rp)['root'] ?? null;
+        if ($r !== null && $r !== '') $siblings[$r] = true;
+    }
+    $siblings = array_keys($siblings);
+    sort($siblings, SORT_STRING);
+    if (count($siblings) > 1) {
+        $sameBase = [];
+        foreach ($siblings as $r) {
+            if (caseDownloadBaseName($caseId, $r) === $zipBaseName) $sameBase[] = $r;
+        }
+        if (count($sameBase) > 1) {
+            $idx = array_search($root, $sameBase, true);
+            $zipBaseName .= '_' . (($idx === false ? 0 : $idx) + 1);
+        }
+    }
+} catch (\Throwable $e) {
+    // اگر این بررسی ممکن نبود، همان نامِ ساده کافی است
+}
+
+$downloadName = str_replace(["\r", "\n", '"'], '', $zipBaseName . '.zip');
 while (ob_get_level() > 0) { ob_end_clean(); }
 header('Content-Type: application/zip');
-header('Content-Disposition: attachment; filename="' . str_replace(["\r", "\n", '"'], '', $downloadName) . '"');
+// filename* برای نام‌های فارسی (نامِ پوشه) تا در مرورگر/دانلودمنیجر به‌هم نریزد
+header('Content-Disposition: attachment; filename="' . $downloadName . '"; filename*=UTF-8\'\'' . rawurlencode($downloadName));
 header('Content-Length: ' . filesize($zipPath));
 header('Cache-Control: private, max-age=0');
 header('Pragma: public');

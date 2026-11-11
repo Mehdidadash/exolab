@@ -163,6 +163,8 @@ panel_layout_start('مدیریت کیس‌ها');
             <button type="button" id="toggle-unprinted-btn" class="btn" style="background:#ea580c; color:#fff;" onclick="toggleUnprintedLabels()" title="فقط کیس‌هایی که برچسبشان هنوز چاپ نشده است">🏷 برچسب‌نشده‌ها</button>
             <?php // کیس‌هایی که برای آن‌ها «درخواست کست از طراح» ثبت شده است ?>
             <button type="button" id="toggle-cast-btn" class="btn" style="background:#7c3aed; color:#fff;" onclick="toggleCastRequested()" title="فقط کیس‌هایی که از طراح درخواست کست شده است">🦷 درخواست کست</button>
+            <?php // کیس‌هایی که «فوری» علامت خورده‌اند (اولویتِ طراحی) ?>
+            <button type="button" id="toggle-urgent-btn" class="btn" style="background:#dc2626; color:#fff;" onclick="toggleUrgent()" title="فقط کیس‌های فوری (اولویتِ طراحی)">🔥 فوری‌ها</button>
             <?php if (!$isDesigner): ?>
             <?php // کیس‌هایی که به هیچ فاکتوری اضافه نشده‌اند (پزشک/کلینیک/طراح/برون‌سپاری/طلب شعبه) ?>
             <button type="button" id="uninvoiced-btn" class="btn" style="background:#0d9488; color:#fff;" onclick="toggleUninvoiced()" title="فقط کیس‌هایی که در هیچ فاکتوری نیامده‌اند">🧾 فاکتورنشده‌ها</button>
@@ -242,6 +244,7 @@ panel_layout_start('مدیریت کیس‌ها');
         <th class="case-cb-col"><label class="case-cb-wrap" title="انتخاب/لغو انتخاب همهٔ ردیف‌های این صفحه"><input type="checkbox" id="select-all-cases" onchange="toggleAllCases(this.checked)"></label></th>
         <th>Case ID</th>
         <th>پزشک</th>
+        <th>کلینیک</th>
         <th>طراح</th>
         <th>بیمار</th>
         <th>خدمت</th>
@@ -537,6 +540,25 @@ panel_layout_start('مدیریت کیس‌ها');
                             🦷 درخواست کست از طراح
                             <small style="display:block; font-weight:400; color:#6b7280; margin-top:2px;">
                                 اگر این کیس به کست/مدل نیاز دارد آن را تیک بزنید؛ طراحِ کیس در لیست کیس‌ها نشان «کست» می‌بیند و اعلان دریافت می‌کند.
+                            </small>
+                        </span>
+                    </label>
+                </div>
+                <?php endif; ?>
+                <?php // ── فوری (اولویتِ طراحی) ──
+                // کیسِ فوری با نشانِ 🔥 در ستونِ اولِ جدول و در صفحهٔ کیس دیده می‌شود؛
+                // طراح از همان نشان متوجه می‌شود این کار باید اول انجام شود.
+                // کاربران بیرونی (پزشک/کلینیک/لابراتوار) این فیلد را نمی‌بینند. ?>
+                <?php if (!$isExternalViewer || $isDoctor): ?>
+                <div class="form-group" id="case-urgent-group" style="grid-column:1/-1; border:1px solid #fecaca; border-radius:8px; background:#fff1f2; padding:10px 12px;">
+                    <?php // ورودیِ پنهانِ «۰» قبل از چک‌باکس تا برداشتنِ تیک هم به سرور برسد (۰ = لغو فوریت) ?>
+                    <input type="hidden" name="is_urgent" value="0">
+                    <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-weight:700; color:#b91c1c; margin:0;">
+                        <input type="checkbox" id="case-urgent" name="is_urgent" value="1" style="width:auto; margin-top:3px;">
+                        <span>
+                            🔥 فوری
+                            <small style="display:block; font-weight:400; color:#6b7280; margin-top:2px;">
+                                این کیس در اولویتِ طراحی قرار می‌گیرد؛ طراح نشانِ «فوری» را در ستون اولِ لیست کیس‌ها و در صفحهٔ کیس می‌بیند.
                             </small>
                         </span>
                     </label>
@@ -1220,6 +1242,16 @@ panel_layout_start('مدیریت کیس‌ها');
 </script>
 
 <script>
+    // آیا خدمتِ انتخابی طراحی لازم دارد؟ (design_required در site_prices)
+    // ⚠️ نسخهٔ سراسری، عمداً در همین بلوکِ اول (قبل از اسکریپتِ اصلی) تعریف می‌شود:
+    // prefillِ «کیس زیرمجموعه» گاهی قبل از رسیدن به تعریفِ محلی اجرا می‌شود و
+    // قبلاً خطای «serviceRequiresDesign is not a function» می‌داد و مودال باز نمی‌شد.
+    window.serviceRequiresDesign = function (serviceId) {
+        var m = window.__SVC_DESIGN_REQUIRED__ || {};
+        if (!serviceId) return true;
+        return (m[serviceId] === undefined) ? true : !!m[serviceId];
+    };
+
     // Global: toggle lab field visibility based on case type
     function toggleCaseType(type) {
         var labGroup = document.getElementById('lab-group');
@@ -1422,62 +1454,127 @@ panel_layout_start('مدیریت کیس‌ها');
         function priceStateBusy() { return (PRICE_STATE.unitPending + PRICE_STATE.designPending) > 0; }
 
         /**
-         * بارگذاریِ فی خدمت — نقطهٔ واحدِ همهٔ حالت‌ها (پزشک / لابراتوار / فیِ عمومی).
-         * opts اختیاری است؛ اگر داده نشود از مقادیرِ فعلیِ فرم خوانده می‌شود.
+         * بارگذاریِ «فی خدمت» — سازگاری با کدِ قبلی.
+         * حالا از loadCasePricing استفاده می‌کند (یک درخواستِ POST برای هر دو قیمت).
          */
         function refreshUnitPrice(opts) {
+            return loadCasePricing(jQuery.extend({ design: false }, opts || {}));
+        }
+
+        /**
+         * بارگذاریِ یک‌بارهٔ «فی خدمت + فی طراحی» با **یک درخواست POST**
+         * (قبلاً دو درخواستِ جدا به get_price.php می‌رفت که در روزهای کندیِ سرور
+         *  بدون خروجی برمی‌گشتند و فیلدهای فی خالی می‌ماندند).
+         *
+         * opts: { serviceId, doctorId, labId, designerId, caseType, price, design }
+         *   price:false  → فقط فی طراحی خوانده/اعمال می‌شود
+         *   design:false → فقط فی خدمت
+         */
+        function loadCasePricing(opts) {
             opts = opts || {};
-            var serviceId = String(opts.serviceId !== undefined ? (opts.serviceId || '') : (jQuery('#case-service-id').val() || ''));
-            var caseType  = String(opts.caseType  !== undefined ? (opts.caseType  || 'doctor') : (jQuery('#case-type').val() || 'doctor'));
-            var labId     = String(opts.labId     !== undefined ? (opts.labId || '') : (jQuery('#case-lab-id').val() || ''));
-            var doctorId  = String(opts.doctorId  !== undefined ? (opts.doctorId || '') : (jQuery('#case-doctor-id').val() || ''));
+            var withPrice  = (opts.price  !== false);
+            var withDesign = (opts.design !== false);
+
+            var serviceId  = String(opts.serviceId  !== undefined ? (opts.serviceId  || '') : (jQuery('#case-service-id').val() || ''));
+            var caseType   = String(opts.caseType   !== undefined ? (opts.caseType   || 'doctor') : (jQuery('#case-type').val() || 'doctor'));
+            var labId      = String(opts.labId      !== undefined ? (opts.labId      || '') : (jQuery('#case-lab-id').val() || ''));
+            var doctorId   = String(opts.doctorId   !== undefined ? (opts.doctorId   || '') : (jQuery('#case-doctor-id').val() || ''));
+            var designerId = String(opts.designerId !== undefined ? (opts.designerId || '') : (jQuery('#case-designer-id').val() || ''));
+
+            // «کار از لابراتوار همکار» → نرخِ بین‌لابراتواری.
+            // ⚠️ برای «برون‌سپاری» (lab_out) هرگز از نرخِ لابراتوار استفاده نکن.
+            if (caseType === 'lab_in' && labId) {
+                doctorId = '';
+            } else {
+                labId = '';
+            }
+
+            // خدمتی انتخاب نشده → هیچ فی‌ای معنا ندارد
             if (!serviceId) {
-                // خدمتی انتخاب نشده → فی معنا ندارد
-                PRICE_STATE.unitPending = 0;
-                PRICE_STATE.unitLoaded = true;
-                PRICE_STATE.unitFailed = false;
+                if (withPrice)  { PRICE_STATE.unitPending = 0;   PRICE_STATE.unitLoaded = true;   PRICE_STATE.unitFailed = false; }
+                if (withDesign) { PRICE_STATE.designPending = 0; PRICE_STATE.designLoaded = true; PRICE_STATE.designFailed = false; }
                 return null;
             }
-            var data;
-            if (caseType === 'lab_in' && labId) {
-                // «کار از لابراتوار همکار»: پرداخت‌کننده خودِ لابراتوار است ⇒ نرخِ بین‌لابراتواری.
-                // ⚠️ برای «برون‌سپاری به لابراتوار» (lab_out) هرگز از نرخِ لابراتوار استفاده نکن؛
-                // آن عدد «بهای تمام‌شده/مخارج» است نه فیِ دریافتی از پزشک.
-                // (باگِ گزارش‌شده: کیس‌های 1514/1516 با نرخِ لابراتوار ۸۰۰٬۰۰۰ به‌جای فیِ پزشک ۱٬۰۰۰٬۰۰۰)
-                data = { lab_id: labId, service_id: serviceId };
-            } else if (doctorId) {
-                data = { doctor_id: doctorId, service_id: serviceId };
-            } else {
-                // پزشک انتخاب نشده → فیِ عمومی/شعبه
-                data = { service_id: serviceId };
+
+            // ── بخشِ طراحی: دو حالت که به درخواست نیاز ندارند ──
+            // ⚠️ از نسخهٔ سراسری استفاده می‌کنیم (نه تابعِ محلی): در بعضی ترتیب‌های
+            // بارگذاری، تابعِ محلی هنوز تعریف نشده و کل پیش‌پرکردنِ فرم می‌شکست.
+            var needsDesignSvc = (typeof window.serviceRequiresDesign === 'function')
+                ? window.serviceRequiresDesign(serviceId)
+                : true;
+            if (withDesign) {
+                if (!needsDesignSvc) {
+                    // خدمتِ بدون طراحی (پست NPG، پرینت کست، الاینر ...) → فی ۰
+                    currentDesignUnitFee = null;
+                    jQuery('#case-design-fee').val('0');
+                    setDesignFeeNote('');
+                    PRICE_STATE.designLoaded = true;
+                    PRICE_STATE.designFailed = false;
+                } else if (!designerId) {
+                    // طراح انتخاب نشده → «فی طراحی پیش‌فرضِ خدمت»
+                    var def0 = serviceDefaultDesignFee(serviceId);
+                    currentDesignUnitFee = def0;
+                    applyDesignFee();
+                    setDesignFeeNote(def0 === null ? '' : 'از «فی طراحی پیش‌فرضِ خدمت» استفاده شد (طراحی انتخاب نشده است).');
+                    PRICE_STATE.designLoaded = true;
+                    PRICE_STATE.designFailed = false;
+                }
             }
-            PRICE_STATE.unitPending++;
-            PRICE_STATE.unitFailed = false;
+            var needDesignReq = withDesign && needsDesignSvc && !!designerId;
+            var needUnitReq   = withPrice;
+
+            if (!needUnitReq && !needDesignReq) return null;   // نیازی به درخواست نیست
+
+            if (needUnitReq)   { PRICE_STATE.unitPending++;   PRICE_STATE.unitFailed = false; }
+            if (needDesignReq) { PRICE_STATE.designPending++; PRICE_STATE.designFailed = false; }
+
             return jQuery.ajax({
                 url: 'get_price.php',
-                data: data,
+                method: 'POST',
+                data: {
+                    combined: 1,
+                    service_id: serviceId,
+                    doctor_id: doctorId,
+                    lab_id: labId,
+                    designer_id: designerId,
+                    case_type: caseType
+                },
                 dataType: 'json',
                 cache: false,
                 timeout: 20000
             }).done(function (resp) {
-                var v = (resp && resp.price !== null && resp.price !== undefined) ? resp.price : '';
-                jQuery('#case-unit-price').val(v);
-                PRICE_STATE.unitLoaded = true;
-                PRICE_STATE.unitFailed = false;
-                if (typeof applyServicePricingNote === 'function') applyServicePricingNote();
+                if (needUnitReq) {
+                    var v = (resp && resp.price !== null && resp.price !== undefined) ? resp.price : '';
+                    jQuery('#case-unit-price').val(v);
+                    PRICE_STATE.unitLoaded = true;
+                    PRICE_STATE.unitFailed = false;
+                    if (typeof applyServicePricingNote === 'function') applyServicePricingNote();
+                }
+                if (needDesignReq) {
+                    var fee = (resp && resp.design_fee !== null && resp.design_fee !== undefined) ? parseFloat(resp.design_fee) : null;
+                    // فالبک: در نبودِ نرخِ اختصاصی، پیش‌فرضِ خدمت
+                    if (fee === null || isNaN(fee)) fee = serviceDefaultDesignFee(serviceId);
+                    currentDesignUnitFee = fee;
+                    setDesignFeeNote(fee === null
+                        ? '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ فی طراحی ۰ می‌ماند. مبلغ درست را دستی وارد کنید، یا «فی طراحی پیش‌فرض» این خدمت را در قیمت‌ها تعیین کنید.'
+                        : '');
+                    PRICE_STATE.designLoaded = true;
+                    PRICE_STATE.designFailed = false;
+                    applyDesignFee();
+                }
             }).fail(function () {
                 // شبکه/تایم‌اوت/پاسخِ نامعتبر → اجازهٔ ذخیره نده
-                PRICE_STATE.unitLoaded = false;
-                PRICE_STATE.unitFailed = true;
+                if (needUnitReq)   { PRICE_STATE.unitLoaded = false;   PRICE_STATE.unitFailed = true; }
+                if (needDesignReq) { PRICE_STATE.designLoaded = false; PRICE_STATE.designFailed = true; }
             }).always(function () {
-                PRICE_STATE.unitPending = Math.max(0, PRICE_STATE.unitPending - 1);
+                if (needUnitReq)   PRICE_STATE.unitPending   = Math.max(0, PRICE_STATE.unitPending - 1);
+                if (needDesignReq) PRICE_STATE.designPending = Math.max(0, PRICE_STATE.designPending - 1);
             });
         }
 
         /** تلاشِ دوباره برای هر دو قیمت (وقتی ارسال به‌خاطرِ قیمتِ نالود‌شده مسدود می‌شود) */
         function retryCasePricing() {
-            refreshUnitPrice();
-            if (typeof reloadDesignFee === 'function') reloadDesignFee();
+            loadCasePricing();
         }
 
         /**
@@ -1657,6 +1754,8 @@ panel_layout_start('مدیریت کیس‌ها');
         var unprintedOnly = <?= !empty($_GET['unprinted_labels']) ? 1 : 0 ?>;
         // فیلتر «درخواست کست» — وضعیت اولیه از آدرس (?cast_requested=1)
         var castRequestedOnly = <?= !empty($_GET['cast_requested']) ? 1 : 0 ?>;
+        // فیلتر «فوری» — وضعیت اولیه از آدرس (?urgent=1)
+        var urgentOnly = <?= !empty($_GET['urgent']) ? 1 : 0 ?>;
 
         if (window.jQuery && typeof jQuery.fn.DataTable === 'function') {
             var table = jQuery('#cases-table').DataTable({
@@ -1679,9 +1778,10 @@ panel_layout_start('مدیریت کیس‌ها');
                         d.unprinted_labels = unprintedOnly ? 1 : 0;
                         // فقط کیس‌هایی که از طراح درخواست کست شده است
                         d.cast_requested = castRequestedOnly ? 1 : 0;
+                        d.urgent = urgentOnly ? 1 : 0;
                     }
                 },
-                order: [[10, 'desc']], // received_date column
+                order: [[11, 'desc']], // received_date column
                 responsive: true,
                 pageLength: 100,
                 lengthMenu: [25, 50, 100, 250, 500, -1],
@@ -1693,28 +1793,28 @@ panel_layout_start('مدیریت کیس‌ها');
                     layout: 'columns-2',
                     // INTEGER column positions -> creates panes ONLY for these columns.
                     // If empty, SearchPanes would create a pane for EVERY column.
-                    columns: [2, 3, 5, 7, 12, 16]  /* doctor, designer, service, shade, lab, status(text) */
+                    columns: [2, 3, 4, 6, 8, 13, 17]  /* doctor, clinic, designer, service, shade, lab, status(text) */
                 },
                 columnDefs: [
-                    // location/teeth (col 6): اجازه بده متن طولانی (شماره دندان‌ها) در ۲ ردیف بشکند؛
+                    // location/teeth (col 7): اجازه بده متن طولانی (شماره دندان‌ها) در ۲ ردیف بشکند؛
                     // محدودیت ۲ ردیف روی یک <div> داخلی اعمال می‌شود (نه روی خودِ td — چیدمان جدول را خراب می‌کند)
-                    { targets: [6], width: '140px', createdCell: function(td, cellData){
+                    { targets: [7], width: '140px', createdCell: function(td, cellData){
                         td.style.whiteSpace = 'normal';
                         td.style.wordBreak = 'break-word';
                         td.title = String(cellData || '');
                     } },
                     // clean header for the plain-status pane (its <th> says "وضعیت (متن)")
-                    { targets: [16], searchPanes: { header: 'وضعیت' } },
-                    // ستون وضعیت (۹): متن طولانی در حداکثر دو ردیف؛ متن کامل در hover (title)
-                    { targets: [9], width: '150px', createdCell: function(td, cellData, rowData){
+                    { targets: [17], searchPanes: { header: 'وضعیت' } },
+                    // ستون وضعیت (۱۰): متن طولانی در حداکثر دو ردیف؛ متن کامل در hover (title)
+                    { targets: [10], width: '150px', createdCell: function(td, cellData, rowData){
                         td.style.whiteSpace = 'normal';
                         td.style.wordBreak = 'break-word';
                         td.title = String(rowData[15] || '');
                     } },
                     // ستون انتخاب (۰): کل سلول label است ⇢ انتخاب با یک کلیک/لمس هر جای سلول
                     { targets: [0], className: 'case-cb-cell', orderable: false, responsivePriority: 1 },
-                    // ستون سایه (۷): رنگ زمینهٔ سلول = رنگ استاندارد سایه
-                    { targets: [7], createdCell: function(td){
+                    // ستون سایه (۸): رنگ زمینهٔ سلول = رنگ استاندارد سایه
+                    { targets: [8], createdCell: function(td){
                         var el = td.querySelector('[data-shade-color]');
                         var c = el ? (el.getAttribute('data-shade-color') || '') : '';
                         if (c) { td.style.backgroundColor = c; td.style.color = '#1f2937'; td.style.fontWeight = '700'; td.style.boxShadow = 'inset 0 0 0 1px rgba(15,23,42,0.08)'; }
@@ -1727,6 +1827,10 @@ panel_layout_start('مدیریت کیس‌ها');
                         if (type === 'display' && row[14]) {
                             num = '<span style="background:#dcfce7; color:#166534; border-radius:6px; padding:2px 8px; font-weight:bold;" title="برچسب چاپ شده">' + data + '</span>';
                         }
+                        if (type === 'display' && row[23]) {
+                            // 🔥 فوری — اولِ ستونِ اول تا طراح بلافاصله ببیند
+                            num = '<span style="background:#fee2e2; color:#b91c1c; border:1px solid #fecaca; border-radius:6px; padding:1px 6px; font-size:0.72rem; font-weight:bold; margin-left:2px;" title="کیس فوری — در اولویت طراحی">🔥 فوری</span> ' + num;
+                        }
                         if (type === 'display' && row[22]) {
                             num += ' <span style="background:#ede9fe; color:#5b21b6; border:1px solid #ddd6fe; border-radius:6px; padding:1px 6px; font-size:0.72rem; font-weight:bold;" title="برای این کیس درخواست کست از طراح ثبت شده است">🦷 کست</span>';
                         }
@@ -1736,6 +1840,7 @@ panel_layout_start('مدیریت کیس‌ها');
                         return num;
                     } },
                     { data: 1 },
+                    { data: 24 }, /* clinic – نام کلینیک صاحبِ کیس */
                     { data: 12, visible: <?= $isDesigner ? 'false' : 'true' ?> }, /* designer – نام طراحِ واقعی فقط برای کاربران داخلی؛ برای نقش‌های بیرونی «طراح پیش‌فرض» */
                     { data: 2 },
                     { data: 3, render: function(data, type, row){
@@ -1765,9 +1870,10 @@ panel_layout_start('مدیریت کیس‌ها');
                     { data: 11, orderable: false, searchable: false }, /* actions */
                     { data: 15, visible: false, searchable: true }, /* plain status text for SearchPanes */
                     { data: 21, visible: false, searchable: false }, /* quantity – فقط برای جمعِ «تعداد واحد» */
-                    { data: 22, visible: false, searchable: false }  /* cast_requested – فقط برچسبِ «کست» */
+                    { data: 22, visible: false, searchable: false },  /* cast_requested – فقط برچسبِ «کست» */
+                    { data: 23, visible: false, searchable: false }   /* is_urgent – فقط برچسبِ «فوری» */
                 ],
-                order: [[10, 'desc']], // received_date column always at index 10
+                order: [[11, 'desc']], // received_date column always at index 11
                 language: {
                     search: "جستجو:",
                     lengthMenu: "نمایش _MENU_ در هر صفحه",
@@ -1970,6 +2076,47 @@ panel_layout_start('مدیریت کیس‌ها');
             window.updateCastBtn();
             if (castRequestedOnly) { try { table.ajax.reload(null, false); } catch(e){} }
 
+            // ── فیلتر «فوری‌ها» ──
+            // کیس‌هایی که «فوری» علامت خورده‌اند؛ طراح با این فیلتر فقط کارهای
+            // اولویت‌دار را می‌بیند و می‌تواند اولویتِ طراحی را بر همان اساس بچیند.
+            window.updateUrgentBtn = function(){
+                var b = document.getElementById('toggle-urgent-btn');
+                if (!b) return;
+                if (urgentOnly) {
+                    b.textContent = '🔥 فقط فوری‌ها ✓';
+                    b.style.background = '#0F172A';
+                    b.title = 'کلیک کنید تا همهٔ کیس‌ها نمایش داده شوند';
+                } else {
+                    b.textContent = '🔥 فوری‌ها';
+                    b.style.background = '#dc2626';
+                    b.title = 'فقط کیس‌های فوری (اولویتِ طراحی)';
+                }
+            };
+            window.toggleUrgent = function(){
+                urgentOnly = urgentOnly ? 0 : 1;
+                window.updateUrgentBtn();
+                try {
+                    var url = new URL(window.location.href);
+                    if (urgentOnly) { url.searchParams.set('urgent', '1'); } else { url.searchParams.delete('urgent'); }
+                    window.history.replaceState({}, '', url.toString());
+                } catch(e){}
+                try { table.ajax.reload(); } catch(e){}
+            };
+            window.updateUrgentBtn();
+            if (urgentOnly) { try { table.ajax.reload(null, false); } catch(e){} }
+
+            // فیلتر کلینیک: با تغییرِ انتخاب، جدول فوراً دوباره بارگذاری شود
+            // (قبلاً فقط در دادهٔ درخواست خوانده می‌شد و بدون زدن «اعمال بازه تاریخ» هیچ اتفاقی نمی‌افتاد)
+            jQuery('#clinic_filter').on('change', function(){
+                try {
+                    var url = new URL(window.location.href);
+                    var v = jQuery(this).val() || '';
+                    if (v !== '') { url.searchParams.set('clinic_id', v); } else { url.searchParams.delete('clinic_id'); }
+                    window.history.replaceState({}, '', url.toString());
+                } catch(e){}
+                try { table.ajax.reload(); } catch(e){}
+            });
+
             // Date-range filter (reload with the jalali range → server converts to gregorian)
             jQuery('#date-filter-form').on('submit', function(e){
                 e.preventDefault();
@@ -2150,10 +2297,16 @@ panel_layout_start('مدیریت کیس‌ها');
                     // بنابراین فی خدمت و فی طراحی مستقیماً از get_price خوانده می‌شوند تا
                     // فرمِ کیسِ زیرمجموعه با فیلدهای خالی باز نشود.
                     if (suggestedSvc) {
-                        loadSubCasePricingFromDb(String(suggestedSvc),
-                            String(parentCase.doctor_id || ''),
-                            String(parentCase.lab_id || ''),
-                            String(parentCase.case_type || 'doctor'));
+                        // یک تیک صبر می‌کنیم تا اجرای کل اسکریپت تمام شود و همهٔ توابعِ
+                        // قیمت (فی خدمت/فی طراحی) قطعاً تعریف شده باشند. بدون این کار،
+                        // اگر تعریفِ یکی از آن‌ها بعد از این نقطه باشد، خطای
+                        // «... is not a function» رخ می‌دهد و مودال اصلاً باز نمی‌شود.
+                        setTimeout(function () {
+                            loadSubCasePricingFromDb(String(suggestedSvc),
+                                String(parentCase.doctor_id || ''),
+                                String(parentCase.lab_id || ''),
+                                String(parentCase.case_type || 'doctor'));
+                        }, 0);
                     }
 
                     // وضعیت هم معادل کیسِ اصلی انتخاب می‌شود (اول گزینه را اضافه کن، بعد مقدار بده)
@@ -2488,6 +2641,9 @@ panel_layout_start('مدیریت کیس‌ها');
                 // درخواست کست از طراح
                 var castEl = document.getElementById('case-cast-requested');
                 if (castEl) castEl.checked = !!Number(data.case_cast_requested || 0);
+                // فوری (اولویتِ طراحی)
+                var urgentEl = document.getElementById('case-urgent');
+                if (urgentEl) urgentEl.checked = !!Number(data.is_urgent || 0);
                 // مقادیرِ فی از دیتابیس آمده‌اند → "بارگذاریِ قیمت" لازم نیست و گاردِ ارسال
                 // نباید جلوی ذخیرهٔ کیس را بگیرد.
                 PRICE_STATE.unitPending = 0; PRICE_STATE.unitLoaded = true; PRICE_STATE.unitFailed = false;
@@ -2605,10 +2761,10 @@ panel_layout_start('مدیریت کیس‌ها');
                 });
             });
             // Auto-update unit price when doctor, lab, service, or case type changes in the modal.
-            // همهٔ حالت‌ها به refreshUnitPrice می‌روند تا «وضعیتِ بارگذاری» ثبت شود
-            // (وگرنه ارسالِ سریع، فیِ خالی/۰ را ذخیره می‌کرد).
-            jQuery('#case-doctor-id, #case-service-id, #case-lab-id, #case-type').on('change', function() {
-                refreshUnitPrice();
+            // «فی خدمت + فی طراحی» با یک درخواست خوانده می‌شوند (تغییرِ خدمت و پزشک
+            //  هندلرِ مخصوصِ خودشان را دارند — با ترتیبِ درستِ انتخابِ طراح).
+            jQuery('#case-lab-id, #case-type').on('change', function() {
+                loadCasePricing();
             });
             // اگر کاربر خودش فی/فی طراحی را وارد کند، دیگر «قیمتِ نالود‌شده» مانعِ ذخیره نمی‌شود
             jQuery(document).on('input change', '#case-unit-price', function() {
@@ -2643,7 +2799,10 @@ panel_layout_start('مدیریت کیس‌ها');
                 var serviceId = jQuery('#case-service-id').val();
                 var note = document.getElementById('case-design-note');
                 var userChangedService = (mode === 'service');
-                if (!serviceRequiresDesign(serviceId)) {
+                var needsDesign = (typeof window.serviceRequiresDesign === 'function')
+                    ? window.serviceRequiresDesign(serviceId)
+                    : true;
+                if (!needsDesign) {
                     if (userChangedService) jQuery('#case-designer-id').val('');
                     if (note) {
                         note.textContent = 'برای این خدمت طراحی لازم نیست؛ کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.';
@@ -2668,63 +2827,11 @@ panel_layout_start('مدیریت کیس‌ها');
                 return (m[serviceId] === undefined) ? null : parseFloat(m[serviceId]);
             }
 
-            // Load per-unit design fee for the selected designer + service
+            // Load per-unit design fee for the selected designer + service.
+            // سازگاری: حالا فقط فی طراحی را از همان درخواستِ ترکیبیِ POST می‌خواند
+            // (منطقش داخل loadCasePricing است: خدمتِ بدون طراحی → ۰، طراح خالی → پیش‌فرضِ خدمت).
             function reloadDesignFee() {
-                var designerId = jQuery('#case-designer-id').val();
-                var serviceId = jQuery('#case-service-id').val();
-                // خدمتِ بدون طراحی → هزینهٔ طراحی صفر (طراحی معنا ندارد)
-                if (!serviceRequiresDesign(serviceId)) {
-                    currentDesignUnitFee = null;
-                    jQuery('#case-design-fee').val('0');
-                    setDesignFeeNote('');
-                    PRICE_STATE.designPending = 0; PRICE_STATE.designLoaded = true; PRICE_STATE.designFailed = false;
-                    return;
-                }
-                if (!serviceId) {
-                    currentDesignUnitFee = null;
-                    setDesignFeeNote('');
-                    PRICE_STATE.designPending = 0; PRICE_STATE.designLoaded = false; PRICE_STATE.designFailed = false;
-                    return;
-                }
-                // اگر طراحی انتخاب نشده باشد، فقط می‌توان از پیش‌فرضِ خدمت استفاده کرد.
-                if (!designerId) {
-                    var def0 = serviceDefaultDesignFee(serviceId);
-                    currentDesignUnitFee = def0;
-                    applyDesignFee();
-                    setDesignFeeNote(def0 === null ? '' : 'از «فی طراحی پیش‌فرضِ خدمت» استفاده شد (طراحی انتخاب نشده است).');
-                    PRICE_STATE.designPending = 0; PRICE_STATE.designLoaded = true; PRICE_STATE.designFailed = false;
-                    return;
-                }
-                PRICE_STATE.designPending++;
-                PRICE_STATE.designFailed = false;
-                jQuery.ajax({
-                    url: 'get_price.php',
-                    data: { doctor_id: designerId, service_id: serviceId, price_type: 'design_fee' },
-                    dataType: 'json',
-                    cache: false,
-                    timeout: 20000,
-                    success: function(resp) {
-                        // get_price اکنون در نبودِ نرخ اختصاصی، خودش پیش‌فرضِ خدمت را
-                        // برمی‌گرداند؛ ولی برای اطمینان، همین‌جا هم فالبک می‌کنیم.
-                        var fee = (resp && resp.price !== null && resp.price !== undefined) ? parseFloat(resp.price) : null;
-                        if (fee === null || isNaN(fee)) fee = serviceDefaultDesignFee(serviceId);
-                        currentDesignUnitFee = fee;
-                        setDesignFeeNote(fee === null
-                            ? '⚠️ برای این طراح و خدمت نرخی ثبت نشده است؛ فی طراحی ۰ می‌ماند. مبلغ درست را دستی وارد کنید، یا «فی طراحی پیش‌فرض» این خدمت را در قیمت‌ها تعیین کنید.'
-                            : '');
-                        PRICE_STATE.designLoaded = true;
-                        PRICE_STATE.designFailed = false;
-                        applyDesignFee();
-                    },
-                    error: function() {
-                        // قیمتِ طراحی خوانده نشد → اجازهٔ ذخیره نده (دوباره تلاش می‌شود)
-                        PRICE_STATE.designLoaded = false;
-                        PRICE_STATE.designFailed = true;
-                    },
-                    complete: function() {
-                        PRICE_STATE.designPending = Math.max(0, PRICE_STATE.designPending - 1);
-                    }
-                });
+                return loadCasePricing({ price: false });
             }
 
             // design fee (تومان) = فی هر واحد طراحی (نرخ طراح × ۱) — نه جمع کل.
@@ -2735,10 +2842,11 @@ panel_layout_start('مدیریت کیس‌ها');
                 jQuery('#case-design-fee').val(Math.round(currentDesignUnitFee));
             }
 
-            // تغییر خدمت → پیش‌فرضِ طراح را اعمال کن، سپس هزینهٔ طراحی/تعداد را حساب کن
+            // تغییر خدمت → پیش‌فرضِ طراح را اعمال کن، سپس فی خدمت + فی طراحی را
+            // با یک درخواست بگیر (بعد از انتخابِ طراح، تا نرخِ همان طراح خوانده شود)
             jQuery('#case-service-id').on('change', function() {
                 syncDesignerWithService('service');
-                reloadDesignFee();
+                loadCasePricing();
                 // حالت تعداد (دستی/خودکار) با خدمتِ جدید عوض می‌شود؛ مقدار به حالت خودکار برمی‌گردد
                 applyQtyMode();
                 jQuery('#case-quantity').val(autoQuantityValue());
@@ -2767,14 +2875,11 @@ panel_layout_start('مدیریت کیس‌ها');
             // (تعریف‌های تابع بالاتر در بلوکِ add_sub هم استفاده می‌شوند — hoisting کار می‌کند.)
             function loadSubCasePricingFromDb(serviceId, doctorId, labId, caseType) {
                 if (!serviceId) return;
-                // ۱) فی خدمت (کیسِ لابراتواری از نرخِ لابراتوار، بقیه از نرخِ پزشک/عمومی)
-                //    از همان refreshUnitPrice استفاده می‌شود تا وضعیتِ بارگذاری هم ثبت شود
-                //    (وگرنه گاردِ ارسال فکر می‌کرد قیمت هیچ‌وقت خوانده نشده است).
-                refreshUnitPrice({ serviceId: serviceId, doctorId: doctorId, labId: labId, caseType: caseType });
-                // ۲) فی طراحی — دقیقاً همان منطقِ reloadDesignFee (طراح، فی طراحی پیش‌فرض،
-                //    یا خدمتِ بدون طراحی). فراخوانیِ مستقیم (نه trigger('change')) چون در
-                //    فرمِ محدودِ پزشک، فیلدِ طراح ممکن است hidden باشد و trigger کار نکند.
-                if (typeof reloadDesignFee === 'function') reloadDesignFee();
+                // فی خدمت + فی طراحی، هر دو با **یک** درخواستِ POST.
+                // (قبلاً دو درخواستِ جدا می‌رفت و در روزهای کندی سرور خالی برمی‌گشتند.)
+                // فراخوانیِ مستقیم (نه trigger('change')) چون در فرمِ محدودِ پزشک،
+                // فیلدِ طراح ممکن است hidden باشد.
+                loadCasePricing({ serviceId: serviceId, doctorId: doctorId, labId: labId, caseType: caseType });
             }
             var DEFAULT_CONNECTION_TYPE = 'cement-retained';   // «چسب‌شونده»
             function toggleCaseScanBodyField() {
@@ -2833,6 +2938,8 @@ panel_layout_start('مدیریت کیس‌ها');
             jQuery('#case-doctor-id').on('change', function(){
                 syncCaseClinicFromDoctor();
                 applyDoctorDefaultDesigner();
+                // یک درخواست برای هر دو قیمت (طراح پیش‌فرض هم همین‌جا اعمال شده است)
+                loadCasePricing();
             });
 
             // ── طراح پیش‌فرضِ اختصاصیِ پزشک ──
@@ -2865,7 +2972,8 @@ panel_layout_start('مدیریت کیس‌ها');
                 if (current !== String(did)) {
                     keepDesignerOption(did);
                     sel.value = String(did);
-                    reloadDesignFee();
+                    // ⚠️ اینجا درخواستِ قیمت فرستاده نمی‌شود؛ هندلرِ change پزشک
+                    // بعد از این تابع یک درخواستِ ترکیبی می‌فرستد (بدون درخواستِ تکراری).
                     applyServicePricingNote();
                 }
             }

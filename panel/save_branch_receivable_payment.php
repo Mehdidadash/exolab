@@ -37,5 +37,5 @@ $data = [
 ];
 $savedId = saveBranchReceivablePayment($data);
 audit_log_save('branch_receivable_payment', $savedId, 'دریافت از شعبه همکار');
-header('Location: branch_receivables.php');
+header('Location: payments.php?type=branch');
 exit;

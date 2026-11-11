@@ -610,6 +610,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
                             <?php if ($navCanInv): ?>
                                 <span class="menu-label">فاکتورها</span>
                                 <a href="invoices.php">فاکتورها</a>
+                                <?php if ($navIsAdmin): ?><a href="issue_invoice.php">صدور فاکتور (پزشک/کلینیک/لابراتوار/طراح/شعبه)</a><?php endif; ?>
                                 <?php if ($navIsAdmin): ?><a href="expenses.php">فاکتورهای مخارج (بدهی‌ها)</a><?php endif; ?>
                                 <?php if ($navIsAdmin): ?><a href="branch_receivables.php">فاکتور طلب از شعبه‌ها</a><?php endif; ?>
                             <?php endif; ?>

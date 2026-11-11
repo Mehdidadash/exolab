@@ -577,6 +577,54 @@ function caseFileNamingPrefix(array $caseRow, ?string $suffix = null): string {
 }
 
 /**
+ * آیا این نامِ پوشه، خروجیِ خودکارِ دستگاه اسکن است؟
+ * نمونه‌های واقعی: «P2026-11-04_200301-alikhani-man-man»، «20261104_200301»،
+ * «2026-11-04_20-03-01». این‌ها را در نامِ فایلِ ZIP نمی‌آوریم (خواستهٔ کاربر: نامِ کوتاه‌تر).
+ */
+function caseIsMachineFolderName(string $name): bool
+{    $n = trim($name);
+    if ($n === '') {
+        return false;
+    }
+    // P2026-11-04_200301-...  یا  2026-11-04_200301
+    if (preg_match('/^P?\s*\d{4}-\d{2}-\d{2}[_\-T ]\d{2}[:\-]?\d{2}/i', $n)) {
+        return true;
+    }
+    // 20261104_200301
+    if (preg_match('/^\d{8}[_\-]\d{4,6}/', $n)) {
+        return true;
+    }
+    // P20261104200301
+    if (preg_match('/^P\d{8,}$/i', $n)) {
+        return true;
+    }
+    return false;
+}
+
+/**
+ * کوتاه‌کردنِ یک برچسب در نامِ فایل — بدون بریدنِ وسطِ کلمه (کلمات با «-» جدا شده‌اند)
+ * و بدون حذفِ همهٔ برچسب وقتی بریدن نتیجه‌یخیلی کوتاه می‌دهد.
+ */
+function caseShortenLabel(string $value, int $max = 20): string
+{
+    $value = trim($value);
+    if ($max < 4 || mb_strlen($value) <= $max) {
+        return $value;
+    }
+    $cut = mb_substr($value, 0, $max);
+    // اگر کاراکترِ بعدی ادامهٔ همان کلمه است، تا آخرین «-» عقب برو
+    $next = mb_substr($value, $max, 1);
+    if ($next !== '' && $next !== '-' && strpos($cut, '-') !== false) {
+        $pos = strrpos($cut, '-');
+        if ($pos !== false && $pos >= 6) {
+            $cut = substr($cut, 0, $pos);
+        }
+    }
+    $cut = trim($cut, " -_.");
+    return $cut !== '' ? $cut : trim(mb_substr($value, 0, $max), " -_.");
+}
+
+/**
  * نامِ پایهٔ فایل‌های ZIP دانلود — خوانا و شاملِ شمارهٔ کیس:
  *   {شماره کیس}_{نام بیمار (فینگلیش)}_{سایه}_{دندان}[_{نام پوشه}]
  *
@@ -587,6 +635,10 @@ function caseFileNamingPrefix(array $caseRow, ?string $suffix = null): string {
  * نشانی از شمارهٔ کیس و نام بیمار در نامِ فایل نبود و طراح نمی‌توانست کارها را
  * از هم تشخیص دهد.
  *
+ * کوتاه‌سازی (خواستهٔ کاربر ۲۰۲۶-۱۱-۰۸):
+ *   • اگر نامِ پوشه خروجیِ ماشینیِ دستگاه اسکن باشد، **حذف** می‌شود.
+ *   • نام پوشه حداکثر ۲۰ و نام بیمار حداکثر ۲۴ کاراکتر (بدون بریدن وسطِ کلمهٔ جدا‌شده با «-»).
+ *
  * @param int         $caseId     شناسهٔ کیس
  * @param string|null $folderName نام پوشه (اختیاری — برای ZIPهای تک‌پوشه‌ای)
  */
@@ -595,20 +647,27 @@ function caseDownloadBaseName(int $caseId, ?string $folderName = null): string
     if ($caseId <= 0) {
         return 'case';
     }
-    $row = [];
-    try {
-        $st = db()->prepare('SELECT id, patient_name, shade, teeth FROM cases WHERE id = ? LIMIT 1');
-        $st->execute([$caseId]);
-        $row = $st->fetch() ?: [];
-    } catch (Throwable $e) {
-        $row = [];
+    // کشِ ردیف کیس (در یک درخواست چند بار برای شعبه‌های مختلف صدا زده می‌شود)
+    static $caseCache = [];
+    if (!array_key_exists($caseId, $caseCache)) {
+        $caseCache[$caseId] = [];
+        try {
+            $st = db()->prepare('SELECT id, patient_name, shade, teeth FROM cases WHERE id = ? LIMIT 1');
+            $st->execute([$caseId]);
+            $caseCache[$caseId] = $st->fetch() ?: [];
+        } catch (Throwable $e) {
+            $caseCache[$caseId] = [];
+        }
     }
+    $row = $caseCache[$caseId];
 
     $patient = '';
     if (function_exists('persian_to_finglish')) {
         $patient = trim((string) persian_to_finglish((string) ($row['patient_name'] ?? '')));
     }
     $patient = trim((string) preg_replace('/\s+/u', '-', $patient), '-');
+    // کوتاه‌سازیِ نامِ بیمار (بدون بریدن وسطِ بخشِ جداشده با «-»)
+    $patient = caseShortenLabel($patient, 24);
 
     $shade = trim((string) ($row['shade'] ?? ''));
 
@@ -621,6 +680,12 @@ function caseDownloadBaseName(int $caseId, ?string $folderName = null): string
 
     $folder = trim((string) $folderName);
     $folder = (string) preg_replace('/\s+/u', '-', $folder);
+    // نامِ ماشینیِ دستگاه اسکن → در نامِ ZIP نمی‌آید (نام کوتاه‌تر و خوانا‌تر)
+    if ($folder !== '' && caseIsMachineFolderName($folder)) {
+        $folder = '';
+    }
+    $folder = trim($folder, '-_.');
+    $folder = caseShortenLabel($folder, 20);
 
     $parts = array_filter(
         [(string) $caseId, $patient, $shade, $teeth, $folder],
@@ -1209,6 +1274,30 @@ function caseCastBadge(): string
         . 'border-radius:6px; padding:1px 7px; font-size:0.72rem; font-weight:700; white-space:nowrap;">🦷 کست</span>';
 }
 
+// =====================================================
+// «فوری» بودنِ کیس — اولویتِ طراحی
+// =====================================================
+// کاربر می‌تواند در فرمِ ایجاد/ویرایش کیس آن را «فوری» علامت بزند
+// (cases.is_urgent). طراح در ستونِ اولِ جدولِ کیس‌ها و در صفحهٔ کیس نشانِ
+// 🔥 «فوری» می‌بیند و می‌تواند کار را در اولویتِ طراحی قرار دهد.
+
+/** آیا این کیس «فوری» علامت خورده است؟ */
+function caseIsUrgent(?array $case): bool
+{
+    if (!is_array($case)) return false;
+    return !empty($case['is_urgent']);
+}
+
+/** برچسبِ «فوری» برای جدولِ کیس‌ها و صفحهٔ کیس. */
+function caseUrgentBadge(bool $large = false): string
+{
+    $pad   = $large ? '3px 10px' : '1px 7px';
+    $size  = $large ? '0.8rem' : '0.72rem';
+    return '<span class="case-urgent-badge" title="این کیس فوری است — در اولویتِ طراحی" '
+        . 'style="display:inline-block; background:#fee2e2; color:#b91c1c; border:1px solid #fecaca; '
+        . 'border-radius:6px; padding:' . $pad . '; font-size:' . $size . '; font-weight:700; white-space:nowrap;">🔥 فوری</span>';
+}
+
 /**
  * آدرس پایهٔ عمومیِ برنامه (بدون اسلش انتهایی) — برای ساخت لینک‌های مطلق مثل QR روی برچسب.
  *   لوکال (XAMPP):  http://localhost/exolab
@@ -1347,7 +1436,8 @@ function labCanonicalIdList(array $ids): array
  *   • پزشک/کلینیک/لابراتوار → `doctor_invoices` (فاکتور) و `doctor_payments` (پرداختی)
  *     – لابراتوار: فاکتورهای `INV-LAB%` (doctor_id یا doctor_name = خودش)
  *     – پزشک/کلینیک: فاکتورهای غیرِ `INV-LAB%`
- *   • شعبه → `branch_receivables` (فاکتور) و `branch_receivable_payments` (پرداختی)
+ *   • شعبه → `branch_receivables` (فاکتور) و `doctor_payments` (پرداختی، با
+ *     `branch_receivable_id` — از مهاجرت ۰۸۹ به بعد)
  *
  * @param string $party  'doctor' | 'clinic' | 'lab' | 'branch'
  * @param int    $userId شناسهٔ کاربر (یا شناسهٔ شعبه در حالت 'branch')
@@ -1426,8 +1516,8 @@ function partyDebtBreakdown(string $party, int $userId, array $opts = []): array
             $out['invoiced_raw']  = (float) $br['total'];
 
             $st = $db->prepare("SELECT COALESCE(SUM(p.amount), 0)
-                                FROM branch_receivable_payments p
-                                JOIN branch_receivables br ON br.id = p.receivable_id
+                                FROM doctor_payments p
+                                JOIN branch_receivables br ON br.id = p.branch_receivable_id
                                 WHERE $bwSql");
             $st->execute($bp);
             $out['paid']     = (float) $st->fetchColumn();
@@ -1583,4 +1673,517 @@ function partyDebtBreakdown(string $party, int $userId, array $opts = []): array
     }
 
     return $out;
+}
+
+/**
+ * ⭐ «خالص حسابِ هر شعبه» — تصویر لحظه‌ای (مستقل از بازهٔ تاریخ).
+ *
+ * برای هر شعبه، خالصِ حساب با هر طرف‌حساب در چهار گروه برمی‌گردد:
+ *   doctors  = پزشکان   (فاکتور INV-… )
+ *   clinics  = کلینیک‌ها (فاکتور INV-CLN…)
+ *   labs     = لابراتوارهای **همین شعبه**  (INV-LAB منهای فاکتور برون‌سپاری)
+ *   branches = شعبه‌های همکار (فاکتور طلب از شعبه + کار بین‌شعبه‌ایِ صورتحساب‌نشده)
+ *
+ * علامت‌ها: مثبت = طرف‌حساب به این شعبه بدهکار است، منفی = این شعبه به طرف‌حساب بدهکار است.
+ *
+ * ── قواعدِ «هر مبلغ دقیقاً یک بار» (منبعِ باگِ قبلی) ──────────────────────
+ *  ۱) کیسی که «فاکتور طلب از شعبه» دارد (`cases.receivable_invoice_id`) فقط از راه
+ *     همان فاکتور حساب می‌شود؛ نه به‌عنوان کارِ فاکتورنشده و نه از راه فاکتورِ
+ *     برون‌سپاری‌اش. (قبلاً هم فاکتور و هم کیس شمرده می‌شد ⇒ بدهی چند برابر.)
+ *  ۲) کیسی که فاکتور برون‌سپاری دارد (`cases.outsource_invoice_id`) از راه همان
+ *     فاکتور حساب می‌شود، نه به‌عنوان «کارِ فاکتورنشده».
+ *  ۳) هر رابطه‌ای که طرفِ آن **لابراتوارِ شعبهٔ دیگر** باشد، در گروه «شعبه‌های همکار»
+ *     حساب می‌شود (پول به آن شعبه می‌رود)، نه در گروه لابراتوارها.
+ *  ۴) نتیجه: خالصِ هر دو شعبه با هم قرینه است (Σ = ۰) و هیچ مبلغی دو بار نمی‌آید.
+ *
+ * ── بیش‌پرداخت ────────────────────────────────────────────────────────────
+ * اگر شعبه‌ای بیشتر از مبلغ فاکتورِ طلب پرداخت کند، `due` منفی می‌شود و همان‌طور
+ * منفی (به‌عنوان طلبِ ما از آن شعبه) در محاسبه می‌ماند — هیچ‌جا صفر/گُرِد نمی‌شود.
+ * مقدار بیش‌پرداخت هم در کلید `overpaid` هر ردیف برگردانده می‌شود.
+ *
+ * @return array{
+ *   names:  array<int,string>,
+ *   groups: array<int,array{doctors:array,labs:array,clinics:array,branches:array}>,
+ *   totals: array<int,array<string,float>>
+ * }
+ */
+function branchNetBreakdown(): array
+{
+    $result = ['names' => [], 'groups' => [], 'totals' => []];
+
+    try {
+        $branches = getAllBranches();
+    } catch (\Throwable $e) {
+        $branches = [];
+    }
+    foreach ($branches as $br) {
+        $result['names'][(int) $br['id']] = (string) $br['name'];
+    }
+    if (!isset($result['names'][1])) {
+        $result['names'][1] = 'شعبه اصلی';
+    }
+    foreach (array_keys($result['names']) as $bId) {
+        $result['groups'][$bId] = ['doctors' => [], 'clinics' => [], 'labs' => [], 'branches' => []];
+    }
+
+    // شعبه‌ای که در جدول branches نیست (مثلاً حذف شده) هم باید کارتش ساخته شود،
+    // وگرنه مبالغِ آن بی‌صدا از گزارش می‌افتند.
+    $registerBranch = static function ($id) use (&$result): void {
+        $id = (int) $id;
+        if ($id <= 0) {
+            return;
+        }
+        if (!isset($result['names'][$id])) {
+            $result['names'][$id] = 'شعبه ' . $id;
+        }
+        if (!isset($result['groups'][$id])) {
+            $result['groups'][$id] = ['doctors' => [], 'clinics' => [], 'labs' => [], 'branches' => []];
+        }
+    };
+
+    try {
+        $db = db();
+
+        // کشِ شعبهٔ هر کاربر (جلوگیری از کوئری تکراری داخل حلقه‌ها)
+        $branchOfUser = static function (int $uid): int {
+            static $cache = [];
+            if ($uid <= 0) {
+                return 0;
+            }
+            if (!array_key_exists($uid, $cache)) {
+                $cache[$uid] = 0;
+                try {
+                    $st = db()->prepare('SELECT branch_id FROM users WHERE id = ?');
+                    $st->execute([$uid]);
+                    $cache[$uid] = (int) ($st->fetchColumn() ?: 0);
+                } catch (\Throwable $e) {
+                }
+            }
+            return $cache[$uid];
+        };
+        $fallbackBranch = static function ($branchId, int $userId) use ($branchOfUser): int {
+            $b = (int) ($branchId ?: 0);
+            if ($b <= 0) {
+                $b = $branchOfUser($userId);
+            }
+            return $b > 0 ? $b : 1;
+        };
+
+        // ── خالصِ بین‌شعبه‌ای: [creditor][debtor] = ['recv','pay','overpaid'] ──
+        $brAgg = [];
+        $addPair = static function (int $creditor, int $debtor, float $amount, float $overpaid = 0.0) use (&$brAgg, $registerBranch) {
+            if ($creditor <= 0 || $debtor <= 0 || $creditor === $debtor) {
+                return;
+            }
+            if (abs($amount) < 0.005 && $overpaid <= 0.005) {
+                return;
+            }
+            $registerBranch($creditor);
+            $registerBranch($debtor);
+            if (!isset($brAgg[$creditor][$debtor])) {
+                $brAgg[$creditor][$debtor] = ['recv' => 0.0, 'pay' => 0.0, 'overpaid' => 0.0, 'overpaid_mine' => false];
+            }
+            if (!isset($brAgg[$debtor][$creditor])) {
+                $brAgg[$debtor][$creditor] = ['recv' => 0.0, 'pay' => 0.0, 'overpaid' => 0.0, 'overpaid_mine' => false];
+            }
+            $brAgg[$creditor][$debtor]['recv'] += $amount;
+            $brAgg[$debtor][$creditor]['pay'] += $amount;
+            if ($overpaid > 0.005) {
+                // «overpaid_mine» = این شعبه (صاحبِ کارت) بوده که بیشتر پرداخت کرده
+                $brAgg[$creditor][$debtor]['overpaid'] += $overpaid;
+                $brAgg[$creditor][$debtor]['overpaid_mine'] = false;
+                $brAgg[$debtor][$creditor]['overpaid'] += $overpaid;
+                $brAgg[$debtor][$creditor]['overpaid_mine'] = true;
+            }
+        };
+
+        // مبلغِ برون‌سپاریِ یک کیس (همان منطقِ getUninvoicedInboundPartnerCases)
+        $caseOutsourceAmount = static function (array $row): float {
+            $isLabOut = (($row['case_type'] ?? '') === 'lab_out');
+            $qty = $isLabOut ? (int) ($row['quantity'] ?? 1) : (int) ($row['outsourced_qty'] ?? 0);
+            if ($qty <= 0) {
+                return 0.0;
+            }
+            $svcId = $isLabOut ? (int) ($row['service_id'] ?? 0) : (int) ($row['outsourced_service_id'] ?? 0);
+            $labId = $isLabOut ? (int) ($row['lab_id'] ?? 0) : (int) ($row['outsourced_lab_id'] ?? 0);
+            $rate = ($row['outsourced_rate'] !== null && $row['outsourced_rate'] !== '')
+                ? (float) $row['outsourced_rate']
+                : (float) (getOutsourceRate($labId, $svcId, (int) ($row['branch_id'] ?? 0)) ?? 0.0);
+            return $rate > 0 ? (float) round($rate * $qty) : 0.0;
+        };
+
+        // ═══════════════ ۱) پزشکان و کلینیک‌ها ═══════════════
+        try {
+            $stmt = $db->query("
+                SELECT i.branch_id, i.doctor_id, i.invoice_number,
+                       COALESCE(u.full_name, i.doctor_name, '—') AS party,
+                       u.role AS urole,
+                       i.total_amount, COALESCE(pa.applied, 0) AS applied
+                FROM doctor_invoices i
+                LEFT JOIN users u ON u.id = i.doctor_id
+                LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied
+                           FROM doctor_payment_invoices GROUP BY invoice_id) pa ON pa.invoice_id = i.id
+            ");
+            $agg = [];
+            foreach ($stmt->fetchAll() as $r) {
+                // فاکتورهای لابراتوار در بخش ۲ حساب می‌شوند
+                if (strpos((string) $r['invoice_number'], 'INV-LAB') === 0) {
+                    continue;
+                }
+                $bId = $fallbackBranch($r['branch_id'] ?? 0, (int) $r['doctor_id']);
+                $isClinic = ($r['urole'] === 'clinic') || (strpos((string) $r['invoice_number'], 'INV-CLN') === 0);
+                $group = $isClinic ? 'clinics' : 'doctors';
+                $uid = (int) $r['doctor_id'];
+                $key = $uid . '|' . $r['party'];
+                if (!isset($agg[$bId][$group][$key])) {
+                    $agg[$bId][$group][$key] = ['name' => $r['party'], 'amount' => 0.0, 'count' => 0, 'uid' => $uid];
+                }
+                $agg[$bId][$group][$key]['amount'] += (float) $r['total_amount'] - (float) $r['applied'];
+                $agg[$bId][$group][$key]['count']++;
+            }
+            foreach ($agg as $bId => $groupItems) {
+                if (!isset($result['groups'][$bId])) {
+                    continue;
+                }
+                foreach ($groupItems as $g => $items) {
+                    foreach ($items as $it) {
+                        if (abs($it['amount']) < 0.01) {
+                            continue;
+                        }
+                        $result['groups'][$bId][$g][] = $it;
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // ═══════════════ ۲) لابراتوارها ═══════════════
+        $labAgg = [];   // [branchId][key] = ['name','recv','pay','count','uid']
+        $labRow = static function (int $bId, string $key, string $name, int $uid) use (&$labAgg, $registerBranch): void {
+            if ($bId <= 0) {
+                return;
+            }
+            $registerBranch($bId);
+            if (!isset($labAgg[$bId][$key])) {
+                $labAgg[$bId][$key] = ['name' => $name, 'recv' => 0.0, 'pay' => 0.0, 'count' => 0, 'uid' => $uid];
+            }
+        };
+
+        // ۲-الف) فاکتورهای INV-LAB (لابراتوار به ما بدهکار است)
+        try {
+            $stmt = $db->query("
+                SELECT i.id, i.branch_id, i.doctor_id, i.doctor_name,
+                       COALESCE(u.full_name, i.doctor_name, '—') AS party,
+                       u.branch_id AS lab_branch,
+                       i.total_amount, COALESCE(pa.applied, 0) AS applied,
+                       (SELECT COUNT(*) FROM invoice_items ii
+                         WHERE ii.invoice_id = i.id AND ii.case_id IS NOT NULL) AS case_cnt,
+                       (SELECT COUNT(*) FROM invoice_items ii
+                          JOIN cases c2 ON c2.id = ii.case_id
+                         WHERE ii.invoice_id = i.id AND c2.receivable_invoice_id IS NOT NULL) AS rec_cnt
+                FROM doctor_invoices i
+                LEFT JOIN users u ON u.id = i.doctor_id
+                LEFT JOIN (SELECT invoice_id, SUM(amount_applied) AS applied
+                           FROM doctor_payment_invoices GROUP BY invoice_id) pa ON pa.invoice_id = i.id
+                WHERE i.invoice_number LIKE 'INV-LAB%'
+            ");
+            foreach ($stmt->fetchAll() as $r) {
+                // کیس‌های همین فاکتور از راه «فاکتور طلب از شعبه» رفته‌اند → دوباره شمرده نشود
+                if ((int) ($r['rec_cnt'] ?? 0) > 0) {
+                    continue;
+                }
+                $due = (float) $r['total_amount'] - (float) $r['applied'];
+                if (abs($due) < 0.005) {
+                    continue;
+                }
+                $bId = $fallbackBranch($r['branch_id'] ?? 0, (int) $r['doctor_id']);
+                $labBranch = (int) ($r['lab_branch'] ?? 0);
+                $labId = (int) ($r['doctor_id'] ?? 0);
+                if ($labBranch > 0 && $labBranch !== $bId) {
+                    // لابراتوارِ شعبهٔ دیگر → رابطهٔ بین‌شعبه‌ای (طلبِ این شعبه از آن شعبه)
+                    $addPair($bId, $labBranch, $due);
+                    continue;
+                }
+                $key = ($labId ?: $r['party']) . '|' . $r['party'];
+                $labRow($bId, $key, (string) $r['party'], $labId);
+                $labAgg[$bId][$key]['recv'] += $due;
+                $labAgg[$bId][$key]['count']++;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // ۲-ب) کارهای فاکتورنشدهٔ لابراتوری (lab_id پر)
+        try {
+            $stmt = $db->query("
+                SELECT c.id, c.lab_id, c.branch_id, c.source_branch_id, c.case_type,
+                       COALESCE(c.total_price, 0) AS price,
+                       c.service_id, c.quantity, c.outsourced_lab_id, c.outsourced_service_id,
+                       c.outsourced_qty, c.outsourced_rate,
+                       c.receivable_invoice_id, c.outsource_invoice_id,
+                       COALESCE(u.full_name, CONCAT('لابراتوار #', c.lab_id)) AS party,
+                       u.branch_id AS lab_branch
+                FROM cases c
+                LEFT JOIN users u ON u.id = c.lab_id
+                WHERE c.lab_id IS NOT NULL
+                  AND c.invoice_id IS NULL
+                  AND c.status_id <> 5
+            ");
+            foreach ($stmt->fetchAll() as $r) {
+                // پوشش‌داده‌شده با فاکتور طلب از شعبه یا فاکتور برون‌سپاری → این‌جا نه
+                if (!empty($r['receivable_invoice_id']) || !empty($r['outsource_invoice_id'])) {
+                    continue;
+                }
+                $bId = $fallbackBranch($r['branch_id'] ?? 0, (int) $r['lab_id']);
+                $labId = (int) $r['lab_id'];
+                $labBranch = (int) ($r['lab_branch'] ?? 0);
+
+                if ($r['case_type'] === 'lab_in') {
+                    // کار از لابراتوار → لابراتوار به ما بدهکار است
+                    $amt = (float) $r['price'];
+                    if ($amt <= 0) {
+                        continue;
+                    }
+                    if ($labBranch > 0 && $labBranch !== $bId) {
+                        $addPair($bId, $labBranch, $amt);
+                        continue;
+                    }
+                    $key = $labId . '|' . $r['party'];
+                    $labRow($bId, $key, (string) $r['party'], $labId);
+                    $labAgg[$bId][$key]['recv'] += $amt;
+                    $labAgg[$bId][$key]['count']++;
+                    continue;
+                }
+
+                // ما کار به لابراتوار داده‌ایم → بدهیِ ما
+                $amt = $caseOutsourceAmount($r);
+                if ($amt <= 0) {
+                    continue;
+                }
+                // اگر همین کیس رابطهٔ بین‌شعبه‌ای دارد، در بخش ۳ حساب می‌شود (نه این‌جا)
+                $srcBranch = (int) ($r['source_branch_id'] ?? 0);
+                if ($srcBranch > 0 && $srcBranch !== $bId) {
+                    continue;
+                }
+                if ($labBranch > 0 && $labBranch !== $bId) {
+                    $addPair($labBranch, $bId, $amt);
+                    continue;
+                }
+                $key = $labId . '|' . $r['party'];
+                $labRow($bId, $key, (string) $r['party'], $labId);
+                $labAgg[$bId][$key]['pay'] += $amt;
+                $labAgg[$bId][$key]['count']++;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // ۲-ج) فاکتورهای برون‌سپاری (ما به لابراتوار بدهکاریم)
+        try {
+            $stmt = $db->query("
+                SELECT oi.id, oi.lab_id, oi.branch_id, oi.total_amount,
+                       COALESCE(u.full_name, CONCAT('لابراتوار #', oi.lab_id)) AS party,
+                       u.branch_id AS lab_branch,
+                       COALESCE(ep.paid, 0) AS paid,
+                       (SELECT COUNT(*) FROM cases c
+                         WHERE c.outsource_invoice_id = oi.id) AS case_cnt,
+                       (SELECT COUNT(*) FROM cases c
+                         WHERE c.outsource_invoice_id = oi.id AND c.receivable_invoice_id IS NOT NULL) AS rec_cnt
+                FROM outsource_invoices oi
+                LEFT JOIN users u ON u.id = oi.lab_id
+                LEFT JOIN (SELECT invoice_id, SUM(amount) AS paid
+                           FROM expense_payments WHERE expense_type = 'outsource' GROUP BY invoice_id) ep ON ep.invoice_id = oi.id
+            ");
+            foreach ($stmt->fetchAll() as $r) {
+                // کیس‌های همین فاکتور از راه «فاکتور طلب از شعبه» هم صورتحساب شده‌اند → دوباره شمرده نشود
+                if ((int) ($r['rec_cnt'] ?? 0) > 0) {
+                    continue;
+                }
+                $due = (float) $r['total_amount'] - (float) $r['paid'];
+                if (abs($due) < 0.005) {
+                    continue;
+                }
+                $labId = (int) $r['lab_id'];
+                $labBranch = (int) ($r['lab_branch'] ?? 0);
+                // شعبهٔ بدهکار = شعبهٔ صادرکنندهٔ فاکتور برون‌سپاری
+                $ownerBranch = (int) ($r['branch_id'] ?: 0);
+                if ($ownerBranch <= 0) {
+                    $ownerBranch = $labBranch > 0 ? $labBranch : 1;
+                }
+                if ($labBranch > 0 && $labBranch !== $ownerBranch) {
+                    // لابراتوارِ شعبهٔ دیگر → بدهیِ این شعبه به آن شعبه
+                    $addPair($labBranch, $ownerBranch, $due);
+                    continue;
+                }
+                $key = $labId . '|' . $r['party'];
+                $labRow($ownerBranch, $key, (string) $r['party'], $labId);
+                $labAgg[$ownerBranch][$key]['pay'] += $due;
+                $labAgg[$ownerBranch][$key]['count']++;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // ۲-د) برون‌سپاریِ جانبیِ فاکتورنشده (outsourced_lab_id پر)
+        try {
+            $stmt = $db->query("
+                SELECT c.id, c.outsourced_lab_id, c.branch_id, c.source_branch_id,
+                       c.outsourced_service_id, c.outsourced_rate, c.outsourced_qty,
+                       c.case_type, c.lab_id, c.receivable_invoice_id, c.service_id,
+                       c.quantity, COALESCE(c.total_price, 0) AS price,
+                       COALESCE(u.full_name, CONCAT('لابراتوار #', c.outsourced_lab_id)) AS party,
+                       u.branch_id AS lab_branch
+                FROM cases c
+                LEFT JOIN users u ON u.id = c.outsourced_lab_id
+                WHERE c.outsourced_lab_id IS NOT NULL
+                  AND c.outsource_invoice_id IS NULL
+                  AND c.status_id <> 5
+                  AND c.outsourced_service_id IS NOT NULL
+                  AND COALESCE(c.outsourced_qty, 0) > 0
+            ");
+            foreach ($stmt->fetchAll() as $r) {
+                // همان لابراتوار مالکِ کیس است → در ۲-ب آمده
+                if ((int) ($r['lab_id'] ?? 0) === (int) $r['outsourced_lab_id']) {
+                    continue;
+                }
+                if (!empty($r['receivable_invoice_id'])) {
+                    continue;
+                }
+                $bId = $fallbackBranch($r['branch_id'] ?? 0, (int) $r['outsourced_lab_id']);
+                $srcBranch = (int) ($r['source_branch_id'] ?? 0);
+                if ($srcBranch > 0 && $srcBranch !== $bId) {
+                    continue;   // رابطهٔ بین‌شعبه‌ای → بخش ۳
+                }
+                $amt = $caseOutsourceAmount($r);
+                if ($amt <= 0) {
+                    continue;
+                }
+                $labId = (int) $r['outsourced_lab_id'];
+                $labBranch = (int) ($r['lab_branch'] ?? 0);
+                if ($labBranch > 0 && $labBranch !== $bId) {
+                    $addPair($labBranch, $bId, $amt);
+                    continue;
+                }
+                $key = $labId . '|' . $r['party'];
+                $labRow($bId, $key, (string) $r['party'], $labId);
+                $labAgg[$bId][$key]['pay'] += $amt;
+                $labAgg[$bId][$key]['count']++;
+            }
+        } catch (\Throwable $e) {
+        }
+
+        foreach ($labAgg as $bId => $items) {
+            if (!isset($result['groups'][$bId])) {
+                continue;
+            }
+            foreach ($items as $it) {
+                $net = $it['recv'] - $it['pay'];
+                if (abs($net) < 0.01) {
+                    continue;
+                }
+                $result['groups'][$bId]['labs'][] = [
+                    'name'   => $it['name'],
+                    'amount' => $net,
+                    'recv'   => $it['recv'],
+                    'pay'    => $it['pay'],
+                    'count'  => $it['count'],
+                    'uid'    => $it['uid'],
+                ];
+            }
+        }
+
+        // ═══════════════ ۳) شعبه‌های همکار ═══════════════
+        // ۳-الف) فاکتورهای طلب از شعبه (due ممکن است به‌خاطر بیش‌پرداخت منفی باشد)
+        try {
+            $stmt = $db->query("
+                SELECT br.id, br.invoice_number, br.branch_id, br.partner_branch_id, br.total_amount,
+                       COALESCE(p.paid, 0) AS paid
+                FROM branch_receivables br
+                LEFT JOIN (SELECT branch_receivable_id, SUM(amount) AS paid
+                           FROM doctor_payments
+                           WHERE branch_receivable_id IS NOT NULL
+                           GROUP BY branch_receivable_id) p ON p.branch_receivable_id = br.id
+            ");
+            foreach ($stmt->fetchAll() as $r) {
+                $own = (int) ($r['branch_id'] ?? 0);
+                $partner = (int) ($r['partner_branch_id'] ?? 0);
+                if ($own <= 0 || $partner <= 0) {
+                    continue;
+                }
+                $total = (float) $r['total_amount'];
+                $paid = (float) $r['paid'];
+                $due = $total - $paid;
+                $overpaid = $paid > $total + 0.005 ? ($paid - $total) : 0.0;
+                $addPair($own, $partner, $due, $overpaid);
+            }
+        } catch (\Throwable $e) {
+        }
+
+        // ۳-ب) کارِ بین‌شعبه‌ایِ صورتحساب‌نشده (نه فاکتور طلب دارد، نه فاکتور برون‌سپاری)
+        try {
+            $stmt = $db->query("
+                SELECT c.id, c.branch_id AS owner_branch, c.source_branch_id, c.case_type,
+                       c.lab_id, c.outsourced_lab_id, c.service_id, c.outsourced_service_id,
+                       c.quantity, c.outsourced_qty, c.outsourced_rate,
+                       c.receivable_invoice_id, c.outsource_invoice_id
+                FROM cases c
+                WHERE c.source_branch_id IS NOT NULL
+                  AND (c.branch_id IS NULL OR c.branch_id <> c.source_branch_id)
+                  AND c.receivable_invoice_id IS NULL
+                  AND c.outsource_invoice_id IS NULL
+                  AND c.status_id <> 5
+            ");
+            foreach ($stmt->fetchAll() as $r) {
+                $owner = (int) ($r['owner_branch'] ?? 0);       // شعبه‌ای که باید پرداخت کند
+                $maker = (int) ($r['source_branch_id'] ?? 0);   // شعبه‌ای که کار را انجام داده
+                if ($owner <= 0 || $maker <= 0 || $owner === $maker) {
+                    continue;
+                }
+                $row = $r;
+                $row['branch_id'] = $owner;
+                $amt = $caseOutsourceAmount($row);
+                if ($amt <= 0) {
+                    continue;
+                }
+                // maker کار را انجام داده → owner به maker بدهکار است
+                $addPair($maker, $owner, $amt);
+            }
+        } catch (\Throwable $e) {
+        }
+
+        foreach ($brAgg as $own => $partners) {
+            if (!isset($result['groups'][$own])) {
+                continue;
+            }
+            foreach ($partners as $partnerId => $io) {
+                $net = $io['recv'] - $io['pay'];
+                if (abs($net) < 0.01 && empty($io['overpaid'])) {
+                    continue;
+                }
+                $result['groups'][$own]['branches'][] = [
+                    'name'     => $result['names'][$partnerId] ?? ('شعبه ' . $partnerId),
+                    'amount'   => $net,
+                    'recv'     => $io['recv'],
+                    'pay'      => $io['pay'],
+                    'overpaid' => $io['overpaid'],
+                    'overpaid_mine' => !empty($io['overpaid_mine']),
+                    'uid'      => $partnerId,
+                    'count'    => 0,
+                ];
+            }
+        }
+    } catch (\Throwable $e) {
+        // گزارش نباید صفحه را بشکند
+    }
+
+    // مرتب‌سازی نزولی بر اساس قدرمطلق + جمعِ هر گروه
+    foreach ($result['groups'] as $bId => $groups) {
+        $totals = [];
+        foreach ($groups as $g => $items) {
+            usort($items, static fn($a, $b) => abs($b['amount']) <=> abs($a['amount']));
+            $result['groups'][$bId][$g] = $items;
+            $totals[$g] = array_sum(array_map(static fn($x) => (float) $x['amount'], $items));
+        }
+        $totals['grand'] = array_sum($totals);
+        $result['totals'][$bId] = $totals;
+    }
+
+    return $result;
 }

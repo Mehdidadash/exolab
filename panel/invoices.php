@@ -85,6 +85,7 @@ panel_layout_start($isOwnView ? 'فاکتورهای من' : 'لیست فاکتو
 <div style="margin-bottom: 18px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: space-between; align-items: center;">
     <div>
         <a class="btn" href="invoice_form.php">ایجاد فاکتور جدید</a>
+        <a class="btn" href="issue_invoice.php" style="background: #06B6D4; color: #fff;">➕ صدور فاکتور (همهٔ انواع)</a>
         <a class="btn" href="generate_invoice.php" style="background: #0F172A; color: #fff;">صدور فاکتور ماهانه</a>
         <a class="btn" href="generate_clinic_invoice.php" style="background: #059669; color: #fff;">صدور فاکتور کلینیک</a>
         <a class="btn" href="generate_lab_invoice.php" style="background: #7c3aed; color: #fff;">صدور فاکتور لابراتوار</a>

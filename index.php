@@ -15,6 +15,7 @@ $PAGE = [
  * (صفحات داخل pages/ از محافظِ ساده‌ترِ includes/public_bootstrap.php استفاده می‌کنند.)
  */
 $__requiredFiles = [
+    __DIR__ . '/panel/config.php',
     __DIR__ . '/panel/db.php',
     __DIR__ . '/includes/helpers.php',
 ];
@@ -30,14 +31,26 @@ if ($__missingFiles) {
     http_response_code(503);
     @ini_set('display_errors', '0');
     $__details = '';
-    require_once __DIR__ . '/panel/config.php';
-    require_once __DIR__ . '/panel/auth.php';
-    if (function_exists('is_admin') && is_admin()) {
-        $__details = '<ul style="text-align:left;direction:ltr;font-size:13px">'
-            . '<li>root = <code>' . htmlspecialchars(__DIR__) . '</code></li>'
-            . '<li>panel/ exists = <code>' . (is_dir(__DIR__ . '/panel') ? 'yes' : 'NO') . '</code></li>'
-            . '<li>missing = <code>' . htmlspecialchars(implode(' | ', $__missingFiles)) . '</code></li>'
-            . '</ul>';
+    // ⚠️ این require‌ها «اختیاری» هستند: در همان حالتی که بستهٔ آپلود ناقص است، ممکن است
+    // خودِ panel/config.php هم غایب باشد. قبلاً همین‌جا بدون بررسی require می‌شد و به‌جای
+    // پیامِ ۵۰۳، یک Fatal error خام (۵۰۰) برمی‌گشت:
+    //   PHP Fatal error: Failed opening required '.../panel/config.php' in index.php:33
+    if (is_file(__DIR__ . '/panel/config.php')) {
+        try {
+            require_once __DIR__ . '/panel/config.php';
+            if (is_file(__DIR__ . '/panel/auth.php')) {
+                require_once __DIR__ . '/panel/auth.php';
+            }
+            if (function_exists('is_admin') && is_admin()) {
+                $__details = '<ul style="text-align:left;direction:ltr;font-size:13px">'
+                    . '<li>root = <code>' . htmlspecialchars(__DIR__) . '</code></li>'
+                    . '<li>panel/ exists = <code>' . (is_dir(__DIR__ . '/panel') ? 'yes' : 'NO') . '</code></li>'
+                    . '<li>missing = <code>' . htmlspecialchars(implode(' | ', $__missingFiles)) . '</code></li>'
+                    . '</ul>';
+            }
+        } catch (Throwable $__guardErr) {
+            error_log('index.php guard: ' . $__guardErr->getMessage());
+        }
     }
     echo '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">'
         . '<title>سایت در دسترس نیست</title>'

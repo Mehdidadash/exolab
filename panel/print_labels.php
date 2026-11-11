@@ -33,10 +33,14 @@ if (empty($caseIds)) {
 $placeholders = implode(',', array_fill(0, count($caseIds), '?'));
 $stmt = db()->prepare("
     SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, p.short_name AS service_short,
-           lab.full_name AS lab_name, lab.role AS lab_role
+           lab.full_name AS lab_name, lab.role AS lab_role,
+           cl.full_name AS clinic_name, sbr.name AS source_branch_name, br.name AS branch_name
     FROM cases c
     LEFT JOIN users       u ON c.doctor_id = u.id
     LEFT JOIN users       lab ON c.lab_id = lab.id
+    LEFT JOIN users       cl ON c.clinic_id = cl.id
+    LEFT JOIN branches    sbr ON c.source_branch_id = sbr.id
+    LEFT JOIN branches    br  ON c.branch_id = br.id
     LEFT JOIN site_prices p ON c.service_id = p.id
     WHERE c.id IN ({$placeholders})
     ORDER BY c.id
@@ -72,17 +76,69 @@ function formatDoctorLabel(string $name): string
 function formatDoctorLine(array $case): string
 {
     $doctor = formatDoctorLabel((string) ($case['doctor_name'] ?? ''));
-    $labName = trim((string) ($case['lab_name'] ?? ''));
-    $labRole = (string) ($case['lab_role'] ?? '');
+    $parts  = [$doctor];
+
+    // نام کلینیک صاحبِ کیس (cases.clinic_id) — بعد از نام پزشک، در همان سلول
+    $clinicName = trim((string) ($case['clinic_name'] ?? ''));
+    if ($clinicName !== '') {
+        $clinicName = preg_replace('/^دکتر\s+/u', '', $clinicName) ?? $clinicName;
+        // عرضِ سلولِ نام پزشک کم است؛ واژه‌های عمومیِ طولانی حذف می‌شوند تا نامِ
+        // اختصاصیِ کلینیک حفظ شود (مثلاً «کلینیک دندانپزشکی نور» → «کلینیک نور»).
+        $clinicShort = trim((string) preg_replace('/\s+/u', ' ', str_replace(['دندانپزشکی', 'دندان پزشکی'], ' ', $clinicName)));
+        if (mb_strlen($clinicShort, 'UTF-8') >= 3) {
+            $clinicName = $clinicShort;
+        }
+        $clinicName = preg_replace('/\s+/u', ' ', $clinicName) ?? $clinicName;
+        $parts[] = $clinicName;
+    }
 
     // Append the lab name only when the lab is a customer lab (لابراتوار مشتری)
+    $labName = trim((string) ($case['lab_name'] ?? ''));
+    $labRole = (string) ($case['lab_role'] ?? '');
     if ($labName !== '' && $labRole === 'customer_lab') {
         $labName = preg_replace('/^دکتر\s+/u', '', $labName) ?? $labName;
         $labName = preg_replace('/\s+/u', ' ', $labName);
-        return clipLabel($doctor . ' / ' . $labName, 30);
+        $parts[] = $labName;
     }
 
-    return clipLabel($doctor, 30);
+    // سقفِ کاراکتری فقط برای جلوگیری از ریز شدنِ بیش از حدِ فونت است؛
+    // جا دادنِ نهایی با fitCellText (اندازه‌گیری واقعیِ عرض) انجام می‌شود.
+    $line = clipLabel(implode(' / ', $parts), 44);
+
+    // نشانهٔ شعبهٔ همکار (قزوین → «ق») بلافاصله بعد از پزشک/کلینیک
+    $branchTag = labelBranchTag($case);
+    if ($branchTag !== '') {
+        $line = trim($line . ' ' . $branchTag);
+    }
+
+    return $line;
+}
+
+/**
+ * نشانهٔ شعبهٔ همکار روی برچسب — کیس تا وقتی source_branch_id داشته باشد
+ * (و با شعبهٔ مالک یکی نباشد) «بین‌شعبه‌ای» است. نامِ طرفِ مقابل از دیدِ
+ * شعبهٔ چاپ‌کننده انتخاب می‌شود و اگر آن شعبه قزوین باشد، حرفِ «ق» اضافه می‌شود.
+ * (برای شعبهٔ دیگر، خطِ تازهٔ همین تابع اضافه می‌شود.)
+ */
+function labelBranchTag(array $case): string
+{
+    $owner = (int) ($case['branch_id'] ?? 0);
+    $src   = (int) ($case['source_branch_id'] ?? 0);
+    if ($src <= 0 || ($owner > 0 && $src === $owner)) return ''; // کیس بین‌شعبه‌ای نیست
+
+    // شعبهٔ من (چاپ‌کننده) — مدیر کل به‌عنوان شعبهٔ مرکزی (۱) رفتار می‌کند
+    $my = currentBranchId();
+    if ($my === null && function_exists('is_root_admin') && is_root_admin()) $my = 1;
+
+    // طرفِ مقابل = شعبه‌ای که «من» نیستم
+    $partnerIsOwner = ($my !== null && $my === $src);
+    $partnerName = trim((string) ($partnerIsOwner
+        ? ($case['branch_name'] ?? '')
+        : ($case['source_branch_name'] ?? '')));
+    if ($partnerName === '') return '';
+
+    if (mb_strpos($partnerName, 'قزوین', 0, 'UTF-8') !== false) return 'ق';
+    return '';
 }
 
 function abbrPatient(string $name): string

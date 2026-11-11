@@ -41,6 +41,7 @@ foreach ($items as $item) {
     $recvRaw = !empty($item['case_received_date']) ? $item['case_received_date'] : ($item['received_date'] ?? null);
     $recvDateJalali = $recvRaw ? toJalaliDateFormatted($recvRaw) : '—';
     $itemsRowsHtml .= '<tr>' .
+        '<td>' . (int) ($item['case_id'] ?? 0) . '</td>' .
         '<td>' . htmlspecialchars($item['patient_name'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($item['doctor_name'] ?: '—', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
         '<td>' . htmlspecialchars($svcShort, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>' .
@@ -50,7 +51,7 @@ foreach ($items as $item) {
         '</tr>';
 }
 if ($itemsRowsHtml === '') {
-    $itemsRowsHtml = '<tr><td colspan="6">بدون آیتم</td></tr>';
+    $itemsRowsHtml = '<tr><td colspan="7">بدون آیتم</td></tr>';
 }
 
 // ---- تعداد هر خدمت به تفکیک (خلاصه زیر فاکتور) — تخفیف‌ها به‌صورت یک ردیفِ جمع ----
@@ -160,6 +161,7 @@ $html = <<<HTML
         <table>
             <thead>
                 <tr>
+                    <th># کیس</th>
                     <th>بیمار</th>
                     <th>پزشک</th>
                     <th>خدمت</th>
@@ -171,7 +173,7 @@ $html = <<<HTML
             <tbody>
                 {$itemsRowsHtml}
                 <tr class="total-row">
-                    <td colspan="5">مبلغ کل</td>
+                    <td colspan="6">مبلغ کل</td>
                     <td>{$invoiceTotal} تومان</td>
                 </tr>
             </tbody>

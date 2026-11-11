@@ -1,5 +1,9 @@
 <?php
-// panel/generate_invoice.php
+// panel/generate_invoice.php — صدور فاکتور پزشک/کلینیک درمانی
+//
+// دو حالتِ بازه:
+//   • «ماه شمسی» (مثل قبل)
+//   • «بازهٔ دلخواه» (از تاریخ … تا تاریخ …) — هم‌رفتار با فاکتور کلینیک/لابراتوار/طراح
 require_once __DIR__ . '/auth.php';
 require_admin();
 
@@ -8,20 +12,25 @@ use Morilog\Jalali\Jalalian;
 $doctors = getAllDoctors();
 $bankAccounts = getAllBankAccounts();
 $message = '';
-$doctorId = isset($_POST['doctor_id']) ? (int)$_POST['doctor_id'] : 0;
-$month = isset($_POST['month']) ? (int)$_POST['month'] : 0;
-$year = isset($_POST['year']) ? (int)$_POST['year'] : 0;
-$bankAccountId = isset($_POST['bank_account_id']) ? (int)$_POST['bank_account_id'] : 0;
-$selectedCaseIds = isset($_POST['case_ids']) && is_array($_POST['case_ids']) ? array_map('intval', $_POST['case_ids']) : [];
 $generatedInvoiceId = null;
 
-// Default Jalali year (1405) and previous month
+$doctorId = isset($_POST['doctor_id']) ? (int) $_POST['doctor_id'] : 0;
+$month = isset($_POST['month']) ? (int) $_POST['month'] : 0;
+$year = isset($_POST['year']) ? (int) $_POST['year'] : 0;
+$bankAccountId = isset($_POST['bank_account_id']) ? (int) $_POST['bank_account_id'] : 0;
+$selectedCaseIds = isset($_POST['case_ids']) && is_array($_POST['case_ids']) ? array_map('intval', $_POST['case_ids']) : [];
+
+$periodType = isset($_POST['period_type']) ? (string) $_POST['period_type'] : 'monthly';
+if (!in_array($periodType, ['monthly', 'custom'], true)) $periodType = 'monthly';
+$dateFrom = trim((string) ($_POST['date_from'] ?? ''));
+$dateTo   = trim((string) ($_POST['date_to'] ?? ''));
+
+// ماه/سالِ پیش‌فرض (ماه قبل)
 $nowJalali = Jalalian::now();
-$defaultYear = $nowJalali->getYear();    // 1405
-$defaultMonth = $nowJalali->getMonth(); // current month (e.g. 4 = Tir)
-// Previous month (if current is 1 = Farvardin, then 12 = Esfand of prev year)
+$defaultYear = $nowJalali->getYear();
+$defaultMonth = $nowJalali->getMonth();
 $prevMonth = $defaultMonth > 1 ? $defaultMonth - 1 : 12;
-$prevYear = $defaultMonth > 1 ? $defaultYear : $defaultYear - 1;
+$prevYear  = $defaultMonth > 1 ? $defaultYear : $defaultYear - 1;
 
 $jalaliMonths = [
     1 => 'فروردین', 2 => 'اردیبهشت', 3 => 'خرداد', 4 => 'تیر',
@@ -29,59 +38,72 @@ $jalaliMonths = [
     9 => 'آذر', 10 => 'دی', 11 => 'بهمن', 12 => 'اسفند'
 ];
 
-// Check if we're previewing with selected cases only
+/**
+ * بازهٔ تاریخ (میلادی) را بر اساس حالتِ انتخاب‌شده حساب می‌کند.
+ * @return array [$startDate, $endDate, $rangeLabel, $error]
+ */
+function gi_resolve_range(string $periodType, int $month, int $year, string $dateFrom, string $dateTo, array $jalaliMonths): array
+{
+    if ($periodType === 'custom') {
+        $s = parseJalaliToGregorian($dateFrom);
+        $e = parseJalaliToGregorian($dateTo);
+        if ($s === '' || $e === '') {
+            return ['', '', '', 'لطفاً تاریخ شروع و پایان بازه را وارد کنید.'];
+        }
+        if ($s > $e) {
+            return ['', '', '', 'تاریخ شروع نباید بعد از تاریخ پایان باشد.'];
+        }
+        return [$s, $e, toJalaliDateFormatted($s) . ' تا ' . toJalaliDateFormatted($e), ''];
+    }
+    if (!$month || !$year) {
+        return ['', '', '', 'لطفاً ماه و سال را انتخاب کنید.'];
+    }
+    if ($year < 1300 || $year > 1500 || $month < 1 || $month > 12) {
+        return ['', '', '', 'سال یا ماه نامعتبر است.'];
+    }
+    try {
+        $start = Jalalian::fromFormat('Y/m/d', sprintf('%04d/%02d/01', $year, $month));
+        return [
+            $start->toCarbon()->toDateString(),
+            $start->addMonths(1)->subDay()->toCarbon()->toDateString(),
+            ($jalaliMonths[$month] ?? '') . ' ' . toPersianDigits($year),
+            '',
+        ];
+    } catch (\Throwable $e) {
+        return ['', '', '', 'تاریخ وارد شده معتبر نیست.'];
+    }
+}
+
 $selectedCasesOnly = ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['preview_selected']));
 
-// Process form submission
+// ─── پیش‌نمایش ───
 if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $selectedCasesOnly) {
-    if ($doctorId && $month && $year) {
-        // Validate year and month
-        if ($year < 1300 || $year > 1500 || $month < 1 || $month > 12) {
-            $message = 'سال یا ماه نامعتبر است.';
-        } else {
-            // Convert jalali month/year to gregorian range
-            $jalaliDateStr = sprintf('%04d/%02d/01', $year, $month);
-            try {
-                $jalaliStart = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr);
-                $startDate = $jalaliStart->toCarbon()->toDateString();
-                // End of Jalali month = first of next month minus 1 day
-                $endDate = $jalaliStart->addMonths(1)->subDay()->toCarbon()->toDateString();
-            } catch (\Exception $e) {
-                $message = 'تاریخ وارد شده معتبر نیست: ' . $e->getMessage();
-                // fallback to show the form again
-                panel_layout_start('صدور فاکتور ماهانه');
-                ?>
-                <div class="form-card" style="max-width: 600px; margin: 0 auto;">
-                    <div class="error-box"><?= htmlspecialchars($message) ?></div>
-                    <!-- form again (same as below) -->
-                    <form method="post" action="">
-                        <!-- ... same form fields ... -->
-                    </form>
-                </div>
-                <?php panel_layout_end(); exit;
-            }
 
+    if (!$doctorId) {
+        $message = 'لطفاً پزشک را انتخاب کنید.';
+    } else {
+        [$startDate, $endDate, $rangeLabel, $rangeError] = gi_resolve_range($periodType, $month, $year, $dateFrom, $dateTo, $jalaliMonths);
+        if ($rangeError !== '') {
+            $message = $rangeError;
+        } else {
             $cases = getUninvoicedCasesForDoctor($doctorId, $startDate, $endDate);
             $balance = getOutstandingBalance($doctorId);
-            $total = $balance + array_sum(array_column($cases, 'total_price'));
 
             if (empty($cases) && $balance == 0) {
                 $message = 'هیچ کیس فاکتورنشده‌ای برای این پزشک در بازه انتخابی وجود ندارد و بدهی هم ندارد.';
             } else {
-                // If preview_selected, filter cases to only selected ones
                 if ($selectedCasesOnly && !empty($selectedCaseIds)) {
-                    $cases = array_filter($cases, function($c) use ($selectedCaseIds) {
-                        return in_array((int)$c['id'], $selectedCaseIds);
-                    });
+                    $cases = array_values(array_filter($cases, function ($c) use ($selectedCaseIds) {
+                        return in_array((int) $c['id'], $selectedCaseIds);
+                    }));
                 }
                 $total = $balance + array_sum(array_column($cases, 'total_price'));
-                // Show preview and confirm button
                 ?>
                 <!DOCTYPE html>
                 <html dir="rtl" lang="fa">
                 <head>
                     <meta charset="UTF-8">
-                    <title>پیش‌نمایش فاکتور ماهانه</title>
+                    <title>پیش‌نمایش فاکتور</title>
                     <link rel="stylesheet" href="../assets/css/style.css">
                     <style>
                         .preview-box { background: #f9fafb; padding: 20px; border-radius: 12px; margin: 20px 0; }
@@ -94,17 +116,20 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                 </head>
                 <body>
                 <div class="container" style="max-width: 900px; margin: 40px auto;">
-                    <h2>پیش‌نمایش فاکتور ماهانه</h2>
+                    <h2>پیش‌نمایش فاکتور پزشک</h2>
                     <p><strong>پزشک:</strong> <?= htmlspecialchars(getDoctor($doctorId)['name'] ?? '') ?></p>
-                    <p><strong>ماه:</strong> <?= htmlspecialchars($jalaliMonths[$month] ?? $month) . ' ' . toPersianDigits($year) ?></p>
+                    <p><strong><?= $periodType === 'custom' ? 'بازه' : 'ماه' ?>:</strong> <?= htmlspecialchars($rangeLabel) ?></p>
                     <?php if ($balance > 0): ?>
                         <p><strong>مانده بدهی قبلی:</strong> <?= formatAmountToman($balance) ?></p>
                     <?php endif; ?>
                     <div class="preview-box">
                         <form id="preview-form" method="post" action="">
                             <input type="hidden" name="doctor_id" value="<?= $doctorId ?>">
+                            <input type="hidden" name="period_type" value="<?= htmlspecialchars($periodType) ?>">
                             <input type="hidden" name="month" value="<?= $month ?>">
                             <input type="hidden" name="year" value="<?= $year ?>">
+                            <input type="hidden" name="date_from" value="<?= htmlspecialchars($dateFrom) ?>">
+                            <input type="hidden" name="date_to" value="<?= htmlspecialchars($dateTo) ?>">
                             <input type="hidden" name="bank_account_id" value="<?= $bankAccountId ?>">
                             <table>
                                 <thead>
@@ -148,44 +173,19 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                             <div style="margin-top: 16px; display:flex; gap:10px; flex-wrap:wrap;">
                                 <button type="submit" name="confirm" value="1" class="btn" style="background:#06B6D4;">تأیید و ایجاد فاکتور</button>
                                 <button type="submit" name="preview_selected" value="1" class="btn" style="background:#0F172A; color:#fff;">به‌روزرسانی انتخاب</button>
-                                <a href="generate_invoice.php" class="btn" style="background:#E5E7EB; color:#0F172A;">تغییر ماه/پزشک</a>
+                                <a href="generate_invoice.php" class="btn" style="background:#E5E7EB; color:#0F172A;">تغییر دوره/پزشک</a>
                             </div>
                         </form>
                     </div>
                 </div>
                 <script>
-                (function() {
+                (function () {
                     var checkboxes = document.querySelectorAll('.case-checkbox');
                     var countSpan = document.getElementById('selected-count');
-                    var totalSpan = document.getElementById('preview-total');
-                    
-                    function updateSummary() {
-                        var checked = document.querySelectorAll('.case-checkbox:checked').length;
-                        countSpan.textContent = checked;
-                        
-                        // Calculate total from checked rows
-                        var total = 0;
-                        document.querySelectorAll('.case-checkbox:checked').forEach(function(cb) {
-                            var row = cb.closest('tr');
-                            var priceCell = row.querySelector('td:last-child');
-                            if (priceCell) {
-                                var numStr = priceCell.textContent.replace(/[^0-9]/g, '');
-                                total += parseInt(numStr) || 0;
-                            }
+                    checkboxes.forEach(function (cb) {
+                        cb.addEventListener('change', function () {
+                            if (countSpan) countSpan.textContent = document.querySelectorAll('.case-checkbox:checked').length;
                         });
-                        // Add balance if present
-                        var balanceRow = document.querySelector('.total-row');
-                        if (balanceRow) {
-                            var prevRow = balanceRow.previousElementSibling;
-                            if (prevRow && prevRow.querySelector('td:first-child') && 
-                                prevRow.querySelector('td:first-child').textContent.trim() === '') {
-                                // has balance row
-                            }
-                        }
-                    }
-                    
-                    checkboxes.forEach(function(cb) {
-                        cb.addEventListener('change', updateSummary);
                     });
                 })();
                 </script>
@@ -195,52 +195,44 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                 exit;
             }
         }
-    } else {
-        $message = 'لطفاً پزشک و ماه/سال را انتخاب کنید.';
     }
 }
 
-// Handle confirmation (actual creation)
+// ─── ایجاد نهایی ───
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm']) && $_POST['confirm'] == 1) {
-    $doctorId = (int)$_POST['doctor_id'];
-    $month = (int)$_POST['month'];
-    $year = (int)$_POST['year'];
-    $bankAccountId = !empty($_POST['bank_account_id']) ? (int)$_POST['bank_account_id'] : null;
+    $doctorId = (int) $_POST['doctor_id'];
+    $bankAccountId = !empty($_POST['bank_account_id']) ? (int) $_POST['bank_account_id'] : null;
     $selectedCaseIds = isset($_POST['case_ids']) && is_array($_POST['case_ids']) ? array_map('intval', $_POST['case_ids']) : [];
-    $jalaliDateStr = sprintf('%04d/%02d/01', $year, $month);
-    try {
-        $jalaliStart = \Morilog\Jalali\Jalalian::fromFormat('Y/m/d', $jalaliDateStr);
-        $startDate = $jalaliStart->toCarbon()->toDateString();
-        $endDate = $jalaliStart->addMonths(1)->subDay()->toCarbon()->toDateString();
-    } catch (\Exception $e) {
-        $message = 'تاریخ نامعتبر: ' . $e->getMessage();
-        $generatedInvoiceId = null;
-        goto show_message;
-    }
-    $cases = getUninvoicedCasesForDoctor($doctorId, $startDate, $endDate);
-    $balance = getOutstandingBalance($doctorId);
-    
-    // Filter to only selected cases if provided
-    if (!empty($selectedCaseIds)) {
-        $cases = array_filter($cases, function($c) use ($selectedCaseIds) {
-            return in_array((int)$c['id'], $selectedCaseIds);
-        });
-    }
-    
-    if (!empty($cases) || $balance > 0) {
-        $invoiceId = createMonthlyInvoice($doctorId, $cases, $balance, date('Y-m-d'), $bankAccountId);
-        $generatedInvoiceId = $invoiceId;
-        $message = 'فاکتور با موفقیت ایجاد شد. شماره فاکتور: ' . getInvoice($invoiceId)['invoice_number'];
+
+    [$startDate, $endDate, $rangeLabel, $rangeError] = gi_resolve_range($periodType, $month, $year, $dateFrom, $dateTo, $jalaliMonths);
+
+    if ($rangeError !== '') {
+        $message = $rangeError;
     } else {
-        $message = 'هیچ موردی برای فاکتور وجود ندارد.';
+        $cases = getUninvoicedCasesForDoctor($doctorId, $startDate, $endDate);
+        $balance = getOutstandingBalance($doctorId);
+
+        // فقط کیس‌های تیک‌خورده
+        if (!empty($selectedCaseIds)) {
+            $cases = array_values(array_filter($cases, function ($c) use ($selectedCaseIds) {
+                return in_array((int) $c['id'], $selectedCaseIds);
+            }));
+        }
+
+        if (!empty($cases) || $balance > 0) {
+            $invoiceId = createMonthlyInvoice($doctorId, $cases, $balance, date('Y-m-d'), $bankAccountId);
+            $generatedInvoiceId = $invoiceId;
+            $message = 'فاکتور با موفقیت ایجاد شد. شماره فاکتور: ' . getInvoice($invoiceId)['invoice_number'];
+        } else {
+            $message = 'هیچ موردی برای فاکتور وجود ندارد.';
+        }
     }
 }
-show_message:
 
-panel_layout_start('صدور فاکتور ماهانه');
+panel_layout_start('صدور فاکتور پزشک');
 ?>
 
-<div class="form-card" style="max-width: 600px; margin: 0 auto;">
+<div class="form-card" style="max-width: 640px; margin: 0 auto;">
     <?php if ($message): ?>
         <div style="margin-bottom: 20px; padding: 16px; background: <?= strpos($message, 'با موفقیت') !== false ? '#f0fdf4' : '#fee2e2' ?>; border-radius: 8px; border: 1px solid <?= strpos($message, 'با موفقیت') !== false ? '#86efac' : '#fca5a5' ?>;">
             <?= htmlspecialchars($message) ?>
@@ -263,21 +255,44 @@ panel_layout_start('صدور فاکتور ماهانه');
                 <?php endforeach; ?>
             </select>
         </div>
+
         <div class="form-group">
-            <label for="year">سال شمسی</label>
-            <input type="number" id="year" name="year" value="<?= $year ?: $defaultYear ?>" required min="1300" max="1500">
-        </div>
-        <div class="form-group">
-            <label for="month">ماه شمسی</label>
-            <select id="month" name="month" required>
-                <option value="">انتخاب ماه...</option>
-                <?php foreach ($jalaliMonths as $mNum => $mName): ?>
-                    <option value="<?= $mNum ?>" <?= ($month ?: $prevMonth) == $mNum ? 'selected' : '' ?>>
-                        <?= $mName ?>
-                    </option>
-                <?php endforeach; ?>
+            <label for="period_type">نوع دوره</label>
+            <select id="period_type" name="period_type">
+                <option value="monthly" <?= $periodType === 'monthly' ? 'selected' : '' ?>>ماه شمسی</option>
+                <option value="custom" <?= $periodType === 'custom' ? 'selected' : '' ?>>بازهٔ دلخواه (از تاریخ … تا تاریخ …)</option>
             </select>
         </div>
+
+        <div id="monthly-fields" style="<?= $periodType === 'custom' ? 'display:none;' : '' ?>">
+            <div class="form-group">
+                <label for="year">سال شمسی</label>
+                <input type="number" id="year" name="year" value="<?= $year ?: $prevYear ?>" min="1300" max="1500">
+            </div>
+            <div class="form-group">
+                <label for="month">ماه شمسی</label>
+                <select id="month" name="month">
+                    <option value="">انتخاب ماه...</option>
+                    <?php foreach ($jalaliMonths as $mNum => $mName): ?>
+                        <option value="<?= $mNum ?>" <?= ($month ?: $prevMonth) == $mNum ? 'selected' : '' ?>>
+                            <?= $mName ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+        </div>
+
+        <div id="custom-fields" style="<?= $periodType === 'custom' ? '' : 'display:none;' ?>">
+            <div class="form-group">
+                <label for="date_from">از تاریخ</label>
+                <input type="text" id="date_from" name="date_from" value="<?= htmlspecialchars($dateFrom) ?>" placeholder="۱۴۰۵/۰۷/۰۱" autocomplete="off" style="cursor:pointer;">
+            </div>
+            <div class="form-group">
+                <label for="date_to">تا تاریخ</label>
+                <input type="text" id="date_to" name="date_to" value="<?= htmlspecialchars($dateTo) ?>" placeholder="۱۴۰۵/۰۷/۳۰" autocomplete="off" style="cursor:pointer;">
+            </div>
+        </div>
+
         <div class="form-group">
             <label for="bank_account_id">حساب بانکی (برای درج در فاکتور)</label>
             <select id="bank_account_id" name="bank_account_id">
@@ -289,9 +304,46 @@ panel_layout_start('صدور فاکتور ماهانه');
                 <?php endforeach; ?>
             </select>
         </div>
+
         <button type="submit" name="generate" class="btn" style="background:#0F172A; color:#fff;">پیش‌نمایش</button>
-        <a href="invoices.php" class="btn" style="background:#E5E7EB; color:#0F172A;">بازگشت</a>
+        <a href="issue_invoice.php" class="btn" style="background:#E5E7EB; color:#0F172A;">بازگشت</a>
     </form>
 </div>
+
+<link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
+<script src="../assets/js/persian-date.min.js"></script>
+<script src="../assets/js/persian-datepicker.min.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    var periodSel = document.getElementById('period_type');
+    var monthly = document.getElementById('monthly-fields');
+    var custom = document.getElementById('custom-fields');
+    function togglePeriod() {
+        var v = periodSel ? periodSel.value : 'monthly';
+        if (monthly) monthly.style.display = (v === 'monthly') ? '' : 'none';
+        if (custom) custom.style.display = (v === 'custom') ? '' : 'none';
+    }
+    if (periodSel) { periodSel.addEventListener('change', togglePeriod); togglePeriod(); }
+
+    function initJalaliPicker(selector) {
+        if (window.jQuery && typeof jQuery.fn.persianDatepicker === 'function') {
+            jQuery(selector).persianDatepicker({
+                format: 'YYYY/MM/DD',
+                calendarType: 'persian',
+                initialValueType: 'jalali',
+                persianDigit: true,
+                autoClose: true,
+                toolbox: {
+                    enabled: true,
+                    todayButton: { enabled: true, text: { fa: 'امروز', en: 'Today' } },
+                    submitButton: { enabled: true, text: { fa: 'تایید', en: 'Submit' } }
+                }
+            });
+        }
+    }
+    initJalaliPicker('#date_from');
+    initJalaliPicker('#date_to');
+});
+</script>
 
 <?php panel_layout_end(); ?>

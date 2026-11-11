@@ -27,6 +27,7 @@ function db() {
             ensureNotificationsTable($pdo);
             ensureNotificationsImportance($pdo);
             ensureCasesDesignFeeColumn($pdo);
+            ensureCasesUrgentColumn($pdo);
             ensureDoctorPriceOverrideTypeColumn($pdo);
             ensureCasesOutsourcedRateColumn($pdo);
             ensureCaseFilesDescriptionColumn($pdo);
@@ -525,6 +526,31 @@ function ensureCasesDesignFeeColumn($pdo) {
     $row = $stmt->fetch();
     if (empty($row) || (int)$row['cnt'] === 0) {
         $pdo->exec("ALTER TABLE cases ADD COLUMN design_fee DECIMAL(15,2) NOT NULL DEFAULT 0 AFTER total_price");
+    }
+}
+
+/**
+ * پرچمِ «فوری» برای کیس‌ها (اولویتِ طراحی).
+ * ستون در مهاجرت ۰۹۰ اضافه شده؛ این تابع برای دیتابیس‌های قدیمی خودش می‌سازد
+ * تا ذخیرهٔ کیس هیچ‌وقت با خطای «Unknown column» نشکند.
+ */
+function ensureCasesUrgentColumn($pdo) {
+    try {
+        $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cases' AND COLUMN_NAME = 'is_urgent'");
+        $stmt->execute([DB_NAME]);
+        $row = $stmt->fetch();
+        if (empty($row) || (int)$row['cnt'] === 0) {
+            $pdo->exec("ALTER TABLE cases ADD COLUMN is_urgent TINYINT(1) NOT NULL DEFAULT 0 AFTER status_id");
+        }
+        foreach (['is_urgent_at' => 'DATETIME NULL', 'is_urgent_by' => 'INT NULL'] as $col => $def) {
+            $st = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'cases' AND COLUMN_NAME = ?");
+            $st->execute([DB_NAME, $col]);
+            $r = $st->fetch();
+            if (empty($r) || (int)$r['cnt'] === 0) {
+                $pdo->exec("ALTER TABLE cases ADD COLUMN {$col} {$def}");
+            }
+        }
+    } catch (Throwable $e) {
     }
 }
 
@@ -3078,28 +3104,70 @@ function deleteInvoice($id) {
 }
 
 // ----- Payment functions -----
-function getAllPayments() {
+// «پرداخت» در این ماژول یعنی پولی که از طرف‌حساب دریافت می‌کنیم (دریافتی).
+// نوعِ طرف‌حساب در ستون `party_type` نگه داشته می‌شود:
+//   doctor | clinic | lab | designer | branch
+// و برای نوعِ branch، فاکتورِ مرتبط در `branch_receivable_id` و شعبهٔ بدهکار در
+// `partner_branch_id` قرار می‌گیرد. (پیش از این، دریافت از شعبه در جدول جدا
+// ثبت می‌شد و همین باعث دوباره‌کاری/ناهماهنگی بود — مهاجرت ۰۸۹.)
+
+/** برچسب‌های فارسیِ نوعِ طرف‌حسابِ پرداخت. */
+function paymentPartyTypeLabels(): array {
+    return [
+        'doctor'   => 'پزشک',
+        'clinic'   => 'کلینیک',
+        'lab'      => 'لابراتوار همکار',
+        'designer' => 'طراح',
+        'branch'   => 'شعبه همکار',
+    ];
+}
+
+/** برچسبِ یک نوعِ طرف‌حساب (با پیش‌فرضِ امن). */
+function paymentPartyTypeLabel($type): string {
+    $type = (string) ($type ?? '');
+    if ($type === '') $type = 'doctor';
+    $labels = paymentPartyTypeLabels();
+    return $labels[$type] ?? $type;
+}
+
+/** آیا این نوع پرداخت به یک شعبه مربوط است؟ */
+function isBranchPayment($partyType): bool {
+    return (string) $partyType === 'branch';
+}
+
+function getAllPayments(?string $partyType = null) {
     $bid = currentBranchId();
     $params = [];
-    $filter = '';
+    $where = [];
     if ($bid !== null) {
         $granted = accessibleDoctorIds();
-        $filter = ' WHERE (p.branch_id = ' . (int) $bid;
+        $clause = '(p.branch_id = ' . (int) $bid;
         if (!empty($granted)) {
             $ph = implode(',', array_fill(0, count($granted), '?'));
-            $filter .= " OR p.doctor_id IN ({$ph})";
+            $clause .= " OR p.doctor_id IN ({$ph})";
             $params = array_merge($params, array_map('intval', $granted));
         }
-        $filter .= ')';
+        $clause .= ')';
+        $where[] = $clause;
     }
+    if ($partyType !== null && $partyType !== '') {
+        $where[] = 'p.party_type = ?';
+        $params[] = $partyType;
+    }
+    $filter = $where ? ' WHERE ' . implode(' AND ', $where) : '';
     $stmt = db()->prepare('SELECT p.*, b.bank_name, b.account_owner_name,
             COALESCE(u.full_name, p.doctor_name) AS doctor_name,
-            GROUP_CONCAT(DISTINCT i.invoice_number SEPARATOR ", ") AS linked_invoices
+            pb.name AS partner_branch_name,
+            br.invoice_number AS receivable_number,
+            GROUP_CONCAT(DISTINCT i.invoice_number SEPARATOR ", ") AS invoice_numbers,
+            GROUP_CONCAT(DISTINCT br.invoice_number SEPARATOR ", ") AS receivable_numbers
         FROM doctor_payments p
         LEFT JOIN bank_accounts b ON p.bank_account_id = b.id
         LEFT JOIN users u ON p.doctor_id = u.id
+        LEFT JOIN branches pb ON pb.id = p.partner_branch_id
         LEFT JOIN doctor_payment_invoices pi ON pi.payment_id = p.id
-        LEFT JOIN doctor_invoices i ON i.id = pi.invoice_id' . $filter . "
+        LEFT JOIN doctor_invoices i ON i.id = pi.invoice_id
+        LEFT JOIN branch_receivables br ON br.id = p.branch_receivable_id' . $filter . "
         GROUP BY p.id
         ORDER BY p.payment_date DESC, p.id DESC");
     $stmt->execute($params);
@@ -3108,17 +3176,99 @@ function getAllPayments() {
 
 function getPayment($id) {
     $stmt = db()->prepare('SELECT p.*, b.bank_name, b.account_owner_name,
-            COALESCE(u.full_name, p.doctor_name) AS doctor_name
+            COALESCE(u.full_name, p.doctor_name) AS doctor_name,
+            pb.name AS partner_branch_name,
+            br.invoice_number AS receivable_number
         FROM doctor_payments p
         LEFT JOIN bank_accounts b ON p.bank_account_id = b.id
         LEFT JOIN users u ON p.doctor_id = u.id
+        LEFT JOIN branches pb ON pb.id = p.partner_branch_id
+        LEFT JOIN branch_receivables br ON br.id = p.branch_receivable_id
         WHERE p.id = ?');
     $stmt->execute([(int) $id]);
     $payment = $stmt->fetch();
     if ($payment) {
-        $payment['invoice_ids'] = getPaymentInvoiceIds($payment['id']);
+        if (isBranchPayment($payment['party_type'] ?? '')) {
+            $payment['invoice_ids'] = !empty($payment['branch_receivable_id'])
+                ? [(int) $payment['branch_receivable_id']]
+                : [];
+        } else {
+            $payment['invoice_ids'] = getPaymentInvoiceIds($payment['id']);
+        }
     }
     return $payment;
+}
+
+/**
+ * فاکتورهای «قابل دریافت» برای یک طرف‌حساب (مبنای بخشِ انتخاب فاکتور در فرم).
+ *
+ * فقط فاکتورهایی که هنوز مانده دارند برمی‌گردند (تا فهرست کوتاه بماند)؛ اگر
+ * پرداختی در حال ویرایش است، فاکتورهای همان پرداخت هم حتی در صورت تسویه
+ * برگردانده می‌شوند تا انتخاب کاربر از دست نرود.
+ *
+ * @return array<int, array{id:int, invoice_number:string, total_amount:float, applied:float, remaining:float, selected:bool}>
+ */
+function getPayableInvoicesForParty(string $partyType, int $partyId, int $paymentId = 0): array {
+    if ($partyId <= 0) return [];
+
+    if ($partyType === 'branch') {
+        $linked = [];
+        if ($paymentId > 0) {
+            $st = db()->prepare('SELECT branch_receivable_id FROM doctor_payments WHERE id = ?');
+            $st->execute([$paymentId]);
+            $linked[(int) $st->fetchColumn()] = true;
+        }
+        $sql = 'SELECT br.id, br.invoice_number, br.total_amount, br.payment_status,
+                       COALESCE(p.paid, 0) AS applied
+                FROM branch_receivables br
+                LEFT JOIN (SELECT branch_receivable_id, SUM(amount) AS paid
+                           FROM doctor_payments
+                           WHERE branch_receivable_id IS NOT NULL
+                           GROUP BY branch_receivable_id) p ON p.branch_receivable_id = br.id
+                WHERE br.partner_branch_id = ?';
+        $params = [$partyId];
+        $bid = currentBranchId();
+        if ($bid !== null) {
+            $sql .= ' AND br.branch_id = ?';
+            $params[] = $bid;
+        }
+        $sql .= ' ORDER BY br.invoice_date DESC, br.id DESC';
+        $st = db()->prepare($sql);
+        $st->execute($params);
+        $rows = $st->fetchAll();
+    } else {
+        $linked = [];
+        if ($paymentId > 0) {
+            foreach (getPaymentInvoiceIds($paymentId) as $iid) $linked[(int) $iid] = true;
+        }
+        $st = db()->prepare('SELECT i.id, i.invoice_number, i.total_amount,
+                       COALESCE(SUM(pi.amount_applied), 0) AS applied
+                FROM doctor_invoices i
+                LEFT JOIN doctor_payment_invoices pi ON pi.invoice_id = i.id
+                WHERE i.doctor_id = ?
+                GROUP BY i.id, i.invoice_number, i.total_amount
+                ORDER BY i.invoice_date DESC, i.id DESC');
+        $st->execute([$partyId]);
+        $rows = $st->fetchAll();
+    }
+
+    $out = [];
+    foreach ($rows as $r) {
+        $total = (float) ($r['total_amount'] ?? 0);
+        $applied = (float) ($r['applied'] ?? 0);
+        $remaining = round($total - $applied);
+        $isLinked = isset($linked[(int) $r['id']]);
+        if ($remaining <= 0 && !$isLinked) continue;
+        $out[] = [
+            'id'             => (int) $r['id'],
+            'invoice_number' => (string) $r['invoice_number'],
+            'total_amount'   => round($total),
+            'applied'        => round($applied),
+            'remaining'      => max(0, $remaining),
+            'selected'       => $isLinked,
+        ];
+    }
+    return $out;
 }
 
 function getPaymentInvoiceIds($payment_id) {
@@ -3159,13 +3309,23 @@ function refreshInvoicePaymentStatuses(array $invoiceIds): void {
 
 function savePayment($data) {
     $now = date('Y-m-d H:i:s');
+    $partyType = (string) ($data['party_type'] ?? 'doctor');
+    if ($partyType === '') $partyType = 'doctor';
+
+    // دریافت از شعبهٔ همکار: همان جدول، ولی بدونِ لینک به doctor_invoices.
+    if (isBranchPayment($partyType)) {
+        return saveBranchReceiptPayment($data);
+    }
+
     $invoiceIds = array_values(array_unique(array_filter(array_map('intval', $data['invoice_ids'] ?? []))));
+    $partyId = !empty($data['party_id']) ? (int) $data['party_id'] : (!empty($data['doctor_id']) ? (int) $data['doctor_id'] : null);
 
     if (isset($data['id']) && !empty($data['id'])) {
         $existingInvoiceIds = getPaymentInvoiceIds((int) $data['id']);
-        $stmt = db()->prepare('UPDATE doctor_payments SET doctor_id = ?, doctor_name = ?, amount = ?, payment_method = ?, payment_date = ?, transaction_number = ?, bank_account_id = ?, notes = ?, updated_at = ? WHERE id = ?');
+        $stmt = db()->prepare('UPDATE doctor_payments SET party_type = ?, doctor_id = ?, doctor_name = ?, amount = ?, payment_method = ?, payment_date = ?, transaction_number = ?, bank_account_id = ?, notes = ?, updated_at = ? WHERE id = ?');
         $stmt->execute([
-            $data['doctor_id'] ?: null,
+            $partyType,
+            $partyId ?: null,
             $data['doctor_name'] ?? '',
             $data['amount'],
             $data['payment_method'],
@@ -3179,9 +3339,10 @@ function savePayment($data) {
         $paymentId = (int) $data['id'];
     } else {
         $branchId = currentBranchId() ?? 1;
-        $stmt = db()->prepare('INSERT INTO doctor_payments (doctor_id, doctor_name, amount, payment_method, payment_date, transaction_number, bank_account_id, notes, branch_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt = db()->prepare('INSERT INTO doctor_payments (party_type, doctor_id, doctor_name, amount, payment_method, payment_date, transaction_number, bank_account_id, notes, branch_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
-            $data['doctor_id'] ?: null,
+            $partyType,
+            $partyId ?: null,
             $data['doctor_name'] ?? '',
             $data['amount'],
             $data['payment_method'],
@@ -3209,11 +3370,111 @@ function savePayment($data) {
     return $paymentId;
 }
 
+/**
+ * ثبت/ویرایشِ دریافت از شعبهٔ همکار در همان جدولِ doctor_payments.
+ * داده‌ها: id (اختیاری)، partner_branch_id (یا party_id)، branch_receivable_id،
+ * amount، payment_method، payment_date، transaction_number، bank_account_id، notes
+ */
+function saveBranchReceiptPayment(array $data): int {
+    $now = date('Y-m-d H:i:s');
+    $receivableId = !empty($data['branch_receivable_id'])
+        ? (int) $data['branch_receivable_id']
+        : (!empty($data['invoice_ids']) ? (int) (is_array($data['invoice_ids']) ? reset($data['invoice_ids']) : $data['invoice_ids']) : 0);
+    $partnerBranchId = !empty($data['partner_branch_id'])
+        ? (int) $data['partner_branch_id']
+        : (!empty($data['party_id']) ? (int) $data['party_id'] : 0);
+
+    // اگر receivable داده شده، شعبه و نامش را از خود فاکتور بگیر (منبعِ حقیقت)
+    if ($receivableId > 0) {
+        $st = db()->prepare('SELECT br.partner_branch_id, br.branch_id, b.name AS partner_name
+                             FROM branch_receivables br
+                             LEFT JOIN branches b ON b.id = br.partner_branch_id
+                             WHERE br.id = ?');
+        $st->execute([$receivableId]);
+        $rec = $st->fetch();
+        if ($rec) {
+            $partnerBranchId = (int) ($rec['partner_branch_id'] ?? 0);
+            $partnerName = (string) ($rec['partner_name'] ?? '');
+        }
+    }
+    if ($partnerBranchId <= 0) {
+        $partnerBranchId = null;
+    }
+    if (!isset($partnerName) || $partnerName === '') {
+        $partnerName = 'شعبه همکار';
+        if ($partnerBranchId) {
+            $st = db()->prepare('SELECT name FROM branches WHERE id = ?');
+            $st->execute([$partnerBranchId]);
+            $partnerName = (string) ($st->fetchColumn() ?: 'شعبه همکار');
+        }
+    }
+
+    $oldReceivableId = 0;
+    if (!empty($data['id'])) {
+        $st = db()->prepare('SELECT branch_receivable_id FROM doctor_payments WHERE id = ?');
+        $st->execute([(int) $data['id']]);
+        $oldReceivableId = (int) ($st->fetchColumn() ?: 0);
+
+        $stmt = db()->prepare('UPDATE doctor_payments SET party_type = "branch", doctor_id = NULL, doctor_name = ?,
+                partner_branch_id = ?, branch_receivable_id = ?, amount = ?, payment_method = ?, payment_date = ?,
+                transaction_number = ?, bank_account_id = ?, notes = ?, updated_at = ? WHERE id = ?');
+        $stmt->execute([
+            $partnerName,
+            $partnerBranchId,
+            $receivableId ?: null,
+            (float) ($data['amount'] ?? 0),
+            (string) ($data['payment_method'] ?? 'نامشخص'),
+            $data['payment_date'] ?? date('Y-m-d'),
+            $data['transaction_number'] ?? null,
+            $data['bank_account_id'] ?? null,
+            $data['notes'] ?? null,
+            $now,
+            (int) $data['id'],
+        ]);
+        $paymentId = (int) $data['id'];
+    } else {
+        $branchId = currentBranchId() ?? 1;
+        $stmt = db()->prepare('INSERT INTO doctor_payments
+                (party_type, doctor_id, doctor_name, partner_branch_id, branch_receivable_id, amount,
+                 payment_method, payment_date, transaction_number, bank_account_id, notes, branch_id, created_at)
+                VALUES ("branch", NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $stmt->execute([
+            $partnerName,
+            $partnerBranchId,
+            $receivableId ?: null,
+            (float) ($data['amount'] ?? 0),
+            (string) ($data['payment_method'] ?? 'نامشخص'),
+            $data['payment_date'] ?? date('Y-m-d'),
+            $data['transaction_number'] ?? null,
+            $data['bank_account_id'] ?? null,
+            $data['notes'] ?? null,
+            $branchId,
+            $now,
+        ]);
+        $paymentId = (int) db()->lastInsertId();
+    }
+
+    if ($receivableId > 0) refreshBranchReceivableStatus($receivableId);
+    if ($oldReceivableId > 0 && $oldReceivableId !== $receivableId) refreshBranchReceivableStatus($oldReceivableId);
+    return $paymentId;
+}
+
 function deletePayment($id) {
-    $invoiceIds = getPaymentInvoiceIds((int) $id);
+    $st = db()->prepare('SELECT party_type, branch_receivable_id FROM doctor_payments WHERE id = ?');
+    $st->execute([(int) $id]);
+    $row = $st->fetch() ?: [];
+    $isBranch = isBranchPayment($row['party_type'] ?? '');
+
+    $invoiceIds = $isBranch ? [] : getPaymentInvoiceIds((int) $id);
     $stmt = db()->prepare('DELETE FROM doctor_payments WHERE id = ?');
     $stmt->execute([(int) $id]);
-    refreshInvoicePaymentStatuses($invoiceIds);
+    if ($isBranch) {
+        if (!empty($row['branch_receivable_id'])) {
+            refreshBranchReceivableStatus((int) $row['branch_receivable_id']);
+        }
+    } else {
+        refreshInvoicePaymentStatuses($invoiceIds);
+    }
 }
 
 function getAllInvoiceLinks($invoice_id) {
@@ -3362,6 +3623,23 @@ function getDesignerDesignFeeOverride($designer_id, $service_id = null) {
     return $run('SELECT * FROM doctor_price_overrides WHERE doctor_id = ? AND price_type = ? AND service_id IS NULL', [$designer_id, 'design_fee']);
 }
 
+/**
+ * فی طراحیِ «هر واحد» که باید برای یک کیس فاکتور شود.
+ *
+ * ⚠️ اولویت با نرخِ **ثبت‌شده روی خودِ کیس** (`cases.design_fee`) است، نه نرخِ فعلیِ طراح.
+ * دلیل: با به‌روزرسانی نرخ‌ها، فاکتورِ ماه‌های گذشته نباید با نرخ جدید ساخته شود
+ * (باگ گزارش‌شده: فاکتور طراحی مهر با نرخ آبان صادر می‌شد، در حالی که جدول مخارج عدد درست را نشان می‌داد).
+ * اگر روی کیس نرخی ثبت نشده باشد (صفر/NULL)، همان نرخِ فعلیِ طراح/خدمت استفاده می‌شود.
+ */
+function caseDesignUnitFee(array $case, int $designerId): float {
+    $stored = $case['design_fee'] ?? null;
+    if ($stored !== null && $stored !== '' && (float) $stored > 0) {
+        return (float) $stored;
+    }
+    $rate = getApplicableDesignFee($designerId, (int) ($case['service_id'] ?? 0));
+    return $rate !== null ? (float) $rate : 0.0;
+}
+
 /** Per-unit design fee (تومان) for a designer and optionally a specific service. */
 function getApplicableDesignFee($designer_id, $service_id = null) {
     // Phase 3: price_links (design_fee) is authoritative first when enabled.
@@ -3485,7 +3763,7 @@ function getUninvoicedCasesForDesigner(int $designerId, string $startDate, strin
     $stmt->execute($params);
     $cases = $stmt->fetchAll();
     foreach ($cases as &$c) {
-        $c['unit_design_fee'] = getApplicableDesignFee($designerId, (int) ($c['service_id'] ?? 0));
+        $c['unit_design_fee'] = caseDesignUnitFee($c, $designerId);
     }
     return $cases;
 }
@@ -3501,10 +3779,7 @@ function createDesignerInvoice(int $designerId, array $cases, string $invoiceDat
     $total = 0;
     $rows = [];
     foreach ($cases as $c) {
-        $unitFee = getApplicableDesignFee($designerId, (int) ($c['service_id'] ?? 0));
-        if ($unitFee === null) {
-            $unitFee = 0.0;
-        }
+        $unitFee = caseDesignUnitFee($c, $designerId);
         $qty = (int) ($c['quantity'] ?? 1);
         $amount = round($unitFee * $qty);
         $total += $amount;
@@ -3658,7 +3933,7 @@ function getUninvoicedCasesForDesignerAll(int $designerId, ?int $payerBranch = n
     $stmt->execute($params);
     $cases = $stmt->fetchAll();
     foreach ($cases as &$c) {
-        $c['unit_design_fee'] = getApplicableDesignFee($designerId, (int) ($c['service_id'] ?? 0));
+        $c['unit_design_fee'] = caseDesignUnitFee($c, $designerId);
     }
     return $cases;
 }
@@ -3696,8 +3971,7 @@ function addCasesToDesignerInvoice(int $invoiceId, array $caseIds): int {
     $added = 0;
     $addedTotal = 0.0;
     foreach ($cases as $c) {
-        $unitFee = getApplicableDesignFee($designerId, (int) ($c['service_id'] ?? 0));
-        if ($unitFee === null) $unitFee = 0.0;
+        $unitFee = caseDesignUnitFee($c, $designerId);
         $qty = (int) ($c['quantity'] ?? 1);
         $amt = round($unitFee * $qty);
         $ins->execute([
@@ -4816,11 +5090,22 @@ function getAllBranchReceivables(): array {
     return $stmt->fetchAll();
 }
 
-/** Paid amount so far for a receivable invoice. */
+/** Paid amount so far for a receivable invoice (از doctor_payments — مهاجرت ۰۸۹). */
 function getBranchReceivablePaid(int $receivableId): float {
-    $stmt = db()->prepare('SELECT COALESCE(SUM(amount),0) FROM branch_receivable_payments WHERE receivable_id = ?');
+    $stmt = db()->prepare('SELECT COALESCE(SUM(amount),0) FROM doctor_payments WHERE branch_receivable_id = ?');
     $stmt->execute([$receivableId]);
     return (float) $stmt->fetchColumn();
+}
+
+/** دریافت‌های ثبت‌شده برای یک فاکتور طلب از شعبه. */
+function getBranchReceivablePayments(int $receivableId): array {
+    $stmt = db()->prepare('SELECT p.*, b.bank_name, b.account_owner_name
+        FROM doctor_payments p
+        LEFT JOIN bank_accounts b ON p.bank_account_id = b.id
+        WHERE p.branch_receivable_id = ?
+        ORDER BY p.payment_date DESC, p.id DESC');
+    $stmt->execute([$receivableId]);
+    return $stmt->fetchAll();
 }
 
 /** Recompute payment_status (unpaid/partial/paid) for a receivable invoice. */
@@ -4836,46 +5121,38 @@ function refreshBranchReceivableStatus(int $receivableId): void {
     $upd->execute([$status, $receivableId]);
 }
 
-/** Save a payment received against a receivable invoice. */
+/**
+ * Save a payment received against a receivable invoice.
+ * @deprecated از فرمِ یکپارچهٔ payment_form.php استفاده کنید؛ این تابع فقط
+ *             برای سازگاریِ لینک/دکمه‌های قدیمی نگه داشته شده و به همان
+ *             مسیرِ doctor_payments می‌نویسد.
+ */
 function saveBranchReceivablePayment(array $data): int {
-    $now = date('Y-m-d H:i:s');
-    $id = !empty($data['id']) ? (int) $data['id'] : 0;
-    if ($id) {
-        $stmt = db()->prepare('UPDATE branch_receivable_payments SET amount = ?, payment_date = ?, method = ?, reference = ?, notes = ?, updated_at = ? WHERE id = ?');
-        $stmt->execute([
-            (float) $data['amount'],
-            $data['payment_date'] ?? null,
-            $data['method'] ?? null,
-            $data['reference'] ?? null,
-            $data['notes'] ?? null,
-            $now,
-            $id,
-        ]);
-        $savedId = $id;
-    } else {
-        $stmt = db()->prepare('INSERT INTO branch_receivable_payments (receivable_id, amount, payment_date, method, reference, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-        $stmt->execute([
-            (int) $data['receivable_id'],
-            (float) $data['amount'],
-            $data['payment_date'] ?? null,
-            $data['method'] ?? null,
-            $data['reference'] ?? null,
-            $data['notes'] ?? null,
-            $now,
-            $now,
-        ]);
-        $savedId = (int) db()->lastInsertId();
-    }
-    refreshBranchReceivableStatus((int) $data['receivable_id']);
-    return $savedId;
+    $receivableId = !empty($data['receivable_id'])
+        ? (int) $data['receivable_id']
+        : (!empty($data['branch_receivable_id']) ? (int) $data['branch_receivable_id'] : 0);
+    return saveBranchReceiptPayment([
+        'id'                  => $data['id'] ?? null,
+        'branch_receivable_id' => $receivableId,
+        'amount'              => (float) ($data['amount'] ?? 0),
+        'payment_method'      => $data['payment_method'] ?? $data['method'] ?? null,
+        'payment_date'        => $data['payment_date'] ?? null,
+        'transaction_number'  => $data['transaction_number'] ?? $data['reference'] ?? null,
+        'bank_account_id'     => $data['bank_account_id'] ?? null,
+        'notes'               => $data['notes'] ?? null,
+    ]);
 }
 
 /** Delete a payment and refresh the receivable status. */
 function deleteBranchReceivablePayment(int $id): void {
-    $p = db()->prepare('SELECT receivable_id FROM branch_receivable_payments WHERE id = ?');
+    $p = db()->prepare('SELECT branch_receivable_id, party_type FROM doctor_payments WHERE id = ?');
     $p->execute([$id]);
-    $rid = (int) ($p->fetchColumn() ?: 0);
-    db()->prepare('DELETE FROM branch_receivable_payments WHERE id = ?')->execute([$id]);
+    $row = $p->fetch();
+    if (!$row || !isBranchPayment($row['party_type'] ?? '')) {
+        return; // فقط دریافت‌های نوعِ «شعبه همکار» از این مسیر حذف می‌شوند
+    }
+    $rid = (int) ($row['branch_receivable_id'] ?? 0);
+    db()->prepare('DELETE FROM doctor_payments WHERE id = ?')->execute([$id]);
     if ($rid) refreshBranchReceivableStatus($rid);
 }
 
@@ -4883,7 +5160,7 @@ function deleteBranchReceivablePayment(int $id): void {
 function deleteBranchReceivable(int $id): void {
     $inv = getBranchReceivable($id);
     if (!$inv) return;
-    db()->prepare('DELETE FROM branch_receivable_payments WHERE receivable_id = ?')->execute([$id]);
+    db()->prepare('DELETE FROM doctor_payments WHERE branch_receivable_id = ?')->execute([$id]);
     db()->prepare('DELETE FROM branch_receivable_items WHERE receivable_id = ?')->execute([$id]);
     db()->prepare('UPDATE cases SET receivable_invoice_id = NULL WHERE receivable_invoice_id = ?')->execute([$id]);
     db()->prepare('DELETE FROM branch_receivables WHERE id = ?')->execute([$id]);

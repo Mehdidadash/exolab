@@ -253,16 +253,19 @@ foreach ($files['error'] as $idx => $err) {
         if ($err === UPLOAD_ERR_NO_FILE) continue;
         $errors[] = "upload_error_{$idx}_{$err}";
         // err=3 (PARTIAL) معمولاً یعنی اتصال/حجم/زمانِ آپلود کافی نبوده؛ برای عیب‌یابی
-        // نام و حجم فایل و محدودیت‌های PHP را هم ثبت می‌کنیم.
+        // نام و حجم فایل و محدودیت‌های PHP را هم ثبت می‌کنیم. content-length و
+        // max_input_time هم می‌آیند تا «قطعِ کاربر» از «قطعِ سرور/پروکسی» قابل تفکیک باشد.
         $lim = uploadLimits();
         error_log(sprintf(
-            'upload_case_files: upload error idx=%d err=%d file=%s size=%s max_file=%s post_max=%s',
+            'upload_case_files: upload error idx=%d err=%d file=%s size=%s max_file=%s post_max=%s content_length=%s max_input_time=%s',
             $idx,
             $err,
             (string) ($files['name'][$idx] ?? '?'),
             (string) ($files['size'][$idx] ?? 0),
             (string) $lim['max_file'],
-            (string) $lim['post_max']
+            (string) $lim['post_max'],
+            (string) ($_SERVER['CONTENT_LENGTH'] ?? '?'),
+            (string) (ini_get('max_input_time') ?: '?')
         ));
         continue;
     }

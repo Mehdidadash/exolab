@@ -126,6 +126,11 @@ $clinic_id = !empty($data['clinic_id']) ? (int) $data['clinic_id'] : null;
 // این فیلد رندر نمی‌شود و مقدارِ قبلیِ کیس دست‌نخورده می‌ماند (پایین‌تر).
 $castRequestedSent = array_key_exists('case_cast_requested', $data);
 $castRequested = $castRequestedSent ? (!empty($data['case_cast_requested']) ? 1 : 0) : null;
+// ── «فوری» (اولویتِ طراحی) ──
+// همان الگوی کست: اگر فیلد ارسال شود ۱/۰، وگرنه مقدارِ قبلیِ کیس حفظ می‌شود
+// (کاربران بیرونی این فیلد را نمی‌بینند).
+$urgentSent = array_key_exists('is_urgent', $data);
+$isUrgent = $urgentSent ? (!empty($data['is_urgent']) ? 1 : 0) : null;
 // اگر فیلدِ «طراح» اصلاً ارسال نشده باشد (فرمِ محدودِ پزشک یا فراخوانی برنامه‌ای)،
 // «طراح پیش‌فرض» انتخاب می‌شود تا کیس همیشه طراح داشته باشد.
 // اگر فرم فیلد را فرستاده و کاربر عمداً «بدون طراح» را انتخاب کرده، همان خالی می‌ماند.
@@ -199,7 +204,8 @@ $existingCaseRow = null;
 if ($id) {
     $exRow = db()->prepare('SELECT doctor_id, service_id, status_id, lab_id, case_type, branch_id, source_branch_id, clinic_id,
                                    designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate,
-                                   scan_body_type_id, connection_type, fixture_type_id, case_cast_requested
+                                   scan_body_type_id, connection_type, fixture_type_id, case_cast_requested, is_urgent,
+                                   is_urgent_at, is_urgent_by
                             FROM cases WHERE id = ?');
     $exRow->execute([$id]);
     $existingCaseRow = $exRow->fetch() ?: null;
@@ -259,9 +265,16 @@ if ($existingCaseRow) {
     if (!$castRequestedSent) {
         $castRequested = !empty($existingCaseRow['case_cast_requested']) ? 1 : 0;
     }
+    // «فوری»: همان قاعده — اگر فیلد نبود، مقدارِ قبلیِ کیس دست‌نخورده بماند
+    if (!$urgentSent) {
+        $isUrgent = !empty($existingCaseRow['is_urgent']) ? 1 : 0;
+    }
 }
 if ($castRequested === null) {
     $castRequested = 0;
+}
+if ($isUrgent === null) {
+    $isUrgent = 0;
 }
 
 // ─── Branch assignment ───
@@ -600,17 +613,32 @@ try {
         }
     }
 
+    // ── زمان/کاربرِ علامت‌زدنِ «فوری» ──
+    // اولِ بار که کیس فوری می‌شود ثبت می‌نود؛ در ذخیره‌های بعدی (تا وقتی فوری است)
+    // مقدارِ قبلی حفظ می‌شود و با برداشتنِ علامت پاک می‌شود.
+    $urgentAt = null;
+    $urgentBy = null;
+    if ($isUrgent) {
+        $urgentAt = ($existingCaseRow['is_urgent_at'] ?? null) ?: date('Y-m-d H:i:s');
+        $urgentBy = ($existingCaseRow['is_urgent_by'] ?? null) ?: ((int) ($currentUser['id'] ?? 0) ?: null);
+    }
+
     if ($id) {
-        $sql = 'UPDATE cases SET doctor_id = ?, clinic_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, scan_body_type_id = ?, connection_type = ?, fixture_type_id = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, design_fee_is_unit = 1, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, case_cast_requested = ?, updated_at = NOW() WHERE id = ?';
+        $sql = 'UPDATE cases SET doctor_id = ?, clinic_id = ?, patient_name = ?, receipt_number = ?, service_id = ?, location_type = ?, teeth = ?, shade = ?, scan_body_type_id = ?, connection_type = ?, fixture_type_id = ?, quantity = ?, unit_price = ?, total_price = ?, design_fee = ?, design_fee_is_unit = 1, received_date = ?, status_id = ?, lab_id = ?, case_type = ?, designer_id = ?, outsourced_lab_id = ?, outsourced_service_id = ?, outsourced_qty = ?, outsourced_rate = ?, description = ?, parent_id = ?, source_branch_id = ?, case_cast_requested = ?, is_urgent = ?, is_urgent_at = ?, is_urgent_by = ?, updated_at = NOW() WHERE id = ?';
         // ⚠️ از $scan_body_type_id استفاده می‌شود (نه $scanBodyTypeId) — همان متغیری که
         // در بلوکِ اعتبارسنجی «نوع اسکن‌بادی/اتصال» پاک‌سازی و بازگردانی شده است.
-        $params = [$doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $castRequested, $id];
+        $params = [$doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $parent_id, $source_branch_id, $castRequested, $isUrgent, $urgentAt, $urgentBy, $id];
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
         $caseId = $id;
     } else {
-        $sql = 'INSERT INTO cases (parent_id, doctor_id, clinic_id, patient_name, receipt_number, service_id, location_type, teeth, shade, scan_body_type_id, connection_type, fixture_type_id, quantity, unit_price, total_price, design_fee, design_fee_is_unit, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, case_cast_requested, submit_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
-        $params = [$parent_id, $doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id, $castRequested, ($submitToken !== '' ? $submitToken : null)];
+        // ⚠️ تعدادِ ? باید دقیقاً برابرِ تعدادِ مقادیرِ $params باشد (۳۳ تا):
+        //    ۱۶ ? برای ستون‌های ۱..۱۶ · سپس ۱ (design_fee_is_unit) · سپس ۱۷ ? برای
+        //    received_date … submit_token · سپس NOW(), NOW().
+        //    باگِ ۱۴۰۵/۰۸/۱۸: هنگام افزودنِ ستون‌های is_urgent یک ? جا افتاد و
+        //    همهٔ ساخت‌های کیس با «SQLSTATE[HY093]» شکست می‌خورد.
+        $sql = 'INSERT INTO cases (parent_id, doctor_id, clinic_id, patient_name, receipt_number, service_id, location_type, teeth, shade, scan_body_type_id, connection_type, fixture_type_id, quantity, unit_price, total_price, design_fee, design_fee_is_unit, received_date, status_id, lab_id, case_type, designer_id, outsourced_lab_id, outsourced_service_id, outsourced_qty, outsourced_rate, description, branch_id, source_branch_id, case_cast_requested, is_urgent, is_urgent_at, is_urgent_by, submit_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())';
+        $params = [$parent_id, $doctor_id, $clinic_id, $patient_name, $receipt_number, $service_id, $location_type, $teeth, $shade, $scan_body_type_id, $connectionType, $fixture_type_id, $quantity, $unit_price, $total_price, $design_fee, $received_date, $status_id, $lab_id, $case_type, $designer_id, $outsourced_lab_id, $outsourced_service_id, $outsourced_qty, $outsourced_rate, $description, $branch_id, $source_branch_id, $castRequested, $isUrgent, $urgentAt, $urgentBy, ($submitToken !== '' ? $submitToken : null)];
         $stmt = db()->prepare($sql);
         try {
             $stmt->execute($params);
@@ -661,6 +689,16 @@ try {
         );
     }
 
+    // ── «فوری»: ثبتِ رویداد (فقط وقتی مقدار واقعاً تغییر کرده باشد) ──
+    if ($id) {
+        $prevUrgent = !empty($existingCaseRow['is_urgent']) ? 1 : 0;
+        if ($prevUrgent !== $isUrgent) {
+            log_case_activity($caseId, 'urgency', $isUrgent ? 'کیس «فوری» شد (اولویتِ طراحی)' : 'علامتِ «فوری» برداشته شد');
+        }
+    } elseif ($isUrgent) {
+        log_case_activity($caseId, 'urgency', 'کیس «فوری» ثبت شد (اولویتِ طراحی)');
+    }
+
     // Handle file uploads
     $uploadErrors = [];
     if (!empty($_FILES['case_files'])) {
@@ -700,7 +738,9 @@ try {
     echo json_encode($response, JSON_UNESCAPED_UNICODE);
     exit;
 } catch (Throwable $e) {
-    error_log("save_case EXCEPTION: " . $e->getMessage());
+    // موقع/خطِ دقیقِ خطا هم لاگ می‌شود (برای خطاهای PDO مثل HY093 که پیامشان
+    // کوئریِ مقصر را نشان نمی‌دهد).
+    error_log("save_case EXCEPTION at " . $e->getFile() . ':' . $e->getLine() . ' — ' . $e->getMessage());
     http_response_code(500);
     header('Content-Type: application/json; charset=utf-8');
     echo json_encode(['success' => false, 'error' => 'server_error', 'message' => $e->getMessage()]);

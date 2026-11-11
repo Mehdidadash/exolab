@@ -57,9 +57,9 @@ panel_layout_start('فاکتورهای طلب از شعبه‌ها');
         <?php
         $paid = getBranchReceivablePaid((int) $inv['id']);
         $st = $inv['payment_status'] ?? 'unpaid';
-        $payments = db()->prepare('SELECT * FROM branch_receivable_payments WHERE receivable_id = ? ORDER BY payment_date DESC, id DESC');
-        $payments->execute([(int) $inv['id']]);
-        $payRows = $payments->fetchAll();
+        $payRows = getBranchReceivablePayments((int) $inv['id']);
+        // بیش‌پرداخت کاملاً طبیعی است: شعبه ممکن است بیشتر از مبلغ فاکتور پرداخت کند
+        $overpaid = max(0.0, $paid - (float) $inv['total_amount']);
         ?>
         <tr>
             <td style="font-weight:bold;"><?= htmlspecialchars($inv['invoice_number']) ?></td>
@@ -71,6 +71,9 @@ panel_layout_start('فاکتورهای طلب از شعبه‌ها');
             <td>
                 <?php if ($st === 'paid'): ?>
                     <span class="badge" style="background:#dcfce7; color:#166534;">تسویه شده</span>
+                    <?php if ($overpaid > 0.5): ?>
+                        <span class="badge" style="background:#fef3c7; color:#92400e;" title="مبلغ اضافه به‌صورت طلب از این شعبه در «خالص بدهی هر شعبه» لحاظ می‌شود">بیش‌پرداخت <?= formatAmountToman($overpaid) ?></span>
+                    <?php endif; ?>
                 <?php elseif ($st === 'partial'): ?>
                     <span class="badge" style="background:#fef3c7; color:#92400e;">جزئی</span>
                 <?php else: ?>
@@ -78,7 +81,7 @@ panel_layout_start('فاکتورهای طلب از شعبه‌ها');
                 <?php endif; ?>
             </td>
             <td class="actions" style="white-space:nowrap;">
-                <button type="button" class="btn receivable-pay-toggle" data-inv="<?= (int) $inv['id'] ?>" style="background:#06B6D4; color:#fff; padding:4px 10px;">💳 ثبت دریافت</button>
+                <a class="btn" href="payment_form.php?party_type=branch&party_id=<?= (int) ($inv['partner_branch_id'] ?? 0) ?>&receivable_id=<?= (int) $inv['id'] ?>" title="ثبت دریافت در بخش دریافتی‌ها" style="background:#06B6D4; color:#fff; padding:4px 10px; text-decoration:none;">💳 ثبت دریافت</a>
                 <a class="btn" href="branch_receivable_form.php?id=<?= (int) $inv['id'] ?>" title="ویرایش" style="background:#eef2ff; color:#3730a3; padding:4px 10px; text-decoration:none;">✏️</a>
                 <a class="btn" href="branch_receivable_pdf.php?id=<?= (int) $inv['id'] ?>" target="_blank" style="background:#E5E7EB; color:#0F172A; padding:4px 10px; text-decoration:none;">PDF</a>
                 <?= action_dropdown(null, null, 'delete_branch_receivable.php', (int) $inv['id']) ?>
@@ -89,14 +92,11 @@ panel_layout_start('فاکتورهای طلب از شعبه‌ها');
             <td colspan="8" style="font-size:0.85rem; color:#525252; padding:4px 16px;">
                 <span class="badge" style="background:#e0f2fe; color:#075985;">دریافتی: <?= formatAmountToman($pr['amount']) ?></span>
                 <?= $pr['payment_date'] ? 'تاریخ: ' . toJalaliDateFormatted($pr['payment_date']) : '' ?>
-                <?= !empty($pr['method']) ? ' — روش: ' . htmlspecialchars($pr['method']) : '' ?>
-                <?= !empty($pr['reference']) ? ' — ارجاع: ' . htmlspecialchars($pr['reference']) : '' ?>
+                <?= !empty($pr['payment_method']) ? ' — روش: ' . htmlspecialchars($pr['payment_method']) : '' ?>
+                <?= !empty($pr['transaction_number']) ? ' — تراکنش: ' . htmlspecialchars($pr['transaction_number']) : '' ?>
+                <?= !empty($pr['account_owner_name']) ? ' — حساب: ' . htmlspecialchars($pr['account_owner_name']) : '' ?>
                 <?= !empty($pr['notes']) ? ' — ' . htmlspecialchars($pr['notes']) : '' ?>
-                <form method="post" action="delete_branch_receivable_payment.php" style="display:inline; margin-right:8px;">
-                    <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                    <input type="hidden" name="id" value="<?= (int) $pr['id'] ?>">
-                    <button type="submit" style="background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; padding:2px 8px; font-size:0.8rem;">حذف</button>
-                </form>
+                <a href="payment_form.php?id=<?= (int) $pr['id'] ?>" style="margin-right:8px; font-size:0.8rem; color:#0369a1;">ویرایش در دریافتی‌ها</a>
             </td>
         </tr>
         <?php endforeach; endif; ?>
@@ -105,70 +105,11 @@ panel_layout_start('فاکتورهای طلب از شعبه‌ها');
 </table>
 <?php endif; ?>
 
-<!-- Inline payment form (shown when a "ثبت دریافت" button is clicked) -->
-<div id="receivable-pay-form" class="modal" style="display:none;">
-    <div class="modal-content form-card" style="max-width:460px; margin:auto; padding:24px;">
-        <h3 style="margin-bottom:16px;">ثبت دریافت از شعبه همکار</h3>
-        <form method="post" action="save_branch_receivable_payment.php">
-            <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-            <input type="hidden" name="receivable_id" id="pay-receivable-id" value="">
-            <div class="form-group">
-                <label for="pay-amount">مبلغ دریافت (تومان)</label>
-                <input type="number" name="amount" id="pay-amount" min="0" step="1" required>
-            </div>
-            <div class="form-group">
-                <label for="pay-date">تاریخ دریافت</label>
-                <input type="text" name="payment_date" id="pay-date" placeholder="۱۴۰۳/۰۱/۰۱">
-            </div>
-            <div class="form-group">
-                <label for="pay-method">روش پرداخت</label>
-                <select name="method" id="pay-method">
-                    <option value="">—</option>
-                    <option value="card">کارت به کارت</option>
-                    <option value="cash">نقدی</option>
-                    <option value="pos">POS</option>
-                    <option value="transfer">حواله/پایا</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label for="pay-ref">شماره ارجاع/پیگیری</label>
-                <input type="text" name="reference" id="pay-ref">
-            </div>
-            <div class="form-group">
-                <label for="pay-notes">توضیحات</label>
-                <input type="text" name="notes" id="pay-notes">
-            </div>
-            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
-                <button type="button" id="pay-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
-                <button type="submit" class="btn" style="background:#06B6D4; color:#fff;">ثبت دریافت</button>
-            </div>
-        </form>
-    </div>
+<div class="form-card" style="margin-top:16px; padding:14px 18px;">
+    <p style="color:#525252; margin:0; font-size:0.9rem;">
+        ثبتِ دریافت از شعبهٔ همکار از همین‌جا به بخشِ
+        <a href="payments.php?type=branch">دریافتی‌ها</a> منتقل شده است: دکمهٔ «💳 ثبت دریافت» شما را به فرمِ یکپارچهٔ
+        <a href="payment_form.php?party_type=branch">ثبت دریافت</a> می‌برد و رکورد با نوعِ «شعبه همکار» در همان فهرست ثبت می‌شود.
+    </p>
 </div>
-
-<link rel="stylesheet" href="../assets/css/persian-datepicker.min.css">
-<script src="../assets/js/persian-date.min.js"></script>
-<script src="../assets/js/persian-datepicker.min.js"></script>
-<script>
-(function(){
-    var modal = document.getElementById('receivable-pay-form');
-    var invInput = document.getElementById('pay-receivable-id');
-    document.querySelectorAll('.receivable-pay-toggle').forEach(function(btn){
-        btn.addEventListener('click', function(){
-            invInput.value = btn.getAttribute('data-inv');
-            document.getElementById('pay-amount').value = '';
-            document.getElementById('pay-ref').value = '';
-            document.getElementById('pay-notes').value = '';
-            document.getElementById('pay-method').value = '';
-            modal.style.display = 'flex';
-            modal.style.alignItems = 'center';
-            modal.style.justifyContent = 'center';
-        });
-    });
-    document.getElementById('pay-cancel').addEventListener('click', function(){ modal.style.display = 'none'; });
-    if (window.persianDatepicker) {
-        window.persianDatepicker('#pay-date', { format: 'YYYY/MM/DD', autoClose: true });
-    }
-})();
-</script>
 <?php panel_layout_end(); ?>
