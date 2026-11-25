@@ -498,9 +498,86 @@ $debtSql = "SELECT CASE
         ORDER BY debt DESC";
 try {
     $debtRows = db()->query($debtSql)->fetchAll();
+
+    // ── بدهیِ ما به لابراتوارها (فاکتورهای برون‌سپاریِ پرداخت‌نشده) ──
+    // «بدهی خالص» لابراتوار = فاکتورهای INV-LAB پرداخت‌نشده (طلبِ ما)
+    //                        − فاکتورهای برون‌سپاریِ پرداخت‌نشده (بدهیِ ما).
+    // قبلاً فقط سمتِ اول حساب می‌شد؛ لابراتواری که هم به ما بدهکار و هم از ما طلبکار
+    // بود، عددِ درستی نشان نمی‌داد.
+    $labPayables = [];   // [lab_id] => ['party'=>string, 'due'=>float, 'unpaid_count'=>int]
+    $labNameToId = [];
+    try {
+        $payBranchCond = is_root_admin() ? '' : ' AND COALESCE(oi.branch_id, 1) = ' . (int) $bid;
+        $paySql = "SELECT oi.lab_id,
+                          COALESCE(u.full_name, CONCAT('لابراتوار #', oi.lab_id)) AS party,
+                          SUM(oi.total_amount - COALESCE(ep.paid, 0)) AS due,
+                          SUM(CASE WHEN oi.total_amount - COALESCE(ep.paid, 0) > 0.01 THEN 1 ELSE 0 END) AS unpaid_count
+                   FROM outsource_invoices oi
+                   LEFT JOIN users u ON u.id = oi.lab_id
+                   LEFT JOIN (SELECT invoice_id, SUM(amount) AS paid
+                              FROM expense_payments WHERE expense_type = 'outsource'
+                              GROUP BY invoice_id) ep ON ep.invoice_id = oi.id
+                   WHERE 1 = 1{$payBranchCond}
+                     AND NOT EXISTS (SELECT 1 FROM cases c
+                                     WHERE c.outsource_invoice_id = oi.id
+                                       AND c.receivable_invoice_id IS NOT NULL)
+                   GROUP BY oi.lab_id, party
+                   HAVING due > 0.01";
+        foreach (db()->query($paySql) as $r) {
+            $lid = (int) $r['lab_id'];
+            if ($lid <= 0) continue;
+            $labPayables[$lid] = [
+                'party'        => (string) $r['party'],
+                'due'          => (float) $r['due'],
+                'unpaid_count' => (int) $r['unpaid_count'],
+            ];
+        }
+        // نام → شناسه برای فاکتورهای INV-LAB قدیمی که doctor_id خالی دارند
+        foreach (db()->query("SELECT id, full_name FROM users WHERE role IN ('lab','outsource_lab','customer_lab','partner_lab')") as $u) {
+            $labNameToId[trim((string) $u['full_name'])] = (int) $u['id'];
+        }
+    } catch (\Throwable $e) {
+        $labPayables = [];
+        $labNameToId = [];
+    }
+
+    // افزودنِ فیلدهای «بدهی ما» و «خالص» به هر ردیف
+    foreach ($debtRows as &$r) {
+        $r['payable_due'] = 0.0;
+        if (($r['kind'] ?? '') === 'lab') {
+            $lid = (int) ($r['doctor_id'] ?? 0);
+            if ($lid <= 0) {
+                $lid = $labNameToId[trim((string) ($r['party'] ?? ''))] ?? 0;
+            }
+            if ($lid > 0 && isset($labPayables[$lid])) {
+                $r['payable_due'] = (float) $labPayables[$lid]['due'];
+                unset($labPayables[$lid]);   // این لابراتوار همین‌جا نمایش داده شد
+            }
+        }
+        $r['net'] = (float) ($r['debt'] ?? 0) - (float) $r['payable_due'];
+    }
+    unset($r);
+
+    // لابراتوارهایی که فقط «ما به آن‌ها بدهکاریم» (فاکتور INV-LAB ندارند) هم دیده شوند
+    foreach ($labPayables as $lid => $p) {
+        $debtRows[] = [
+            'kind'          => 'lab',
+            'doctor_id'     => (int) $lid,
+            'party'         => $p['party'],
+            'unpaid_count'  => 0,
+            'invoice_count' => 0,
+            'invoiced'      => 0.0,
+            'paid_amount'   => 0.0,
+            'debt'          => 0.0,
+            'payable_due'   => (float) $p['due'],
+            'net'           => -1 * (float) $p['due'],
+        ];
+    }
+
     foreach ($debtRows as $r) {
         $k = $r['kind'];
-        $debtTotals[$k] = ($debtTotals[$k] ?? 0) + (float) $r['debt'];
+        // کارت‌ها و جمعِ کل بر مبنای «خالص» است (برای لابراتوارها منفی هم می‌شود)
+        $debtTotals[$k] = ($debtTotals[$k] ?? 0) + (float) ($r['net'] ?? $r['debt']);
         $debtCounts[$k] = ($debtCounts[$k] ?? 0) + (int) ($r['unpaid_count'] ?? 0);
     }
 } catch (\Throwable $e) {
@@ -780,15 +857,18 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
     ?>
     <p style="margin:0 0 14px; font-size:0.85rem; color:#525252;">
         بدهی = مبلغ <b>فاکتورهای پرداخت‌نشده</b> منهای پرداخت‌های جزئیِ ثبت‌شده (خالص). این جدول مستقل از بازهٔ تاریخِ بالای صفحه است
-        (تصویر لحظه‌ایِ بدهی‌ها). برای ثبت پرداخت: «مالی → دریافتی».
+        (تصویر لحظه‌ایِ بدهی‌ها). برای ثبت پرداخت/دریافت: «مالی → دریافتی».
+        <br>
+        <b>لابراتوارها:</b> مبلغِ نمایش‌داده‌شده <b>خالص</b> است = فاکتورهای INV-LAB پرداخت‌نشده (طلبِ ما) − فاکتورهای برون‌سپاریِ پرداخت‌نشده (بدهیِ ما).
+        عددِ منفی یعنی ما به آن لابراتوار بدهکاریم.
     </p>
 
     <div style="display:flex; gap:14px; flex-wrap:wrap; margin-bottom:18px;">
         <?php foreach ($debtGroups as $k => $g): ?>
         <div style="flex:1; min-width:180px; background:#fff; border:1px solid #e5e7eb; border-right:4px solid <?= $g['color'] ?>; border-radius:12px; padding:14px 16px;">
-            <div style="font-size:0.85rem; color:#525252;">بدهی <?= htmlspecialchars($g['label']) ?></div>
+            <div style="font-size:0.85rem; color:#525252;"><?= $k === 'lab' ? 'خالص بدهی ' : 'بدهی ' ?><?= htmlspecialchars($g['label']) ?></div>
             <div style="font-size:1.25rem; font-weight:bold; color:<?= $debtTotals[$k] > 0 ? '#b91c1c' : '#166534' ?>; margin-top:6px;"><?= formatAmountToman($debtTotals[$k]) ?> <small style="font-size:0.7rem;">تومان</small></div>
-            <small style="color:#6b7280;"><?= toPersianDigits($debtCounts[$k]) ?> فاکتور پرداخت‌نشده</small>
+            <small style="color:#6b7280;"><?= toPersianDigits($debtCounts[$k]) ?> فاکتور پرداخت‌نشده<?= $k === 'lab' ? ' — خالص با احتساب بدهی ما' : '' ?></small>
         </div>
         <?php endforeach; ?>
         <div style="flex:1; min-width:180px; background:<?= $debtTotalAll > 0 ? '#fef2f2' : '#f0fdf4' ?>; border:1px solid <?= $debtTotalAll > 0 ? '#fecaca' : '#bbf7d0' ?>; border-radius:12px; padding:14px 16px;">
@@ -813,6 +893,9 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
                             <th style="text-align:center; padding:8px; border-bottom:1px solid #e5e7eb;">فاکتور پرداخت‌نشده</th>
                             <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">مبلغ فاکتورها</th>
                             <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">پرداخت‌شده</th>
+                            <?php if ($k === 'lab'): ?>
+                            <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">بدهی ما به لابراتوار</th>
+                            <?php endif; ?>
                             <th style="text-align:left; padding:8px; border-bottom:1px solid #e5e7eb;">بدهی خالص</th>
                         </tr>
                     </thead>
@@ -831,7 +914,14 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
                             <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:center;"><?= toPersianDigits((int) ($r['unpaid_count'] ?? 0)) ?></td>
                             <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left;"><?= formatAmountToman((float) $r['invoiced']) ?></td>
                             <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; color:#166534;"><?= formatAmountToman((float) $r['paid_amount']) ?></td>
-                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; font-weight:bold; color:#b91c1c;"><?= formatAmountToman((float) $r['debt']) ?></td>
+                            <?php if ($k === 'lab'): ?>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; color:#b45309;"><?= formatAmountToman((float) ($r['payable_due'] ?? 0)) ?></td>
+                            <?php endif; ?>
+                            <?php
+                            $netVal = (float) ($r['net'] ?? $r['debt']);
+                            $netColor = $netVal > 0.01 ? '#b91c1c' : ($netVal < -0.01 ? '#0369a1' : '#166534');
+                            ?>
+                            <td style="padding:8px; border-bottom:1px solid #f1f5f9; text-align:left; font-weight:bold; color:<?= $netColor ?>;"><?= formatAmountToman($netVal) ?></td>
                         </tr>
                         <?php endforeach; ?>
                         <tr style="font-weight:bold; background:#f8fafc;">
@@ -839,7 +929,10 @@ panel_layout_start('بررسی وضعیت درآمد و هزینه');
                             <td style="padding:8px; text-align:center;"><?= toPersianDigits($debtCounts[$k]) ?></td>
                             <td style="padding:8px; text-align:left;"><?= formatAmountToman(array_sum(array_map(function ($r) { return (float) $r['invoiced']; }, $rows))) ?></td>
                             <td style="padding:8px; text-align:left; color:#166534;"><?= formatAmountToman(array_sum(array_map(function ($r) { return (float) $r['paid_amount']; }, $rows))) ?></td>
-                            <td style="padding:8px; text-align:left; color:#b91c1c;"><?= formatAmountToman($debtTotals[$k]) ?></td>
+                            <?php if ($k === 'lab'): ?>
+                            <td style="padding:8px; text-align:left; color:#b45309;"><?= formatAmountToman(array_sum(array_map(function ($r) { return (float) ($r['payable_due'] ?? 0); }, $rows))) ?></td>
+                            <?php endif; ?>
+                            <td style="padding:8px; text-align:left; color:<?= $debtTotals[$k] > 0 ? '#b91c1c' : '#166534' ?>;"><?= formatAmountToman($debtTotals[$k]) ?></td>
                         </tr>
                     </tbody>
                 </table>

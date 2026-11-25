@@ -27,7 +27,16 @@ foreach ($__requiredFiles as $__f) {
 }
 
 if ($__missingFiles) {
-    error_log('index.php: missing required files: ' . implode(', ', $__missingFiles));
+    // لاگِ مهارشده: هنگام آپلودِ ناقص، هر بازدید یک خط تولید می‌کرد و error_log پر می‌شد.
+    $__guardLog = __DIR__ . '/includes/deploy_guard.php';
+    if (is_file($__guardLog)) {
+        require_once $__guardLog;
+    }
+    if (function_exists('exolab_log_throttled')) {
+        exolab_log_throttled('index_missing_files', 'index.php: missing required files: ' . implode(', ', $__missingFiles));
+    } else {
+        error_log('index.php: missing required files: ' . implode(', ', $__missingFiles));
+    }
     http_response_code(503);
     @ini_set('display_errors', '0');
     $__details = '';

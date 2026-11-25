@@ -92,6 +92,26 @@ foreach ($rows as $r) {
     $zip->addFile($filePath, $entry);
     $added++;
 }
+
+// ─── فایل متنی «اطلاعات کیس» داخل پوشهٔ هر کیس ───
+// توضیحات کیس (و برای کاستوم اباتمنت: نوع اسکن‌بادی / فیکسچر / نحوهٔ اتصال) همراه
+// فایل‌های خام می‌آید تا وقتی اسکن‌ها از سامانه خارج می‌شوند این اطلاعات گم نشود.
+$infoAdded = 0;
+foreach (array_keys($baseNames) as $cid) {
+    $infoText = caseInfoTextForDownload((int) $cid);
+    if ($infoText === '') {
+        continue;
+    }
+    $entry = $baseNames[$cid] . '/case_info.txt';
+    $i = 1;
+    while (isset($used[$entry])) {
+        $i++;
+        $entry = $baseNames[$cid] . '/case_info (' . $i . ').txt';
+    }
+    $used[$entry] = true;
+    $zip->addFromString($entry, $infoText);
+    $infoAdded++;
+}
 $zip->close();
 
 if ($added === 0) {

@@ -43,6 +43,9 @@ $orderDir = isset($_GET['order'][0]['dir']) && in_array(strtolower($_GET['order'
 $whereClauses = ['1=1'];
 $params = [];
 
+// کیس‌های آرشیوشده (مثل کیس‌های قدیمیِ «مرحلهٔ الاینر» که به تحویل تبدیل شده‌اند) در هیچ لیستی نمی‌آیند.
+$whereClauses[] = 'c.archived_at IS NULL';
+
 // Branch scoping: a branch-scoped user sees only their branch's cases
 // (owned by their branch OR where their branch is the partner/source branch).
 // مدیر کل (نقش admin) نیز به‌عنوان شعبهٔ مرکزی (۱) رفتار می‌کند.
@@ -119,6 +122,14 @@ if (!empty($_GET['service_id'])) {
     $whereClauses[] = 'c.service_id = ?';
     $params[] = (int) $_GET['service_id'];
 }
+// ─── کیس‌های الاینر ───
+// جدول اصلی «کیس‌ها» این کیس‌ها را نشان نمی‌دهد (صفحهٔ جدای aligner_cases.php).
+// با only_aligner=1 فقط کیس‌های «طرح درمان الاینر» برمی‌گردند.
+if (!empty($_GET['only_aligner'])) {
+    $whereClauses[] = 'p.is_aligner = 1';
+} else {
+    $whereClauses[] = '(p.is_aligner IS NULL OR p.is_aligner = 0)';
+}
 // فیلتر «فاکتورنشده»: کیسی که به هیچ فاکتوری اضافه نشده باشد — نه فاکتور پزشک/کلینیک
 // (invoice_id)، نه فاکتور طراح، نه فاکتور برون‌سپاری، نه فاکتور طلب از شعبه.
 if (!empty($_GET['uninvoiced'])) {
@@ -131,8 +142,12 @@ if (!empty($_GET['unprinted_labels'])) {
 }
 // فیلتر «درخواست کست»: فقط کیس‌هایی که از طراح درخواست کست شده است.
 // (طراح برای پیدا کردن کارهایی که باید کست/مدل تحویل دهد استفاده می‌کند.)
-if (!empty($_GET['cast_requested'])) {
-    $whereClauses[] = 'c.case_cast_requested = 1';
+// مقادیر: '1' = دارای درخواست کست، '0' = بدون درخواست کست، خالی = همه.
+if (isset($_GET['cast_requested']) && trim((string) $_GET['cast_requested']) !== '') {
+    $castFilter = (string) $_GET['cast_requested'];
+    $whereClauses[] = ($castFilter === '0')
+        ? 'COALESCE(c.case_cast_requested, 0) = 0'
+        : 'c.case_cast_requested = 1';
 }
 // فیلتر «فوری»: فقط کیس‌هایی که به‌عنوان فوری (اولویتِ طراحی) علامت خورده‌اند.
 if (!empty($_GET['urgent'])) {
@@ -224,7 +239,11 @@ $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, p.
         (SELECT COUNT(*) FROM case_activity_log l WHERE l.case_id = c.id AND l.action = 'file_download' AND l.details LIKE '%\"type\":\"raw\"%') AS raw_downloaded,
         (SELECT MAX(lv.created_at) FROM case_activity_log lv WHERE lv.case_id = c.id AND lv.user_id = " . (int) $user['id'] . " AND lv.action = 'view') AS my_last_view,
         (SELECT MAX(ec.created_at) FROM entity_comments ec WHERE ec.entity_type = 'case' AND ec.entity_id = c.id) AS last_comment,
-        (SELECT MAX(cf2.created_at) FROM case_files cf2 WHERE cf2.case_id = c.id) AS last_file
+        (SELECT MAX(cf2.created_at) FROM case_files cf2 WHERE cf2.case_id = c.id) AS last_file,
+        COALESCE(ald.al_up_done, 0) AS al_up_done,
+        COALESCE(ald.al_lo_done, 0) AS al_lo_done,
+        COALESCE(ald.al_deliv_count, 0) AS al_deliv_count,
+        COALESCE(ald.al_deliv_amount, 0) AS al_deliv_amount
     FROM cases c
     LEFT JOIN users u ON c.doctor_id = u.id
     LEFT JOIN site_prices p ON c.service_id = p.id
@@ -236,6 +255,9 @@ $dataSql = "SELECT c.*, u.full_name AS doctor_name, p.title AS service_title, p.
     LEFT JOIN branches b ON c.branch_id = b.id
     LEFT JOIN branches sb ON c.source_branch_id = sb.id
     LEFT JOIN users cl ON c.clinic_id = cl.id
+    LEFT JOIN (SELECT case_id, SUM(upper_qty) AS al_up_done, SUM(lower_qty) AS al_lo_done,
+                      COUNT(*) AS al_deliv_count, SUM(amount) AS al_deliv_amount
+                 FROM case_aligner_deliveries GROUP BY case_id) ald ON ald.case_id = c.id
     WHERE " . implode(' AND ', $whereClauses) . "
     ORDER BY $orderBy $orderDir";
 
@@ -453,7 +475,13 @@ foreach ($rows as $r) {
         (int) ($r['quantity'] ?? 0),  // 21: تعداد واحد (برای جمعِ زیر جدول)
         !empty($r['case_cast_requested']) ? 1 : 0,   // 22: درخواست کست از طراح
         !empty($r['is_urgent']) ? 1 : 0,           // 23: فوری (اولویتِ طراحی)
-        $clinicHtml                               // 24: نام کلینیک صاحبِ کیس
+        $clinicHtml,                              // 24: نام کلینیک صاحبِ کیس
+        (int) ($r['al_up_done'] ?? 0),            // 25: مراحل تحویل‌شده — فک بالا
+        (int) ($r['al_lo_done'] ?? 0),            // 26: مراحل تحویل‌شده — فک پایین
+        (int) ($r['al_deliv_count'] ?? 0),        // 27: تعداد بارهای تحویل
+        (float) ($r['al_deliv_amount'] ?? 0),     // 28: مبلغ تحویل‌شده
+        (int) ($r['aligner_upper_stages'] ?? 0),  // 29: تعداد کل مراحل فک بالا
+        (int) ($r['aligner_lower_stages'] ?? 0)   // 30: تعداد کل مراحل فک پایین
     ];
 }
 

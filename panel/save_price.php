@@ -61,6 +61,23 @@ if ($defaultDesignFeeProvided) {
     $defaultDesignFee = ($raw === '') ? null : max(0, (float) $raw);
 }
 
+// طراح پیش‌فرضِ این خدمت:
+//   ''  → NULL (زنجیرهٔ عادی پزشک/شعبه/سراسری)
+//   '0' → 0 (بدون طراح)
+//   >0  → همان طراح (فقط اگر واقعاً طراحِ فعال باشد)
+$defaultDesignerProvided = array_key_exists('default_designer_id', $_POST);
+$defaultDesignerId = null;
+if ($defaultDesignerProvided) {
+    $rawDesigner = trim((string) $_POST['default_designer_id']);
+    if ($rawDesigner === '') {
+        $defaultDesignerId = null;
+    } elseif ((int) $rawDesigner > 0) {
+        $defaultDesignerId = isValidDesignerId((int) $rawDesigner) ? (int) $rawDesigner : null;
+    } else {
+        $defaultDesignerId = 0;
+    }
+}
+
 if ($title === '' || $price === '') {
     if ($isAjax) {
         http_response_code(400);
@@ -86,11 +103,12 @@ if (!empty($_POST['id'])) {
     if ($requiresScanBodyProvided) { $setParts[] = 'requires_scan_body = ?'; $params[] = $requiresScanBody; }
     if ($requiresFixtureProvided)  { $setParts[] = 'requires_fixture_type = ?'; $params[] = $requiresFixture; }
     if ($defaultDesignFeeProvided) { $setParts[] = 'default_design_fee = ?'; $params[] = $defaultDesignFee; }
+    if ($defaultDesignerProvided)  { $setParts[] = 'default_designer_id = ?'; $params[] = $defaultDesignerId; }
     $params[] = (int) $_POST['id'];
     $stmt = db()->prepare('UPDATE site_prices SET ' . implode(', ', $setParts) . ' WHERE id = ?');
     $stmt->execute($params);
 } else {
-    $stmt = db()->prepare('INSERT INTO site_prices (title, short_name, description, price, category, active, display_order, hide_on_site, qty_manual, base_units, extra_unit_price, design_required, requires_scan_body, requires_fixture_type, default_design_fee) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    $stmt = db()->prepare('INSERT INTO site_prices (title, short_name, description, price, category, active, display_order, hide_on_site, qty_manual, base_units, extra_unit_price, design_required, requires_scan_body, requires_fixture_type, default_design_fee, default_designer_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     $stmt->execute([
         $title, ($shortName === '' ? null : $shortName), $description, $price, $category, $active, $display_order, $hideOnSite,
         ($qtyManualProvided ? $qtyManual : 0),
@@ -100,6 +118,7 @@ if (!empty($_POST['id'])) {
         ($requiresScanBodyProvided ? $requiresScanBody : 0),
         ($requiresFixtureProvided ? $requiresFixture : 0),
         ($defaultDesignFeeProvided ? $defaultDesignFee : null),
+        ($defaultDesignerProvided ? $defaultDesignerId : null),
     ]);
 }
 

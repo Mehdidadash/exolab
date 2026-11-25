@@ -86,6 +86,18 @@ $fixture_type_id = !empty($data['fixture_type_id']) ? (int) $data['fixture_type_
 $quantity = !empty($data['quantity']) ? (int)$data['quantity'] : 1;
 if ($quantity < 1) $quantity = 1;
 if ($quantity > 999) $quantity = 999;   // جلوگیری از اشتباه تایپی
+// ─── خدماتِ «تعداد ثابت» (site_prices.fixed_qty) ───
+// «طرح درمان الاینر شفاف» یک فک یا دو فک، مبلغِ یکسان دارد؛ پس تعداد همیشه ۱ ذخیره می‌شود
+// (حتی اگر مرورگر مقدارِ ۲ برای «هر دو فک» بفرستد).
+if (!empty($service_id)) {
+    try {
+        $fxSt = db()->prepare('SELECT fixed_qty FROM site_prices WHERE id = ? LIMIT 1');
+        $fxSt->execute([(int) $service_id]);
+        if ((int) $fxSt->fetchColumn() === 1) {
+            $quantity = 1;
+        }
+    } catch (Throwable $e) {}
+}
 $unit_price = !empty($data['unit_price']) ? (float)$data['unit_price'] : 0;
 // هزینهٔ طراحی به‌صورت «فی» (نرخ هر واحد) ذخیره می‌شود، نه جمع کل.
 // جمع کل طراحی هرجا لازم شد با `design_fee * quantity` محاسبه می‌شود.
@@ -135,7 +147,7 @@ $isUrgent = $urgentSent ? (!empty($data['is_urgent']) ? 1 : 0) : null;
 // «طراح پیش‌فرض» انتخاب می‌شود تا کیس همیشه طراح داشته باشد.
 // اگر فرم فیلد را فرستاده و کاربر عمداً «بدون طراح» را انتخاب کرده، همان خالی می‌ماند.
 if (!$designer_id && !$editingCase && !array_key_exists('designer_id', $data)) {
-    $defaultDesigner = getDefaultDesignerFor($doctor_id);
+    $defaultDesigner = getDefaultDesignerFor($doctor_id, null, $service_id ?: null);
     if ($defaultDesigner) {
         $designer_id = (int) $defaultDesigner['id'];
     }

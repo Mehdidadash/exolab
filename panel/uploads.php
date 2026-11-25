@@ -98,11 +98,14 @@ $upErrText = [
 <div class="form-card" style="max-width:760px; margin:0 auto 24px;">
     <h3>آپلود فایل جدید</h3>
     <p style="color:#555; margin:6px 0 12px;">می‌توانید چند فایل را همزمان انتخاب کنید (ZIP/RAR/عکس/مدل سه‌بعدی). اگر چند فایل انتخاب کنید، می‌توانید همه را در یک فایل ZIP بسته‌بندی کنید. اتصال به کیس اختیاری است.</p>
-    <form id="upload-form" method="post" enctype="multipart/form-data" style="margin-top:12px;">
+    <form id="upload-form" method="post" enctype="multipart/form-data" novalidate style="margin-top:12px;">
         <input type="hidden" name="_csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
         <div class="form-group">
             <label for="upload-file">فایل‌ها (می‌توانید چند تا انتخاب کنید)</label>
-            <input type="file" id="upload-file" name="files[]" accept=".zip,.rar,.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.stl,.ply,.stp,.step,.obj,.3mf,.matrix4,.dentalProject,.iftScan,.constructionInfo,.dcm,.dicom,.txt,.xml,.html,.htm" multiple required>
+            <?php // ⚠️ `required` نباید باشد: فایل‌ها در `picked` نگه داشته می‌شوند و input پس از
+            // هر انتخاب خالی می‌شود؛ با required، مرورگر قبل از submit پیام
+            // «Please select one or more files» می‌داد و آپلود انجام نمی‌شد. اعتبارسنجی در JS است. ?>
+            <input type="file" id="upload-file" name="files[]" accept=".zip,.rar,.pdf,.jpg,.jpeg,.png,.gif,.webp,.bmp,.stl,.ply,.stp,.step,.obj,.3mf,.matrix4,.dentalProject,.iftScan,.constructionInfo,.dcm,.dicom,.txt,.xml,.html,.htm" multiple>
             <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">
                 <button type="button" id="upload-pick-files" class="btn" style="background:#e0f2fe; color:#0369a1; padding:5px 12px;">🗂 انتخاب فایل</button>
                 <button type="button" id="upload-pick-folder" class="btn" style="background:#f0fdf4; color:#15803d; border:1px solid #bbf7d0; padding:5px 12px;">📁 انتخاب پوشه</button>
@@ -186,6 +189,9 @@ $upErrText = [
                    . '<input type="hidden" name="id" value="' . (int) $u['id'] . '">'
                    . '<button class="btn" style="background:#fee2e2; color:#991b1b;">حذف</button></form>';
         }
+        // الصاقِ همین فایل به یک کیس (مودال مشترک پایین صفحه)
+        $acts .= '<button type="button" class="btn js-upl-attach" data-upload="' . (int) $u['id'] . '"'
+               . ' style="background:#ede9fe; color:#5b21b6;" title="الصاق این فایل به یک کیس">📎 الصاق</button>';
         $myFileRows[] = [
             'id'       => (int) $u['id'],
             'name'     => (string) $u['original_name'],
@@ -199,10 +205,14 @@ $upErrText = [
         ];
     }
     require_once __DIR__ . '/../includes/file_details_view.php';
+    // دکمهٔ «الصاق پوشه به کیس» — __FULLPATH__ توسط کامپوننت با مسیر کامل پر می‌شود
+    $uplAttachFolderBtn = '<button type="button" class="btn js-upl-attach-folder" style="background:#ede9fe; color:#5b21b6;"'
+        . ' data-folder="__FULLPATH__" title="الصاق همهٔ فایل‌های این پوشه به یک کیس">📎 الصاق پوشه</button>';
     renderFileDetailsView($myFileRows, [
         'empty'         => 'هنوز فایلی آپلود نکرده‌اید.',
         'folder_rename' => ['action' => 'rename_upload_folder.php', 'all' => 0],
         'folder_download_action' => 'download_upload_folder.php?folder=__FOLDER__',
+        'folder_actions' => $uplAttachFolderBtn,
     ]);
     ?>
 </div>
@@ -226,10 +236,22 @@ $upErrText = [
                    . '<input type="hidden" name="id" value="' . (int) $u['id'] . '">'
                    . '<button class="btn" style="background:#fee2e2; color:#991b1b;">حذف</button></form>';
         }
+        // الصاقِ همین فایل به یک کیس
+        $acts .= '<button type="button" class="btn js-upl-attach" data-upload="' . (int) $u['id'] . '"'
+               . ' style="background:#ede9fe; color:#5b21b6;" title="الصاق این فایل به یک کیس">📎 الصاق</button>';
+        // ─── گروه‌بندیِ کتابخانهٔ مشترک بر اساس «آپلودکننده» ───
+        // قبلاً همهٔ آپلودها فقط براساس rel_path (نام پوشهٔ دستگاه اسکن) گروه می‌شدند و
+        // فایلِ پزشکانِ مختلف که پوشهٔ هم‌نام داشتند در یک پوشه قاطی می‌شدند.
+        // حالا یک سگمنتِ گروه بالای مسیر اضافه می‌شود: «نام آپلودکننده #شناسه».
+        $groupName = trim((string) ($u['uploader_name'] ?? ''));
+        if ($groupName === '') { $groupName = 'کاربر #' . (int) $u['user_id']; }
+        $groupSeg  = mb_substr(preg_replace('#[/\\\\]+#u', '-', $groupName), 0, 40) . ' #' . (int) $u['user_id'];
+        $relOrg    = trim((string) ($u['rel_path'] ?? ''));
+        $relAll    = $groupSeg . ($relOrg !== '' ? '/' . $relOrg : '');
         $allFileRows[] = [
             'id'       => (int) $u['id'],
             'name'     => (string) $u['original_name'],
-            'rel_path' => $u['rel_path'] ?? null,
+            'rel_path' => $relAll,
             'size'     => $u['size'] ?? null,
             'date'     => $u['created_at'] ?? null,
             'ext'      => strtolower((string) pathinfo((string) $u['original_name'], PATHINFO_EXTENSION)),
@@ -242,14 +264,119 @@ $upErrText = [
     if (!function_exists('renderFileDetailsView')) {
         require_once __DIR__ . '/../includes/file_details_view.php';
     }
+    // در کتابخانهٔ مشترک، مسیرِ پوشه یک سگمنتِ گروه دارد؛ دکمهٔ الصاق باید گروه را تشخیص دهد.
+    $uplAttachFolderBtnAll = '<button type="button" class="btn js-upl-attach-folder" style="background:#ede9fe; color:#5b21b6;"'
+        . ' data-folder="__FULLPATH__" data-scope="shared" title="الصاق همهٔ فایل‌های این پوشه به یک کیس">📎 الصاق پوشه</button>';
     renderFileDetailsView($allFileRows, [
         'empty'         => 'فایلی در کتابخانه نیست.',
         'folder_rename' => ['action' => 'rename_upload_folder.php', 'all' => 1],
         'folder_download_action' => 'download_upload_folder.php?folder=__FOLDER__&all=1',
+        // سگمنتِ اولِ مسیر فقط «گروهِ آپلودکننده» است؛ در عملیات پوشه نباید بیاید.
+        'strip_first_segment' => true,
+        'folder_actions' => $uplAttachFolderBtnAll,
     ]);
     ?>
 </div>
 <?php endif; ?>
+
+<!-- مودالِ «الصاق فایل/پوشه به کیس» -->
+<div id="upl-attach-modal" class="modal" style="display:none;">
+    <div class="modal-content form-card" style="max-width:440px; margin:auto; padding:22px;">
+        <h3 style="margin:0 0 8px;">📎 الصاق به کیس</h3>
+        <p id="upl-attach-target" style="color:#555; margin:0 0 12px; line-height:1.8;"></p>
+        <div class="form-group">
+            <label for="upl-attach-case">کیس مقصد</label>
+            <select id="upl-attach-case" style="width:100%;">
+                <option value="">انتخاب کنید...</option>
+                <?php foreach (($upAttachList ?? []) as $cRow): ?>
+                    <option value="<?= (int) $cRow['id'] ?>">#<?= (int) $cRow['id'] ?> — <?= htmlspecialchars((string) ($cRow['patient_name'] ?? '')) ?><?= !empty($cRow['doctor_name']) ? ' (' . htmlspecialchars((string) $cRow['doctor_name']) . ')' : '' ?></option>
+                <?php endforeach; ?>
+            </select>
+        </div>
+        <input type="hidden" id="upl-attach-upload">
+        <input type="hidden" id="upl-attach-folder">
+        <input type="hidden" id="upl-attach-user">
+        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+            <button type="button" id="upl-attach-cancel" class="btn" style="background:#E5E7EB; color:#0F172A;">انصراف</button>
+            <button type="button" id="upl-attach-confirm" class="btn" style="background:#7c3aed; color:#fff;">الصاق</button>
+        </div>
+    </div>
+</div>
+
+<script>
+(function(){
+    var modal = document.getElementById('upl-attach-modal');
+    if (!modal) return;
+    var csrf    = '<?= htmlspecialchars($csrf_token) ?>';
+    var caseSel = document.getElementById('upl-attach-case');
+    var target  = document.getElementById('upl-attach-target');
+    var hUpload = document.getElementById('upl-attach-upload');
+    var hFolder = document.getElementById('upl-attach-folder');
+    var hUser   = document.getElementById('upl-attach-user');
+
+    function openModal(upload, folder, user, label){
+        hUpload.value = upload || '';
+        hFolder.value = folder || '';
+        hUser.value   = user || '';
+        if (target) target.textContent = label || '';
+        caseSel.value = '';
+        modal.style.display = 'flex';
+    }
+    function closeModal(){ modal.style.display = 'none'; }
+
+    document.addEventListener('click', function(e){
+        var b = e.target.closest && e.target.closest('.js-upl-attach');
+        if (b) {
+            e.preventDefault();
+            openModal(b.getAttribute('data-upload'), '', '', 'این فایل به کیسِ انتخابی الصاق می‌شود.');
+            return;
+        }
+        var f = e.target.closest && e.target.closest('.js-upl-attach-folder');
+        if (f) {
+            e.preventDefault();
+            var raw = f.getAttribute('data-folder') || '';
+            var uid = '', real = raw;
+            if (f.getAttribute('data-scope') === 'shared') {
+                // مسیر در کتابخانهٔ مشترک: «نام آپلودکننده #شناسه/پوشه/...»
+                var m = raw.match(/^(.*) #(\d+)(?:\/(.*))?$/);
+                if (m) { uid = m[2]; real = m[3] || ''; }
+            }
+            openModal('', real, uid, 'همهٔ فایل‌های این پوشه به کیسِ انتخابی الصاق می‌شوند.');
+        }
+    });
+
+    var cancelBtn = document.getElementById('upl-attach-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', function(e){ if (e.target === modal) closeModal(); });
+
+    var okBtn = document.getElementById('upl-attach-confirm');
+    if (okBtn) okBtn.addEventListener('click', function(){
+        var cid = caseSel ? caseSel.value : '';
+        if (!cid) { alert('کیس مقصد را انتخاب کنید.'); return; }
+        var fd = new FormData();
+        fd.append('case_id', cid);
+        fd.append('_csrf_token', csrf);
+        if (hUpload.value) { fd.append('upload_id', hUpload.value); }
+        if (hFolder.value) { fd.append('folder', hFolder.value); }
+        if (hUser.value)   { fd.append('user', hUser.value); }
+        okBtn.disabled = true;
+        okBtn.textContent = 'در حال الصاق...';
+        fetch('link_user_upload_to_case.php', { method:'POST', headers:{ 'X-CSRF-Token': csrf, 'Accept':'application/json' }, body: fd })
+            .then(function(r){ return r.json().catch(function(){ return { success:false, message:'پاسخ نامعتبر' }; }); })
+            .then(function(j){
+                okBtn.disabled = false;
+                okBtn.textContent = 'الصاق';
+                if (j && j.success) { closeModal(); location.reload(); }
+                else { alert((j && j.message) ? j.message : 'الصاق انجام نشد.'); }
+            })
+            .catch(function(){
+                okBtn.disabled = false;
+                okBtn.textContent = 'الصاق';
+                alert('خطا در ارتباط با سرور.');
+            });
+    });
+})();
+</script>
 <script>
 (function(){
     var csrf = '<?= htmlspecialchars($csrf_token) ?>';

@@ -384,6 +384,9 @@ panel_layout_start('نوبت اسکن');
         }
         toggleBodyType();
         modal.style.display = 'flex';
+        // بعد از نمایش مودال، تاریخ دوباره اعمال می‌شود؛ بعضی مرورگرها/نسخه‌های
+        // افزونهٔ تقویم در اولین نمایش، مقدار داخلی (امروز) را روی فیلد می‌نویسند.
+        if (!editing && prefill && prefill.date) { setDateField(prefill.date); }
     }
     function closeModal(){ if (modal) modal.style.display = 'none'; }
 
@@ -398,11 +401,34 @@ panel_layout_start('نوبت اسکن');
         datePickerReady = true;
     }
     function setDateField(gDate){
-        var p = pd(gDate);
-        var val = p ? faDigits(p.format('YYYY/MM/DD')) : '';
         var el = document.getElementById('sa-date');
-        el.value = val;
-        try { jQuery('#sa-date').persianDatepicker('setDate', val); } catch(e){}
+        if (!el) return;
+        // تاریخ ورودی می‌تواند Date یا رشتهٔ میلادی «YYYY-MM-DD» باشد (dateStr فول‌کلندر)
+        var ts = null;
+        if (gDate instanceof Date) {
+            ts = gDate.getTime();
+        } else {
+            var m = String(gDate || '').trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+            if (m) { ts = new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0, 0).getTime(); }
+        }
+        var p = (ts !== null) ? pd(new Date(ts)) : null;
+        if (ts === null) {
+            // اگر رشتهٔ شمسی رسید («۱۴۰۵/۰۸/۱۳») هم بتوانیم تبدیل کنیم
+            var js = String(gDate || '').replace(/[۰-۹]/g, function(c){ return '۰۱۲۳۴۵۶۷۸۹'.indexOf(c); });
+            var jm = js.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+            if (jm) {
+                var pj = null;
+                try { pj = (typeof persianDate !== 'undefined') ? new persianDate([+jm[1], +jm[2], +jm[3]]) : null; } catch(e){ pj = null; }
+                if (pj) { ts = pj.toDate().getTime(); p = pj; }
+            }
+        }
+        el.value = p ? faDigits(p.format('YYYY/MM/DD')) : '';
+        if (ts !== null) {
+            // ⚠️ متد setDate این پلاگین یک timestamp میلادی (unix ms) می‌گیرد؛
+            // قبلاً رشتهٔ شمسی پاس می‌شد و وضعیت داخلی تقویم به‌هم می‌ریخت (همیشه امروز).
+            try { jQuery('#sa-date').persianDatepicker('setDate', ts); } catch(e){}
+            el.value = p ? faDigits(p.format('YYYY/MM/DD')) : '';
+        }
     }
 
     // اطلاعات کیس (پزشک/بیمار) با شمارهٔ کیس
@@ -519,8 +545,8 @@ panel_layout_start('نوبت اسکن');
     function fillForm(id, ev){
         var p = ev.extendedProps || {};
         openModal(id, {});
-        document.getElementById('sa-date').value = p.appt_date_jalali || '';
-        try { jQuery('#sa-date').persianDatepicker('setDate', p.appt_date_jalali || ''); } catch(e){}
+        // تاریخ میلادیِ نوبت (برای unix timestamp) — نه رشتهٔ شمسی
+        setDateField(p.appt_date || p.appt_date_jalali || '');
         document.getElementById('sa-start').value = p.start_time || '';
         document.getElementById('sa-end').value = p.end_time || '';
         document.getElementById('sa-doctor').value = p.doctor_id || '';

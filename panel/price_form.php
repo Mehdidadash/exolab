@@ -70,6 +70,21 @@ panel_layout_start($editing ? 'ویرایش قیمت' : 'افزودن قیمت �
             </small>
         </div>
         <div class="form-group">
+            <label for="default_designer_id">طراح پیش‌فرض این خدمت</label>
+            <select id="default_designer_id" name="default_designer_id">
+                <?php $curDefDesigner = ($price['default_designer_id'] ?? null); ?>
+                <option value="" <?= ($curDefDesigner === null || $curDefDesigner === '') ? 'selected' : '' ?>>زنجیرهٔ عادی (پزشک → شعبه → پیش‌فرض سراسری)</option>
+                <option value="0" <?= ($curDefDesigner !== null && $curDefDesigner !== '' && (int) $curDefDesigner === 0) ? 'selected' : '' ?>>بدون طراح (پیش‌فرض انتخاب نشود)</option>
+                <?php foreach (getAllDesigners() as $dOpt): ?>
+                    <option value="<?= (int) $dOpt['id'] ?>" <?= ($curDefDesigner !== null && (int) $curDefDesigner === (int) $dOpt['id']) ? 'selected' : '' ?>><?= htmlspecialchars((string) $dOpt['full_name']) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small style="display:block; color:#525252; margin-top:4px; line-height:1.9;">
+                با انتخاب یک طراح، هر کیسِ این خدمت به‌صورت پیش‌فرض به او سپرده می‌شود (حتی اگر پزشک/شعبه طراح پیش‌فرض دیگری داشته باشد).
+                با «بدون طراح»، کیس بدون طراحی باز می‌شود تا در صورت نیاز دستی انتخاب شود.
+            </small>
+        </div>
+        <div class="form-group">
             <label for="category">دسته</label>
             <?php $currentCategory = normalizeServiceCategory($price['category'] ?? ''); ?>
             <select id="category" name="category">

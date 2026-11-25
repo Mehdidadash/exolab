@@ -2,7 +2,46 @@
 // config.php
 
 // Load environment variables from .env file
-require_once __DIR__ . '/../includes/EnvLoader.php';
+// (اگر در جریانِ یک دیپلویِ ناقص، includes/EnvLoader.php هنوز آپلود نشده باشد،
+//  به‌جای Fatal error از یک خوانندهٔ سادهٔ .env استفاده می‌شود.)
+$__envLoaderFile = __DIR__ . '/../includes/EnvLoader.php';
+if (is_file($__envLoaderFile)) {
+    require_once $__envLoaderFile;
+}
+if (!class_exists('EnvLoader')) {
+    class EnvLoader
+    {
+        private static array $vars = [];
+        private static bool $loaded = false;
+
+        public static function load(string $path = null): void
+        {
+            if (self::$loaded) return;
+            self::$loaded = true;
+            $path = $path ?? __DIR__ . '/../.env';
+            if (!is_file($path)) return;
+            $lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
+            foreach ($lines as $line) {
+                $line = trim($line);
+                if ($line === '' || $line[0] === '#' || strpos($line, '=') === false) continue;
+                [$k, $v] = explode('=', $line, 2);
+                $k = trim($k);
+                $v = trim($v);
+                if ($v !== '' && ($v[0] === '"' || $v[0] === "'")) {
+                    $v = trim($v, "\"'");
+                }
+                self::$vars[$k] = $v;
+            }
+        }
+
+        public static function get(string $key, $default = null)
+        {
+            if (array_key_exists($key, self::$vars)) return self::$vars[$key];
+            $v = getenv($key);
+            return $v === false ? $default : $v;
+        }
+    }
+}
 EnvLoader::load();
 
 // تنظیمات پایگاه داده و اطلاعات عمومی سایت
@@ -10,6 +49,10 @@ define('DB_HOST', EnvLoader::get('DB_HOST', 'localhost'));
 define('DB_NAME', EnvLoader::get('DB_NAME', 'exolabir_index'));
 define('DB_USER', EnvLoader::get('DB_USER', 'root'));
 define('DB_PASS', EnvLoader::get('DB_PASS', ''));
+// اختیاری — برای هاست‌هایی که MySQL روی پورت یا سوکتِ غیرپیش‌فرض اجرا می‌شود.
+// مثال در .env:  DB_PORT=3306   یا   DB_SOCKET=/var/lib/mysql/mysql.sock
+define('DB_PORT', EnvLoader::get('DB_PORT', ''));
+define('DB_SOCKET', EnvLoader::get('DB_SOCKET', ''));
 
 define('BASE_URL', EnvLoader::get('BASE_URL', '/'));
 define('SITE_NAME', EnvLoader::get('SITE_NAME', 'لابراتوار دیجیتال اگزولب'));

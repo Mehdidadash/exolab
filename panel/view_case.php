@@ -158,6 +158,12 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
     <?php if (!$case): ?>
         <p>کیسی یافت نشد.</p>
     <?php else: ?>
+        <?php if (!empty($case['archived_at'])): ?>
+        <div style="background:#f1f5f9; border:1px solid #cbd5e1; border-radius:8px; padding:10px 12px; margin-bottom:12px; color:#334155; line-height:1.9;">
+            📦 این کیس <b>آرشیو شده</b> است (کیس قدیمیِ «مرحلهٔ الاینر» که به یک «تحویل مرحله» در کیس طرح درمان تبدیل شده).
+            از لیست‌ها پنهان است، ولی فاکتورها و سابقه‌اش دست‌نخورده مانده‌اند.
+        </div>
+        <?php endif; ?>
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:8px;">
             <h3 style="margin:0; font-size:1.85rem; line-height:1.6;">
                 <?php if (caseIsUrgent($case)): ?>
@@ -473,6 +479,23 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
                 'itemClass' => 'ci-description-item',
             ];
         }
+
+        // ─── الاینر شفاف: طرح درمان (یک‌بار) + تحویل مرحله‌ای (هر بار چند مرحله برای هر فک) ───
+        $isAlignerCase     = serviceIsAligner((int) ($case['service_id'] ?? 0));
+        $alignerDeliveries = $isAlignerCase ? getCaseAlignerDeliveries((int) $case['id']) : [];
+        $alignerTotals     = $isAlignerCase ? getCaseAlignerTotals((int) $case['id'])
+                                            : ['upper' => 0, 'lower' => 0, 'count' => 0, 'amount' => 0.0, 'last_upper' => 0, 'last_lower' => 0];
+        $alignerStageSvc   = $isAlignerCase ? alignerStageServiceId((int) $case['service_id']) : 0;
+        $alignerStageRow   = $alignerStageSvc ? getPrice($alignerStageSvc) : null;
+        $alignerStagePrice = $alignerStageRow ? (float) $alignerStageRow['price'] : 0;
+        $alignerJaw        = (string) ($case['location_type'] ?? 'both');
+        if (!in_array($alignerJaw, ['upper', 'lower', 'both'], true)) {
+            $alignerJaw = 'both';   // الاینر همیشه فک‌محور است
+        }
+        $alignerJawUpper   = in_array($alignerJaw, ['upper', 'both'], true);
+        $alignerJawLower   = in_array($alignerJaw, ['lower', 'both'], true);
+        $alignerMaxUpper   = !empty($case['aligner_upper_stages']) ? (int) $case['aligner_upper_stages'] : 0;
+        $alignerMaxLower   = !empty($case['aligner_lower_stages']) ? (int) $case['aligner_lower_stages'] : 0;
         ?>
         <style>
             /* اطلاعات کیس: شبکهٔ فشردهٔ برچسب/مقدار.
@@ -546,6 +569,201 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
                 </div>
             <?php endforeach; ?>
         </div>
+
+        <?php if ($isAlignerCase): ?>
+        <?php
+        $alMsg = trim((string) ($_GET['msg'] ?? ''));
+        $alErr = trim((string) ($_GET['error'] ?? ''));
+        $canEditAligner = is_admin() || has_permission('edit_cases') || has_permission('update_case_status') || is_designer_user($user);
+        $alRemUp = $alignerMaxUpper > 0 ? max(0, $alignerMaxUpper - $alignerTotals['upper']) : null;
+        $alRemLo = $alignerMaxLower > 0 ? max(0, $alignerMaxLower - $alignerTotals['lower']) : null;
+        ?>
+        <div class="form-card" id="aligner" style="margin-top:18px; border:1px solid #ddd6fe; background:#faf5ff;">
+            <h3 style="margin:0 0 8px; color:#5b21b6;">🦷 مراحل الاینر شفاف</h3>
+            <?php if ($alMsg !== ''): ?>
+                <p style="color:#166534; font-weight:700; margin:0 0 8px;">✅ <?= htmlspecialchars($alMsg) ?></p>
+            <?php endif; ?>
+            <?php if ($alErr !== ''): ?>
+                <p style="color:#b91c1c; font-weight:700; margin:0 0 8px;">⚠️ <?= htmlspecialchars($alErr) ?></p>
+            <?php endif; ?>
+            <p style="color:#525252; margin:0 0 10px; line-height:1.9;">
+                طرح درمان یک‌بار صادر می‌شود؛ مرحله‌های الاینر هر بار به‌تعداد دلخواه برای هر فک ثبت می‌شوند
+                و در فاکتورِ ماهِ <b>تاریخ همان تحویل</b> می‌آیند.
+            </p>
+
+            <div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">
+                <?php if ($alignerJawUpper): ?>
+                <div style="background:#fff; border:1px solid #ddd6fe; border-radius:10px; padding:8px 14px; font-size:.9rem;">
+                    <b>فک بالا</b> —
+                    <?php if ($alignerMaxUpper > 0): ?>
+                        تحویل‌شده <strong><?= toPersianDigits((string) $alignerTotals['upper']) ?></strong> از <strong><?= toPersianDigits((string) $alignerMaxUpper) ?></strong>
+                        (باقی‌مانده: <?= toPersianDigits((string) $alRemUp) ?>)
+                    <?php else: ?>
+                        تحویل‌شده <strong><?= toPersianDigits((string) $alignerTotals['upper']) ?></strong> مرحله (تعداد کل ثبت نشده)
+                    <?php endif; ?>
+                </div>
+                <?php endif; ?>
+                <?php if ($alignerJawLower): ?>
+                <div style="background:#fff; border:1px solid #ddd6fe; border-radius:10px; padding:8px 14px; font-size:.9rem;">
+                    <b>فک پایین</b> —
+                    <?php if ($alignerMaxLower > 0): ?>
+                        تحویل‌شده <strong><?= toPersianDigits((string) $alignerTotals['lower']) ?></strong> از <strong><?= toPersianDigits((string) $alignerMaxLower) ?></strong>
+                        (باقی‌مانده: <?= toPersianDigits((string) $alRemLo) ?>)
+                    <?php else: ?>
+                        تحویل‌شده <strong><?= toPersianDigits((string) $alignerTotals['lower']) ?></strong> مرحله (تعداد کل ثبت نشده)
+                    <?php endif; ?>
+                </div>
+                <?php endif; ?>
+                <div style="background:#fff; border:1px solid #ddd6fe; border-radius:10px; padding:8px 14px; font-size:.9rem;">
+                    تحویل‌ها: <strong><?= toPersianDigits((string) $alignerTotals['count']) ?></strong> بار —
+                    مبلغ تحویل‌ها: <strong><?= formatAmountToman($alignerTotals['amount']) ?></strong> تومان
+                </div>
+            </div>
+
+            <?php if (!empty($alignerDeliveries)): ?>
+            <div style="overflow-x:auto; margin-bottom:14px;">
+                <table style="width:100%; border-collapse:collapse; font-size:.88rem; background:#fff;">
+                    <thead>
+                        <tr style="background:#ede9fe; color:#4c1d95;">
+                            <th style="padding:6px 8px; border:1px solid #ddd6fe;">تاریخ تحویل</th>
+                            <?php if ($alignerJawUpper): ?><th style="padding:6px 8px; border:1px solid #ddd6fe;">فک بالا (مراحل)</th><?php endif; ?>
+                            <?php if ($alignerJawLower): ?><th style="padding:6px 8px; border:1px solid #ddd6fe;">فک پایین (مراحل)</th><?php endif; ?>
+                            <th style="padding:6px 8px; border:1px solid #ddd6fe;">تعداد</th>
+                            <th style="padding:6px 8px; border:1px solid #ddd6fe;">مبلغ</th>
+                            <th style="padding:6px 8px; border:1px solid #ddd6fe;">فاکتور</th>
+                            <th style="padding:6px 8px; border:1px solid #ddd6fe;">توضیح</th>
+                            <?php if ($canEditAligner): ?><th style="padding:6px 8px; border:1px solid #ddd6fe;"></th><?php endif; ?>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($alignerDeliveries as $d): ?>
+                        <tr>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; text-align:center;"><?= htmlspecialchars(toJalaliDateFormatted($d['delivered_date'])) ?></td>
+                            <?php if ($alignerJawUpper): ?>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; text-align:center;">
+                                <?= (int) $d['upper_qty'] > 0 ? toPersianDigits((string) (int) $d['upper_from']) . ' تا ' . toPersianDigits((string) (int) $d['upper_to']) : '—' ?>
+                            </td>
+                            <?php endif; ?>
+                            <?php if ($alignerJawLower): ?>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; text-align:center;">
+                                <?= (int) $d['lower_qty'] > 0 ? toPersianDigits((string) (int) $d['lower_from']) . ' تا ' . toPersianDigits((string) (int) $d['lower_to']) : '—' ?>
+                            </td>
+                            <?php endif; ?>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; text-align:center;"><?= toPersianDigits((string) ((int) $d['upper_qty'] + (int) $d['lower_qty'])) ?></td>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; text-align:center;"><?= formatAmountToman($d['amount']) ?></td>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; text-align:center;">
+                                <?= !empty($d['invoice_id'])
+                                    ? '<span style="color:#166534; font-weight:700;">#' . (int) $d['invoice_id'] . '</span>'
+                                    : '<span style="color:#92400e;">فاکتور نشده</span>' ?>
+                            </td>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; font-size:.82rem; color:#525252;"><?= htmlspecialchars((string) ($d['note'] ?? '')) ?></td>
+                            <?php if ($canEditAligner): ?>
+                            <td style="padding:6px 8px; border:1px solid #e9e5f5; text-align:center;">
+                                <?php if (empty($d['invoice_id'])): ?>
+                                <form method="post" action="delete_aligner_delivery.php" onsubmit="return confirm('این تحویل حذف شود؟');" style="margin:0;">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="id" value="<?= (int) $d['id'] ?>">
+                                    <button class="btn" style="background:#fee2e2; color:#991b1b; padding:2px 8px; font-size:.78rem;">حذف</button>
+                                </form>
+                                <?php else: ?>
+                                <span style="color:#94a3b8;">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <?php endif; ?>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php else: ?>
+                <p class="empty" style="margin:0 0 14px;">هنوز مرحله‌ای برای این کیس تحویل نشده است.</p>
+            <?php endif; ?>
+
+            <?php if ($canEditAligner): ?>
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:14px;">
+                <form method="post" action="save_aligner_delivery.php" style="background:#fff; border:1px solid #ddd6fe; border-radius:10px; padding:12px;">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="case_id" value="<?= (int) $case['id'] ?>">
+                    <input type="hidden" name="action" value="delivery">
+                    <h4 style="margin:0 0 10px; color:#5b21b6;">➕ تحویل مرحله‌های جدید</h4>
+                    <div class="form-group" style="margin-bottom:8px;">
+                        <label for="al-date">تاریخ تحویل</label>
+                        <input type="text" id="al-date" name="delivered_date" value="<?= htmlspecialchars(toJalaliDateFormatted(date('Y-m-d'))) ?>" placeholder="۱۴۰۵/۰۹/۰۱" required style="cursor:pointer;">
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px;">
+                        <?php if ($alignerJawUpper): ?>
+                        <div class="form-group" style="margin:0;">
+                            <label>فک بالا — از مرحله</label>
+                            <input type="number" name="upper_from" min="1" value="<?= $alignerTotals['last_upper'] + 1 ?>">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>تعداد مرحله</label>
+                            <input type="number" name="upper_qty" min="0" value="2">
+                        </div>
+                        <?php endif; ?>
+                        <?php if ($alignerJawLower): ?>
+                        <div class="form-group" style="margin:0;">
+                            <label>فک پایین — از مرحله</label>
+                            <input type="number" name="lower_from" min="1" value="<?= $alignerTotals['last_lower'] + 1 ?>">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <label>تعداد مرحله</label>
+                            <input type="number" name="lower_qty" min="0" value="2">
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="form-group" style="margin:8px 0;">
+                        <label>فی هر مرحله (تومان)</label>
+                        <input type="number" name="unit_price" min="0" value="<?= $alignerStagePrice > 0 ? (int) $alignerStagePrice : '' ?>" placeholder="مثلاً ۱۲۰۰۰۰۰">
+                        <?php if ($alignerStagePrice > 0): ?>
+                            <small style="color:#64748b;">پیش‌فرض از خدمت «<?= htmlspecialchars((string) ($alignerStageRow['title'] ?? '')) ?>»</small>
+                        <?php endif; ?>
+                    </div>
+                    <div class="form-group" style="margin:8px 0;">
+                        <label>توضیح (اختیاری)</label>
+                        <input type="text" name="note" maxlength="200">
+                    </div>
+                    <button class="btn" style="background:#7c3aed; color:#fff;">ثبت تحویل</button>
+                </form>
+
+                <form method="post" action="save_aligner_delivery.php" style="background:#fff; border:1px solid #ddd6fe; border-radius:10px; padding:12px; align-self:start;">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="case_id" value="<?= (int) $case['id'] ?>">
+                    <input type="hidden" name="action" value="plan">
+                    <h4 style="margin:0 0 10px; color:#5b21b6;">⚙️ تعداد کل مراحل طرح درمان</h4>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px;">
+                        <?php if ($alignerJawUpper): ?>
+                        <div class="form-group" style="margin:0;">
+                            <label>مراحل فک بالا</label>
+                            <input type="number" name="upper_stages" min="0" value="<?= $alignerMaxUpper ?: '' ?>" placeholder="۱۲">
+                        </div>
+                        <?php endif; ?>
+                        <?php if ($alignerJawLower): ?>
+                        <div class="form-group" style="margin:0;">
+                            <label>مراحل فک پایین</label>
+                            <input type="number" name="lower_stages" min="0" value="<?= $alignerMaxLower ?: '' ?>" placeholder="۱۵">
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                    <button class="btn" style="background:#5b21b6; color:#fff; margin-top:8px;">ذخیره</button>
+                </form>
+            </div>
+            <?php endif; ?>
+        </div>
+        <script>
+        // تقویم شمسی برای فیلد «تاریخ تحویل» کارت الاینر
+        document.addEventListener('DOMContentLoaded', function(){
+            if (typeof jQuery === 'undefined' || !jQuery.fn || !jQuery.fn.persianDatepicker) return;
+            var el = document.getElementById('al-date');
+            if (!el) return;
+            try {
+                jQuery(el).persianDatepicker({
+                    format: 'YYYY/MM/DD', initialValue: false, persianDigit: true, autoClose: true
+                });
+            } catch(e) {}
+        });
+        </script>
+        <?php endif; ?>
 
         <?php
         $allowedStatusIds = getAllowedStatusIdsForUser();
@@ -2868,6 +3086,45 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
 <link rel="stylesheet" href="../assets/css/case-teeth-picker.css">
 <script src="../assets/js/case-teeth-picker.js"></script>
 <script src="../assets/js/shade-picker.js"></script>
+<?php
+// ── فرمِ مشترکِ کیس (includes/case_form.php) ──
+// مارک‌آپ از منبعِ واحد می‌آید؛ نگاشتِ شناسه‌ها (id_map) برای سازگاری با JS همین صفحه
+// است که با شناسه‌های ec-* کار می‌کند. در فاز بعدی JS هم مشترک می‌شود و id_map حذف.
+require_once __DIR__ . '/../includes/case_form.php';
+$editCaseFormCtx = caseFormContextForCurrentUser([
+    'mode'              => 'edit',
+    'csrf_token'        => $csrf_token,
+    'values'            => caseFormValuesFromCase($case),
+    'showFiles'         => false,
+    'showSubcaseButton' => false,
+    'form_id'           => 'edit-case-form',
+    'id_map'            => [
+        'case-type'              => 'ec-case-type',
+        'case-doctor-id'         => 'ec-doctor-id',
+        'case-designer-id'       => 'ec-designer-id',
+        'case-design-note'       => 'ec-design-note',
+        'case-clinic-id'         => 'ec-clinic-id',
+        'case-scan-body-group'   => 'ec-scan-body-group',
+        'case-scan-body-type'    => 'ec-scan-body-type',
+        'case-connection-group'  => 'ec-connection-group',
+        'case-connection-type'   => 'ec-connection-type',
+        'case-fixture-group'     => 'ec-fixture-group',
+        'case-fixture-type'      => 'ec-fixture-type',
+        'case-shade'             => 'ec-shade',
+        'case-design-fee-note'   => 'ec-design-fee-note',
+        'case-design-fee'        => 'ec-design-fee',
+        'case-received-date'     => 'ec-received-date',
+        'case-outsourced-rate'   => 'ec-outsourced-rate',
+        'side-outsource-toggle'  => 'ec-side-outsource-toggle',
+        'side-outsource-body'    => 'ec-side-outsource-body',
+        'side-outsource-caret'   => 'ec-side-caret',
+        'case-cancel'            => 'edit-case-cancel',
+        'case-save'              => 'edit-case-save',
+    ],
+]);
+?>
+<?php /* ⚠️ بلوک قدیمیِ فرم — غیرفعال. منبع رسمی: includes/case_form.php */ ?>
+<?php if (false): ?>
 <div id="edit-case-modal" class="modal" style="display:none;">
     <div class="modal-content form-card" style="width:1000px; max-width:95%; padding:20px; box-sizing:border-box;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
@@ -3140,6 +3397,19 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
         </form>
     </div>
 </div>
+<?php endif; ?>
+
+<!-- مودال ویرایش (فرم مشترک: includes/case_form.php) -->
+<div id="edit-case-modal" class="modal" style="display:none;">
+    <div class="modal-content form-card" style="width:1000px; max-width:95%; padding:20px; box-sizing:border-box;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <h3 style="margin:0;">✏️ ویرایش کیس #<?= (int) $case['id'] ?> - <?= htmlspecialchars($case['patient_name']) ?></h3>
+            <button type="button" id="edit-case-close" class="btn" style="background:#E5E7EB; color:#0F172A; padding:4px 12px;">✕</button>
+        </div>
+        <?= renderCaseForm($editCaseFormCtx) ?>
+        <div id="edit-case-msg" style="margin-top:10px; font-weight:bold;"></div>
+    </div>
+</div>
 
 <script>
 (function(){
@@ -3168,6 +3438,8 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
         array_map(function ($p) { return (int) ($p['design_required'] ?? 1); }, array_column($prices, null, 'id')),
         JSON_UNESCAPED_UNICODE
     ) ?>;
+    // «طراح پیش‌فرضِ خدمت» — 0 = هیچ‌کس، >0 = همان طراح، غایب = زنجیرهٔ عادی
+    var SVC_DEFAULT_DESIGNER = <?= json_encode(getServiceDefaultDesignerMap(), JSON_UNESCAPED_UNICODE) ?>;
     // خدماتی که فیلدِ «نوع اسکن‌بادی» لازم دارند (اباتمنت کره‌ای/اروپایی، فیکسچر ایمپلنت).
     var SVC_REQUIRES_SCAN_BODY = <?= json_encode(
         array_map(function ($p) { return (int) (!empty($p['requires_scan_body'])); }, array_column($prices, null, 'id')),
@@ -3180,6 +3452,11 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
     var DEFAULT_CONNECTION_TYPE = 'cement-retained';   // «چسب‌شونده»
     // فی طراحی پیش‌فرض هر خدمت (site_prices.default_design_fee) — فالبکِ نرخ اختصاصی.
     var SVC_DEFAULT_DESIGN_FEE = <?= json_encode(getServiceDefaultDesignFeeMap(), JSON_UNESCAPED_UNICODE) ?>;
+    // خدماتی که «تعداد ثابت ۱» دارند (مثل طرح درمان الاینر: یک فک یا دو فک، مبلغ یکسان)
+    var SVC_FIXED_QTY = <?= json_encode(
+        array_map(function ($p) { return (int) ($p['fixed_qty'] ?? 0); }, array_column($prices, null, 'id')),
+        JSON_UNESCAPED_UNICODE
+    ) ?>;
     var DEFAULT_DESIGNER_ID = <?= (int) $defaultDesignerId ?>;
     // طراح پیش‌فرضِ اختصاصیِ پزشک/شعبه (برای انتخاب خودکار در فرمِ ویرایش)
     var DOC_DEFAULT_DESIGNER = <?= json_encode(getDoctorDefaultDesignerMap(), JSON_UNESCAPED_UNICODE) ?>;
@@ -3196,6 +3473,12 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
         var v = el ? el.value : '';
         if (!v) return true;
         return (SVC_DESIGN_REQUIRED[v] === undefined) ? true : !!SVC_DESIGN_REQUIRED[v];
+    }
+    // «تعداد ثابت» — قیمت مستقل از فک/دندان (طرح درمان الاینر شفاف)
+    function ecServiceFixedQty(){
+        var el = ecServiceEl();
+        var v = el ? String(el.value || '') : '';
+        return v !== '' && !!SVC_FIXED_QTY[v];
     }
 
     // ── فیلد «نوع اسکن‌بادی»، «نوع اتصال» و «نوع فیکسچر»: فقط برای خدماتی که پرچمِ مربوط را دارند ──
@@ -3251,16 +3534,53 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
     }
     function ecApplyServiceDesignDefault(serviceChanged){
         if (!ecServiceRequiresDesign()) {
-            if (serviceChanged && ecDesignerEl) ecDesignerEl.value = '';
-            ecSetNote(ecDesignNoteEl, 'برای این خدمت طراحی لازم نیست؛ کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.');
-        } else {
-            ecSetNote(ecDesignNoteEl, '');
-            // اگر خدمت طراحی لازم دارد ولی طرحری انتخاب نشده، پیش‌فرضِ پزشک/شعبه/سراسری
-            if (serviceChanged && ecDesignerEl && !ecDesignerEl.value) {
-                var defId = ecDoctorBranchDefaultDesigner();
-                if (defId) ecDesignerEl.value = String(defId);
+            if (serviceChanged && ecDesignerEl) {
+                // گزینهٔ «بدون طراح» اگر رندر نشده باشد، اضافه می‌شود تا انتخاب واقعاً پاک شود
+                if (!ecDesignerEl.querySelector('option[value=""]')) {
+                    ecDesignerEl.insertBefore(new Option('بدون طراح', ''), ecDesignerEl.firstChild);
+                }
+                ecDesignerEl.value = '';
             }
+            ecSetNote(ecDesignNoteEl, 'برای این خدمت طراحی لازم نیست؛ کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.');
         }
+
+        // قاعدهٔ «طراح پیش‌فرضِ خدمت» (price_form.php): 0 = هیچ‌کس، >0 = همان طراح
+        var rule = ecServiceDefaultDesignerRule();
+        if (rule === 0) {
+            if (serviceChanged && ecDesignerEl) {
+                if (!ecDesignerEl.querySelector('option[value=""]')) {
+                    ecDesignerEl.insertBefore(new Option('بدون طراح', ''), ecDesignerEl.firstChild);
+                }
+                ecDesignerEl.value = '';
+            }
+            ecSetNote(ecDesignNoteEl, 'برای این خدمت طراح پیش‌فرض تعیین نشده است؛ در صورت نیاز طراح را دستی انتخاب کنید.');
+            return;
+        }
+        if (rule && rule > 0) {
+            if (ecDesignerEl && (serviceChanged || !ecDesignerEl.value)) {
+                if (!ecDesignerEl.querySelector('option[value="' + rule + '"]')) {
+                    ecDesignerEl.appendChild(new Option('طراح #' + rule, String(rule)));
+                }
+                ecDesignerEl.value = String(rule);
+            }
+            ecSetNote(ecDesignNoteEl, '');
+            return;
+        }
+
+        ecSetNote(ecDesignNoteEl, '');
+        // اگر خدمت طراحی لازم دارد ولی طرحری انتخاب نشده، پیش‌فرضِ پزشک/شعبه/سراسری
+        if (serviceChanged && ecDesignerEl && !ecDesignerEl.value) {
+            var defId = ecDoctorBranchDefaultDesigner();
+            if (defId) ecDesignerEl.value = String(defId);
+        }
+    }
+
+    // قاعدهٔ «طراح پیش‌فرض خدمت»: null = تنظیم نشده، 0 = هیچ‌کس، >0 = همان طراح
+    function ecServiceDefaultDesignerRule(){
+        var el = ecServiceEl();
+        var v = el ? String(el.value || '') : '';
+        if (!v) return null;
+        return (SVC_DEFAULT_DESIGNER[v] === undefined) ? null : Number(SVC_DEFAULT_DESIGNER[v]);
     }
 
     /**
@@ -3310,7 +3630,7 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
             .catch(function(){});
     }
     var ecServiceField = ecServiceEl();
-    if (ecServiceField) ecServiceField.addEventListener('change', function(){ ecApplyServiceDesignDefault(true); ecReloadDesignFee(); });
+    if (ecServiceField) ecServiceField.addEventListener('change', function(){ ecApplyServiceDesignDefault(true); ecReloadDesignFee(); ecUpdateQuantity(); });
     if (ecDesignerEl) ecDesignerEl.addEventListener('change', ecReloadDesignFee);
     ecApplyServiceDesignDefault(false);
 
@@ -3338,6 +3658,15 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
         var loc = document.querySelector('#edit-case-form [name="location_type"]');
         var qty = document.querySelector('#edit-case-form [name="quantity"]');
         if (!qty) return;
+        // خدمتِ «تعداد ثابت» (طرح درمان الاینر): همیشه ۱، مستقل از فک/دندان
+        if (ecServiceFixedQty()) {
+            qty.value = 1;
+            qty.readOnly = true;
+            qty.style.background = '#f3f4f6';
+            return;
+        }
+        qty.readOnly = false;
+        qty.style.background = '';
         var lv = loc ? loc.value : '';
         if (lv === 'both') { qty.value = 2; }
         else if (lv === 'upper' || lv === 'lower') { qty.value = 1; }
@@ -3460,6 +3789,10 @@ require_once __DIR__ . '/../includes/upload_error_modal.php';
     }
 
     if (openBtn) openBtn.addEventListener('click', function(e){ e.preventDefault(); openModal(); });
+    // باز کردنِ خودکارِ مودال ویرایش با ?edit=1  (از لیست‌هایی مثل «کیس‌های الاینر»)
+    if (openBtn && /[?&]edit=1(?:&|$)/.test(window.location.search)) {
+        setTimeout(function(){ try { openBtn.click(); } catch(e) {} }, 150);
+    }
     if (closeBtn) closeBtn.addEventListener('click', closeModal);
     if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
     if (modal) modal.addEventListener('click', function(e){ if (e.target === modal) closeModal(); });

@@ -73,7 +73,13 @@ if (empty($zipFiles)) {
     http_response_code(404);
     die('فایل قابل‌دانلودی در این پوشه نیست.');
 }
-
+// ─── فایل متنی «اطلاعات کیس» همراه فایل‌ها ───
+// توضیحات کیس (و برای کاستوم اباتمنت: نوع اسکن‌بادی / فیکسچر / نحوهٔ اتصال) تا وقتی
+// فایل‌ها از سامانه خارج می‌شوند، این اطلاعات هم دستِ کاربر باشد.
+$caseInfoText = caseInfoTextForDownload($caseId);
+if ($caseInfoText !== '') {
+    $zipFiles[] = ['content' => $caseInfoText, 'name' => $root . '/case_info.txt'];
+}
 // ─── ساخت ZIP در storage (بیرون از وب) ───
 $storageDir = __DIR__ . '/../storage';
 if (!is_dir($storageDir)) {

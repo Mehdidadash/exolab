@@ -3,6 +3,12 @@
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/../vendor/autoload.php';
+// ابزارِ لاگِ مهارشده (برای جلوگیری از پر شدنِ error_log هنگام قطعی/دیپلوی ناقص)
+$__dbDeployGuard = __DIR__ . '/../includes/deploy_guard.php';
+if (is_file($__dbDeployGuard)) {
+    require_once $__dbDeployGuard;
+}
+unset($__dbDeployGuard);
 
 use App\Database\Connection;
 
@@ -14,14 +20,34 @@ function db() {
         try {
             $pdo = Connection::getInstance();
         } catch (Throwable $e) {
-            error_log('db connection failed: ' . $e->getMessage());
-            dbConnectionFailedResponse();
+            $dbFailMsg = 'db connection failed: ' . $e->getMessage();
+            if (function_exists('exolab_log_throttled')) {
+                exolab_log_throttled('db_connect_failed', $dbFailMsg, 60);
+            } else {
+                error_log($dbFailMsg);
+            }
+            // یک تلاشِ دوباره با اتصالِ تازه — restartِ کوتاهِ MySQL یا غیبتِ لحظه‌ایِ
+            // سوکتِ localhost روی هاست (خطاهای 2002/2006) اغلب با همین حل می‌شود.
+            try {
+                Connection::reset();
+                usleep(150000);
+                $pdo = Connection::getInstance();
+            } catch (Throwable $e2) {
+                $dbFailMsg2 = 'db connection retry failed: ' . $e2->getMessage();
+                if (function_exists('exolab_log_throttled')) {
+                    exolab_log_throttled('db_connect_failed_retry', $dbFailMsg2, 60);
+                } else {
+                    error_log($dbFailMsg2);
+                }
+                dbConnectionFailedResponse();
+            }
         }
         try {
             ensureSitePricesOrderColumn($pdo);
             ensureSitePricesDesignRequiredColumn($pdo);
             ensureSitePricesRequiresScanBodyColumn($pdo);
             ensureSitePricesDefaultDesignFeeColumn($pdo);
+            ensureSitePricesDefaultDesignerColumn($pdo);
             ensureSitePricesShortNameColumn($pdo);
             ensureEntityCommentsTable($pdo);
             ensureNotificationsTable($pdo);
@@ -39,6 +65,7 @@ function db() {
             ensureScanBodyTypes($pdo);
             ensureFixtureTypes($pdo);
             ensureServicePricingColumns($pdo);
+            ensureAlignerSchema($pdo);
             ensureUserClinicsTable($pdo);
             ensureCasesClinicColumn($pdo);
             ensureBranchReceivableCharset($pdo);
@@ -1045,6 +1072,228 @@ function ensureServicePricingColumns($pdo) {
     }
 }
 
+/**
+ * site_prices.default_designer_id — «طراح پیش‌فرضِ همان خدمت».
+ *   NULL → قاعدهٔ عادی (پزشک → شعبه → سراسری)
+ *   0    → برای این خدمت طراح پیش‌فرض انتخاب نشود («بدون طراح»)
+ *   >0   → همان طراح
+ */
+function ensureSitePricesDefaultDesignerColumn($pdo) {
+    try {
+        $st = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'site_prices' AND COLUMN_NAME = 'default_designer_id'");
+        $st->execute([DB_NAME]);
+        $row = $st->fetch();
+        if (empty($row) || (int) $row['cnt'] === 0) {
+            $pdo->exec("ALTER TABLE site_prices ADD COLUMN default_designer_id INT NULL DEFAULT NULL");
+        }
+    } catch (Throwable $e) {}
+}
+
+// =====================================================
+// کیس الاینر شفاف — طرح درمان + تحویل مرحله‌ای
+// =====================================================
+/**
+ * ساخت/تکمیلِ اسکیمای «الاینر شفاف»:
+ *   • site_prices.is_aligner                → خدمتِ «طرح درمان الاینر» است؟
+ *   • site_prices.aligner_stage_service_id  → خدمتِ «الاینر شفاف» (هر مرحله) برای قیمت‌گذاری
+ *   • site_prices.fixed_qty                 → قیمت مستقل از تعداد واحد (یک/دو فک = همان مبلغ)
+ *   • cases.aligner_upper_stages / _lower_stages → تعداد کل مراحلِ هر فک
+ *   • case_aligner_deliveries               → دفترچهٔ تحویل مراحل (با تاریخ و مبلغ)
+ *
+ * همه از طریق migrate.php هم اجرا می‌شوند (migration 092)؛ این تابع برای
+ * دیتابیس‌های قدیمی/هاست است تا صفحه بدون مهاجرت هم کار کند.
+ */
+function ensureAlignerSchema($pdo) {
+    $addCol = function (string $table, string $col, string $def) use ($pdo): void {
+        $st = $pdo->prepare("SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+        $st->execute([DB_NAME, $table, $col]);
+        $row = $st->fetch();
+        if (empty($row) || (int) $row['cnt'] === 0) {
+            try { $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$col} {$def}"); } catch (Throwable $e) {}
+        }
+    };
+
+    $addCol('site_prices', 'is_aligner', "TINYINT(1) NOT NULL DEFAULT 0");
+    $addCol('site_prices', 'aligner_stage_service_id', "INT NULL");
+    $addCol('site_prices', 'fixed_qty', "TINYINT(1) NOT NULL DEFAULT 0");
+    $addCol('cases', 'aligner_upper_stages', "SMALLINT NULL");
+    $addCol('cases', 'aligner_lower_stages', "SMALLINT NULL");
+    // کیس‌های قدیمی مرحله که به «تحویل مرحله» تبدیل شده‌اند و باید از لیست‌ها پنهان بمانند
+    $addCol('cases', 'archived_at', "DATETIME NULL");
+    // تحویل‌های منتقل‌شده از دادهٔ قدیمی — هرگز دوباره فاکتور نمی‌شوند
+    $addCol('case_aligner_deliveries', 'legacy_imported', "TINYINT(1) NOT NULL DEFAULT 0");
+
+    try {
+        $pdo->exec("CREATE TABLE IF NOT EXISTS case_aligner_deliveries (
+            id INT NOT NULL AUTO_INCREMENT,
+            case_id INT NOT NULL,
+            delivered_date DATE NOT NULL,
+            upper_from SMALLINT NULL,
+            upper_to SMALLINT NULL,
+            lower_from SMALLINT NULL,
+            lower_to SMALLINT NULL,
+            upper_qty SMALLINT NOT NULL DEFAULT 0,
+            lower_qty SMALLINT NOT NULL DEFAULT 0,
+            unit_price DECIMAL(15,2) NOT NULL DEFAULT 0,
+            amount DECIMAL(15,2) NOT NULL DEFAULT 0,
+            service_id INT NULL,
+            invoice_id INT NULL,
+            invoice_item_id INT NULL,
+            note VARCHAR(255) NULL,
+            created_by INT NULL,
+            legacy_imported TINYINT(1) NOT NULL DEFAULT 0,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (id),
+            KEY idx_cad_case (case_id),
+            KEY idx_cad_date (delivered_date),
+            KEY idx_cad_invoice (invoice_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    } catch (Throwable $e) {}
+
+    // خدماتِ الاینر: «طرح درمان الاینر شفاف» = طرح (تعداد ثابت ۱)،
+    // «الاینر شفاف» = هر مرحله (تعداد دستی).
+    try {
+        $pdo->exec("UPDATE site_prices SET fixed_qty = 1 WHERE title LIKE '%طرح درمان%' AND title LIKE '%الاینر%'");
+        $pdo->exec("UPDATE site_prices SET is_aligner = 1 WHERE title LIKE '%طرح درمان%' AND title LIKE '%الاینر%'");
+        $pdo->exec("UPDATE site_prices
+                       SET aligner_stage_service_id = (
+                           SELECT id FROM (
+                               SELECT id FROM site_prices
+                                WHERE title LIKE '%الاینر%' AND title NOT LIKE '%طرح درمان%'
+                                ORDER BY id ASC LIMIT 1
+                           ) t
+                       )
+                     WHERE is_aligner = 1 AND (aligner_stage_service_id IS NULL OR aligner_stage_service_id = 0)");
+    } catch (Throwable $e) {}
+}
+
+/** آیا این خدمت «طرح درمان الاینر» است؟ */
+function serviceIsAligner(?int $serviceId): bool {
+    if ($serviceId === null || $serviceId <= 0) return false;
+    try {
+        $st = db()->prepare('SELECT is_aligner FROM site_prices WHERE id = ? LIMIT 1');
+        $st->execute([(int) $serviceId]);
+        return (int) $st->fetchColumn() === 1;
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/** شناسهٔ خدمتِ «هر مرحلهٔ الاینر» برای یک خدمتِ طرح درمان (۰ = تعریف نشده). */
+function alignerStageServiceId(?int $planServiceId): int {
+    if ($planServiceId === null || $planServiceId <= 0) return 0;
+    try {
+        $st = db()->prepare('SELECT aligner_stage_service_id FROM site_prices WHERE id = ? LIMIT 1');
+        $st->execute([(int) $planServiceId]);
+        $v = $st->fetchColumn();
+        return ($v === false || $v === null) ? 0 : (int) $v;
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
+/** لیستِ تحویل‌های الاینرِ یک کیس (قدیمی → جدید). */
+function getCaseAlignerDeliveries(int $caseId): array {
+    if ($caseId <= 0) return [];
+    try {
+        $st = db()->prepare('SELECT * FROM case_aligner_deliveries WHERE case_id = ? ORDER BY delivered_date ASC, id ASC');
+        $st->execute([$caseId]);
+        return $st->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * جمعِ تحویل‌های یک کیس: تعداد مراحلِ تحویل‌شده در هر فک، آخرین مرحله، تعداد نوبت و مبلغ.
+ * @return array{upper:int,lower:int,count:int,amount:float,last_upper:int,last_lower:int}
+ */
+function getCaseAlignerTotals(int $caseId): array {
+    $out = ['upper' => 0, 'lower' => 0, 'count' => 0, 'amount' => 0.0, 'last_upper' => 0, 'last_lower' => 0];
+    foreach (getCaseAlignerDeliveries($caseId) as $d) {
+        $out['upper'] += (int) ($d['upper_qty'] ?? 0);
+        $out['lower'] += (int) ($d['lower_qty'] ?? 0);
+        $out['amount'] += (float) ($d['amount'] ?? 0);
+        $out['count']++;
+        if (!empty($d['upper_to'])) $out['last_upper'] = max($out['last_upper'], (int) $d['upper_to']);
+        if (!empty($d['lower_to'])) $out['last_lower'] = max($out['last_lower'], (int) $d['lower_to']);
+    }
+    return $out;
+}
+
+/** عنوانِ ردیفِ فاکتور برای یک تحویلِ الاینر. */
+function alignerDeliveryTitle(array $d): string {
+    $parts = [];
+    if ((int) ($d['upper_qty'] ?? 0) > 0) {
+        $parts[] = 'فک بالا مراحل ' . toPersianDigits((string) (int) $d['upper_from']) . ' تا ' . toPersianDigits((string) (int) $d['upper_to']);
+    }
+    if ((int) ($d['lower_qty'] ?? 0) > 0) {
+        $parts[] = 'فک پایین مراحل ' . toPersianDigits((string) (int) $d['lower_from']) . ' تا ' . toPersianDigits((string) (int) $d['lower_to']);
+    }
+    return 'الاینر شفاف — ' . ($parts ? implode(' و ', $parts) : 'مرحله');
+}
+
+/**
+ * تحویل‌های الاینرِ یک پزشک که هنوز فاکتور نشده‌اند (در بازهٔ تاریخِ تحویل).
+ * برای گنجاندن در «صدور فاکتور ماهانه» استفاده می‌شود.
+ */
+function getUninvoicedAlignerDeliveriesForDoctor(int $doctorId, string $from, string $to): array {
+    if ($doctorId <= 0) return [];
+    try {
+        $st = db()->prepare(
+            'SELECT d.*, c.patient_name, c.doctor_id, c.service_id, c.branch_id,
+                    p.title AS plan_title
+               FROM case_aligner_deliveries d
+               JOIN cases c ON c.id = d.case_id
+          LEFT JOIN site_prices p ON p.id = c.service_id
+              WHERE c.doctor_id = ?
+                AND d.invoice_id IS NULL
+                AND COALESCE(d.legacy_imported, 0) = 0
+                AND d.delivered_date BETWEEN ? AND ?
+           ORDER BY d.delivered_date ASC, d.id ASC'
+        );
+        $st->execute([$doctorId, $from, $to]);
+        return $st->fetchAll();
+    } catch (Throwable $e) {
+        return [];
+    }
+}
+
+/**
+ * ثبتِ یک تحویلِ الاینر + به‌روزرسانی جمع.
+ * @return int شناسهٔ تحویلِ ثبت‌شده (۰ = خطا)
+ */
+function addCaseAlignerDelivery(int $caseId, string $deliveredDate, array $d, ?int $userId = null): int {
+    if ($caseId <= 0 || $deliveredDate === '') return 0;
+    $upFrom = isset($d['upper_from']) && $d['upper_from'] !== '' ? (int) $d['upper_from'] : null;
+    $upTo   = isset($d['upper_to'])   && $d['upper_to']   !== '' ? (int) $d['upper_to']   : null;
+    $loFrom = isset($d['lower_from']) && $d['lower_from'] !== '' ? (int) $d['lower_from'] : null;
+    $loTo   = isset($d['lower_to'])   && $d['lower_to']   !== '' ? (int) $d['lower_to']   : null;
+    $upQty  = ($upFrom !== null && $upTo !== null && $upTo >= $upFrom) ? ($upTo - $upFrom + 1) : 0;
+    $loQty  = ($loFrom !== null && $loTo !== null && $loTo >= $loFrom) ? ($loTo - $loFrom + 1) : 0;
+    if ($upQty === 0 && $loQty === 0) return 0;
+    $unit = (float) ($d['unit_price'] ?? 0);
+    $amount = $unit * ($upQty + $loQty);
+    try {
+        $st = db()->prepare(
+            'INSERT INTO case_aligner_deliveries
+                (case_id, delivered_date, upper_from, upper_to, lower_from, lower_to,
+                 upper_qty, lower_qty, unit_price, amount, service_id, note, created_by, created_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,NOW())'
+        );
+        $st->execute([
+            $caseId, $deliveredDate, $upFrom, $upTo, $loFrom, $loTo,
+            $upQty, $loQty, $unit, $amount,
+            !empty($d['service_id']) ? (int) $d['service_id'] : null,
+            isset($d['note']) ? mb_substr((string) $d['note'], 0, 250) : null,
+            $userId,
+        ]);
+        return (int) db()->lastInsertId();
+    } catch (Throwable $e) {
+        return 0;
+    }
+}
+
 /** نوع نوبت‌ها → برچسب فارسی/آیکون/رنگ (برای تقویم و فرم). */
 function scanAppointmentTypes(): array {
     return [
@@ -1900,11 +2149,26 @@ function getBranchDefaultDesignerId(int $branchId): int {
 
 /**
  * طراحِ پیش‌فرضِ مناسب برای یک کیسِ در حال ایجاد.
- * @param int|null $doctorId پزشکِ کیس
- * @param int|null $branchId شعبهٔ مالکِ کیس (پیش‌فرض: شعبهٔ کاربرِ جاری)
+ * @param int|null $doctorId  پزشکِ کیس
+ * @param int|null $branchId  شعبهٔ مالکِ کیس (پیش‌فرض: شعبهٔ کاربرِ جاری)
+ * @param int|null $serviceId خدمتِ کیس — اگر برای خدمت «طراح پیش‌فرض» تعریف شده باشد،
+ *                            اولویتِ اول دارد (۰ = برای این خدمت طراح پیش‌فرض نگذار).
  * @return array|false ردیفِ طراح (id, full_name) یا false
  */
-function getDefaultDesignerFor(?int $doctorId = null, ?int $branchId = null) {
+function getDefaultDesignerFor(?int $doctorId = null, ?int $branchId = null, ?int $serviceId = null) {
+    // ۱) قاعدهٔ خودِ خدمت (اگر تعیین شده باشد)
+    if ($serviceId !== null && $serviceId > 0) {
+        $serviceRule = getServiceDefaultDesignerId($serviceId);
+        if ($serviceRule !== null) {
+            if ($serviceRule <= 0) {
+                return false;   // «بدون طراح پیش‌فرض» برای این خدمت
+            }
+            $st = db()->prepare('SELECT id, full_name FROM users WHERE id = ? AND is_designer = 1 AND active = 1 LIMIT 1');
+            $st->execute([$serviceRule]);
+            return $st->fetch() ?: false;
+        }
+    }
+
     $bid = $branchId;
     if ($bid === null) {
         $bid = currentBranchId() ?? 1;
@@ -1920,6 +2184,40 @@ function getDefaultDesignerFor(?int $doctorId = null, ?int $branchId = null) {
         }
     }
     return getDefaultDesigner();
+}
+
+/**
+ * قاعدهٔ «طراح پیش‌فرضِ خدمت».
+ * @return int|null  null = برای این خدمت تنظیم نشده (زنجیرهٔ عادی)، 0 = بدون طراح، >0 = شناسهٔ طراح
+ */
+function getServiceDefaultDesignerId(?int $serviceId): ?int {
+    if ($serviceId === null || $serviceId <= 0) return null;
+    try {
+        $st = db()->prepare('SELECT default_designer_id FROM site_prices WHERE id = ? LIMIT 1');
+        $st->execute([(int) $serviceId]);
+        $v = $st->fetchColumn();
+        if ($v === false || $v === null || $v === '') return null;
+        return max(0, (int) $v);
+    } catch (Throwable $e) {
+        return null;   // ستون هنوز ساخته نشده
+    }
+}
+
+/**
+ * نقشهٔ «طراح پیش‌فرضِ هر خدمت» برای فرمِ کیس (یک کوئری).
+ * کلیدها فقط خدماتی هستند که مقدار دارند: 0 = هیچ‌کس، >0 = همان طراح.
+ * @return array<int,int>
+ */
+function getServiceDefaultDesignerMap(): array {
+    $out = [];
+    try {
+        foreach (db()->query('SELECT id, default_designer_id FROM site_prices WHERE default_designer_id IS NOT NULL')->fetchAll() as $r) {
+            $out[(int) $r['id']] = (int) $r['default_designer_id'];
+        }
+    } catch (Throwable $e) {
+        return [];
+    }
+    return $out;
 }
 
 /**
@@ -3241,14 +3539,27 @@ function getPayableInvoicesForParty(string $partyType, int $partyId, int $paymen
         if ($paymentId > 0) {
             foreach (getPaymentInvoiceIds($paymentId) as $iid) $linked[(int) $iid] = true;
         }
-        $st = db()->prepare('SELECT i.id, i.invoice_number, i.total_amount,
+        // فاکتورهای هر طرف‌حساب:
+        //   • لابراتوار → فقط INV-LAB؛ اگر doctor_id خالی باشد (دادهٔ قدیمی) با نامِ
+        //     خودِ لابراتوار تطبیق داده می‌شود تا در فرمِ «ثبت دریافت» دیده شود.
+        //   • پزشک/کلینیک → فاکتورهای غیرِ INV-LAB.
+        if ($partyType === 'lab') {
+            $whereSql = "(i.invoice_number LIKE 'INV-LAB%'
+                          AND (i.doctor_id = ?
+                               OR (i.doctor_id IS NULL AND i.doctor_name = (SELECT full_name FROM users WHERE id = ?))))";
+            $whereParams = [$partyId, $partyId];
+        } else {
+            $whereSql = "i.doctor_id = ? AND i.invoice_number NOT LIKE 'INV-LAB%'";
+            $whereParams = [$partyId];
+        }
+        $st = db()->prepare("SELECT i.id, i.invoice_number, i.total_amount,
                        COALESCE(SUM(pi.amount_applied), 0) AS applied
                 FROM doctor_invoices i
                 LEFT JOIN doctor_payment_invoices pi ON pi.invoice_id = i.id
-                WHERE i.doctor_id = ?
+                WHERE $whereSql
                 GROUP BY i.id, i.invoice_number, i.total_amount
-                ORDER BY i.invoice_date DESC, i.id DESC');
-        $st->execute([$partyId]);
+                ORDER BY i.invoice_date DESC, i.id DESC");
+        $st->execute($whereParams);
         $rows = $st->fetchAll();
     }
 
@@ -5390,6 +5701,7 @@ function getUninvoicedCasesForDoctor($doctor_id, $startDate, $endDate) {
         LEFT JOIN site_prices p ON c.service_id = p.id
         WHERE c.doctor_id = ?
           AND c.invoice_id IS NULL
+          AND c.archived_at IS NULL
           AND c.case_type IN ("doctor", "lab_out", "lab_in")
           AND c.received_date BETWEEN ? AND ?
         ORDER BY c.received_date ASC
@@ -5419,9 +5731,10 @@ function getOutstandingBalance($doctor_id) {
  * @param array $cases        Array of case rows (from getUninvoicedCasesForDoctor)
  * @param float $balance      Outstanding balance from previous months
  * @param string $invoiceDate YYYY-MM-DD (usually today)
+ * @param array  $alignerDeliveries  تحویل‌های مرحلهٔ الاینر (اختیاری) — هر کدام یک ردیف فاکتور
  * @return int invoice_id
  */
-function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankAccountId = null) {
+function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankAccountId = null, array $alignerDeliveries = []) {
     $now = date('Y-m-d H:i:s');
     
     // Generate a unique invoice number (e.g., INV-YYYYMM-001)
@@ -5432,6 +5745,10 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankA
     $total = $balance;
     foreach ($cases as $case) {
         $total += (float) $case['total_price'];
+    }
+    // مرحله‌های الاینرِ تحویل‌شده در همین بازه (هر تحویل یک ردیف با تاریخ خودش)
+    foreach ($alignerDeliveries as $ad) {
+        $total += (float) ($ad['amount'] ?? 0);
     }
 
     // Insert invoice
@@ -5490,6 +5807,35 @@ function createMonthlyInvoice($doctor_id, $cases, $balance, $invoiceDate, $bankA
             $case['total_price'] ?? 0,
             $now
         ]);
+    }
+
+    // ─── مرحله‌های الاینرِ تحویل‌شده در این بازه ───
+    // هر تحویل یک ردیف فاکتور با بازهٔ مرحله‌ها و تاریخ همان تحویل می‌شود.
+    foreach ($alignerDeliveries as $ad) {
+        $qtyStages = (int) ($ad['upper_qty'] ?? 0) + (int) ($ad['lower_qty'] ?? 0);
+        $desc = 'کیس #' . (int) $ad['case_id'] . ' — تاریخ تحویل: ' . toJalaliDateFormatted((string) $ad['delivered_date']);
+        $ins = db()->prepare('
+            INSERT INTO invoice_items
+            (invoice_id, price_id, case_id, item_title, item_description, patient_name, quantity, unit_price, total_amount, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ');
+        $ins->execute([
+            $invoiceId,
+            !empty($ad['service_id']) ? (int) $ad['service_id'] : null,
+            (int) $ad['case_id'],
+            alignerDeliveryTitle($ad),
+            $desc,
+            $ad['patient_name'] ?? '',
+            $qtyStages > 0 ? $qtyStages : 1,
+            (float) ($ad['unit_price'] ?? 0),
+            (float) ($ad['amount'] ?? 0),
+            $now
+        ]);
+        $itemId = (int) db()->lastInsertId();
+        try {
+            db()->prepare('UPDATE case_aligner_deliveries SET invoice_id = ?, invoice_item_id = ? WHERE id = ?')
+                ->execute([$invoiceId, $itemId, (int) $ad['id']]);
+        } catch (Throwable $e) {}
     }
 
     // If there is a balance, add a separate item
@@ -5858,7 +6204,7 @@ function createMonthlyLabInvoice(int $labId, array $cases, float $balance, strin
     $stmt = db()->prepare('
         INSERT INTO doctor_invoices
         (invoice_number, doctor_id, doctor_name, doctor_phone, doctor_email, total_amount, payment_status, invoice_date, notes, bank_account_id, branch_id, created_at)
-        VALUES (?, NULL, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
     ');
     $notes = 'فاکتور لابراتوار';
     if ($periodLabel !== null && $periodLabel !== '') {
@@ -5866,6 +6212,10 @@ function createMonthlyLabInvoice(int $labId, array $cases, float $balance, strin
     }
     $stmt->execute([
         $invoiceNumber,
+        // ⚠️ doctor_id باید شناسهٔ کاربرِ لابراتوار باشد (نه NULL):
+        // payment_form.php فاکتورهای هر طرف‌حساب را با doctor_id می‌گیرد؛
+        // با NULL بودن، فهرست فاکتورهای لابراتوار خالی می‌شد و بدهی قابل تسویه نبود.
+        $labId,
         $labUser['full_name'] ?? 'لابراتوار',
         $total,
         'unpaid',

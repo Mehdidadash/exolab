@@ -83,6 +83,13 @@ try {
     // 3) Delete case comments
     $pdo->prepare("DELETE FROM entity_comments WHERE entity_type = 'case' AND entity_id = ?")->execute([$id]);
 
+    // 3.5) حذف تحویل‌های مرحلهٔ الاینرِ همین کیس (وگرنه رکوردهای یتیم می‌مانند)
+    try {
+        $pdo->prepare('DELETE FROM case_aligner_deliveries WHERE case_id = ?')->execute([$id]);
+    } catch (Throwable $e) {
+        // جدول هنوز روی این دیتابیس ساخته نشده — بی‌خطر
+    }
+
     // 4) Delete the case itself
     $stmt = $pdo->prepare('DELETE FROM cases WHERE id = ?');
     $stmt->execute([$id]);

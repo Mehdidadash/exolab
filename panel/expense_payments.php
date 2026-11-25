@@ -20,7 +20,7 @@ panel_layout_start('پرداخت‌های ما (هزینه)');
         <p class="empty">هیچ پرداخت هزینه‌ای ثبت نشده است.</p>
     <?php else: ?>
     <div style="overflow-x:auto;">
-    <table class="datatable display">
+    <table class="datatable display" data-order="5">
         <thead>
         <tr>
             <th>نوع</th>

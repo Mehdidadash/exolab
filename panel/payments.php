@@ -99,7 +99,7 @@ panel_layout_start($title);
 <div class="form-card" style="margin-bottom:16px; padding:12px 16px;">
     <p style="color:#525252; margin:0;">پرداخت‌هایی که مجموعه به شما (<?= $isDesigner ? 'هزینه طراحی' : 'برون‌سپاری' ?>) انجام داده است. این صفحه فقط برای مشاهده است — ویرایش و حذف توسط شما امکان‌پذیر نیست.</p>
 </div>
-<table class="datatable display">
+<table class="datatable display" data-order="4">
     <thead>
     <tr>
         <th>نوع</th>
@@ -144,7 +144,7 @@ foreach ($payments as $p) {
         جمع دریافتی: <strong><?= formatAmountToman($listTotal) ?></strong> تومان
     </div>
 </div>
-<table class="datatable display">
+<table class="datatable display" data-order="4">
     <thead>
     <tr>
         <th>نوع</th>

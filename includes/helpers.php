@@ -671,11 +671,16 @@ function caseDownloadBaseName(int $caseId, ?string $folderName = null): string
 
     $shade = trim((string) ($row['shade'] ?? ''));
 
-    // دندان‌ها: «26،42_43_44» → «26-42-43-44» (کاما/آندرلاین/فاصله → خط تیره)
+    // دندان‌ها: «26,42_43_44» → همان‌طور می‌ماند؛ فقط فاصله‌ها خط تیره می‌شوند.
+    // ⚠️ «_» = دندان‌های چسبیده (بریج) و «,» = جدا — این دو نباید به هم تبدیل شوند
+    //    (قبلاً هر دو به «-» تبدیل می‌شدند و اطلاعاتِ چسبیده/جدا از نام فایل حذف می‌شد).
     $teeth = trim((string) ($row['teeth'] ?? ''));
     if ($teeth !== '') {
-        $teeth = (string) preg_replace('/[\s_,،]+/u', '-', $teeth);
-        $teeth = trim((string) preg_replace('/-{2,}/', '-', $teeth), '-');
+        $teeth = str_replace(['،', ';'], ',', $teeth);
+        $teeth = (string) preg_replace('/\s*,\s*/u', ',', $teeth);   // فاصله‌های اطراف ویرگول
+        $teeth = (string) preg_replace('/\s*_\s*/u', '_', $teeth);   // فاصله‌های اطراف آندرلاین
+        $teeth = (string) preg_replace('/\s+/u', '-', $teeth);       // فاصله → خط تیره
+        $teeth = trim($teeth, '-,_.');
     }
 
     $folder = trim((string) $folderName);
@@ -699,6 +704,85 @@ function caseDownloadBaseName(int $caseId, ?string $folderName = null): string
     $base = trim($base, " _.");
 
     return $base !== '' ? $base : ('case_' . $caseId);
+}
+
+/**
+ * متنِ فایلِ «case_info.txt» که همراهِ فایل‌های خام (ZIP) دانلود می‌شود.
+ *
+ * چرا: وقتی اسکن‌های خام از سامانه دانلود و به لابراتوار/طراح داده می‌شوند، توضیحاتِ
+ * کیس، وضعیتِ «درخواست کست» و (برای کاستوم اباتمنت) نوع اسکن‌بادی/فیکسچر/اتصال باید
+ * همراهشان باشد.
+ *
+ * @return string متنِ آمادهٔ نوشتن در فایل (UTF-8 با BOM) — برای کیسِ معتبر همیشه متنی برمی‌گرداند
+ */
+function caseInfoTextForDownload(int $caseId): string
+{
+    if ($caseId <= 0) {
+        return '';
+    }
+    try {
+        $st = db()->prepare(
+            'SELECT c.id, c.patient_name, c.shade, c.teeth, c.location_type, c.description,
+                    c.received_date, c.service_id, c.scan_body_type_id, c.fixture_type_id,
+                    c.connection_type, c.case_cast_requested,
+                    p.title AS service_title, u.full_name AS doctor_name
+             FROM cases c
+             LEFT JOIN site_prices p ON c.service_id = p.id
+             LEFT JOIN users u ON c.doctor_id = u.id
+             WHERE c.id = ? LIMIT 1'
+        );
+        $st->execute([$caseId]);
+        $case = $st->fetch();
+    } catch (Throwable $e) {
+        return '';
+    }
+    if (!$case) {
+        return '';
+    }
+
+    $desc = trim((string) ($case['description'] ?? ''));
+    $serviceTitle = trim((string) ($case['service_title'] ?? ''));
+    $isCustomAbutment = serviceTitleIsCustomAbutment($serviceTitle)
+        || serviceRequiresScanBody((int) ($case['service_id'] ?? 0));
+
+    $sbName = !empty($case['scan_body_type_id']) ? scanBodyTypeName((int) $case['scan_body_type_id']) : '';
+    $ftName = !empty($case['fixture_type_id']) ? fixtureTypeName((int) $case['fixture_type_id']) : '';
+    $conn   = connectionTypeLabel((string) ($case['connection_type'] ?? ''));
+
+    // خواستهٔ کاربر: این فایل متنی همیشه داخل ZIPِ دانلود باشد (حتی اگر توضیحی ثبت نشده باشد) —
+    // چون وضعیت «درخواست کست» هم باید به لابراتوار/طراح برسد.
+
+    $lines = [];
+    $lines[] = 'اطلاعات کیس #' . $caseId;
+    $lines[] = str_repeat('=', 34);
+    $lines[] = 'بیمار: ' . (trim((string) ($case['patient_name'] ?? '')) !== '' ? $case['patient_name'] : '—');
+    $lines[] = 'پزشک: ' . (trim((string) ($case['doctor_name'] ?? '')) !== '' ? $case['doctor_name'] : '—');
+    $lines[] = 'خدمت: ' . ($serviceTitle !== '' ? $serviceTitle : '—');
+    $lines[] = 'تاریخ دریافت: ' . toJalaliDateFormatted($case['received_date'] ?? null);
+    $lines[] = 'مکان / دندان: ' . formatCaseLocation($case['location_type'] ?? '', $case['teeth'] ?? '');
+    if (trim((string) ($case['shade'] ?? '')) !== '') {
+        $lines[] = 'رنگ: ' . $case['shade'];
+    }
+    $lines[] = 'درخواست کست از طراح: ' . (!empty($case['case_cast_requested']) ? 'بله — برای این کیس کست لازم است' : 'خیر');
+
+    if ($sbName !== '' || $ftName !== '' || $conn !== '') {
+        $lines[] = '';
+        $lines[] = $isCustomAbutment ? 'مشخصات کاستوم اباتمنت:' : 'مشخصات اسکن‌بادی / فیکسچر / اتصال:';
+        if ($sbName !== '') { $lines[] = '- نوع اسکن‌بادی: ' . $sbName; }
+        if ($ftName !== '') { $lines[] = '- نوع فیکسچر: ' . $ftName; }
+        if ($conn !== '')   { $lines[] = '- نحوهٔ اتصال: ' . $conn; }
+    }
+
+    if ($desc !== '') {
+        $lines[] = '';
+        $lines[] = 'توضیحات کیس:';
+        $lines[] = $desc;
+    }
+
+    $lines[] = '';
+
+    // BOM برای اینکه Notepad ویندوز متنِ فارسی را درست نشان دهد.
+    return "\xEF\xBB\xBF" . implode("\r\n", $lines);
 }
 
 /**
@@ -818,9 +902,10 @@ function caseFileDisplayName(int $caseId, string $fileName, ?string $fileType, b
 }
 
 /**
- * ساختِ یک فایل ZIP از مجموعه‌ای فایل و برگرداندن مسیر آن.
+ * ساختِ یک فایل ZIP از مجموعه‌ای فایل و برگرداندن نتیجه.
  *
  * @param array    $files   هر عضو: ['path' => مسیر واقعی روی دیسک, 'name' => نام داخل ZIP]
+ *                          یا ['content' => متنِ آماده, 'name' => نام داخل ZIP] برای فایلِ ساخته‌شده در حافظه
  * @param string   $zipPath مسیر کاملِ خروجی ZIP (روی دیسک)
  * @param string[] $errors  کدهای خطا در صورت شکست به این آرایه اضافه می‌شوند
  * @return bool true اگر فایل ZIP با حداقل یک عضو ساخته شد
@@ -839,8 +924,9 @@ function buildZipFromFiles(array $files, string $zipPath, array &$errors = []): 
     $used  = [];
     $added = 0;
     foreach ($files as $f) {
-        $path = (string) ($f['path'] ?? '');
-        if ($path === '' || !is_file($path)) {
+        $path    = (string) ($f['path'] ?? '');
+        $content = array_key_exists('content', $f) ? (string) $f['content'] : null;
+        if ($content === null && ($path === '' || !is_file($path))) {
             continue;
         }
         $name = str_replace('\\', '/', (string) ($f['name'] ?? basename($path)));
@@ -856,7 +942,7 @@ function buildZipFromFiles(array $files, string $zipPath, array &$errors = []): 
         }
         $name = implode('/', $safe);
         if ($name === '') {
-            $name = basename($path);
+            $name = ($path !== '' ? basename($path) : 'file.txt');
         }
         // جلوگیری از نام تکراری داخل ZIP
         if (isset($used[$name])) {
@@ -869,7 +955,11 @@ function buildZipFromFiles(array $files, string $zipPath, array &$errors = []): 
             } while (isset($used[$name]));
         }
         $used[$name] = true;
-        $zip->addFile($path, $name);
+        if ($content !== null) {
+            $zip->addFromString($name, $content);   // فایلِ متنیِ ساخته‌شده در حافظه
+        } else {
+            $zip->addFile($path, $name);
+        }
         $added++;
     }
     $zip->close();

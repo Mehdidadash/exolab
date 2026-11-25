@@ -137,19 +137,33 @@ $frmErrMsg = [
             <small style="color:#525252;">هر کلینیکی را که این پزشک در آن کار می‌کند علامت بزنید؛ «کلینیک اصلی» بالا فقط برای پیش‌فرضِ کیس‌های جدید است.</small>
         </div>
         <script>
-        // کلینیک اصلی انتخاب‌شده نباید همزمان «عضویتِ دیگر» باشد (تناقض در داده)
+        // کلینیک اصلی انتخاب‌شده نباید همزمان «عضویتِ دیگر» باشد (تناقض در داده).
+        // ⚠️ باگِ قبلی: هر بار که «کلینیک اصلی» عوض می‌شد، تیکِ کلینیکِ قبلی برداشته
+        // نمی‌شد و با چند بار تغییر، همهٔ کلینیک‌های انتخاب‌شده تیک‌خورده می‌ماندند.
+        // حالا تیکِ خودکارِ «کلینیک اصلیِ قبلی» قبل از تیک‌زدنِ جدید برداشته می‌شود.
         (function(){
             var primary = document.getElementById('clinic_id');
             var list = document.getElementById('clinic-extra-field');
             if (!primary || !list) return;
+            var lastPrimary = String(primary.value || '');
+            function checkboxFor(clinicId) {
+                var lb = list.querySelector('label[data-clinic-id="' + String(clinicId) + '"]');
+                return lb ? lb.querySelector('input[type=checkbox]') : null;
+            }
             function sync() {
-                var pid = primary.value;
+                var pid = String(primary.value || '');
+                // کلینیک اصلیِ قبلی → تیکِ خودکارش را بردار (مگر اینکه همان انتخاب جدید باشد)
+                if (lastPrimary !== '' && lastPrimary !== pid) {
+                    var prevCb = checkboxFor(lastPrimary);
+                    if (prevCb) prevCb.checked = false;
+                }
                 list.querySelectorAll('label[data-clinic-id]').forEach(function(lb){
-                    var same = lb.getAttribute('data-clinic-id') === pid;
+                    var same = String(lb.getAttribute('data-clinic-id')) === pid;
                     var cb = lb.querySelector('input[type=checkbox]');
                     if (same && cb) cb.checked = true;
                     lb.style.opacity = same ? '0.6' : '1';
                 });
+                lastPrimary = pid;
             }
             primary.addEventListener('change', sync);
             sync();

@@ -87,9 +87,11 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
             $message = $rangeError;
         } else {
             $cases = getUninvoicedCasesForDoctor($doctorId, $startDate, $endDate);
+            // مرحله‌های الاینرِ تحویل‌شده در همین بازه (از تاریخ تحویل)
+            $deliveries = getUninvoicedAlignerDeliveriesForDoctor($doctorId, $startDate, $endDate);
             $balance = getOutstandingBalance($doctorId);
 
-            if (empty($cases) && $balance == 0) {
+            if (empty($cases) && empty($deliveries) && $balance == 0) {
                 $message = 'هیچ کیس فاکتورنشده‌ای برای این پزشک در بازه انتخابی وجود ندارد و بدهی هم ندارد.';
             } else {
                 if ($selectedCasesOnly && !empty($selectedCaseIds)) {
@@ -98,6 +100,7 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                     }));
                 }
                 $total = $balance + array_sum(array_column($cases, 'total_price'));
+                foreach ($deliveries as $ad) { $total += (float) $ad['amount']; }
                 ?>
                 <!DOCTYPE html>
                 <html dir="rtl" lang="fa">
@@ -153,6 +156,19 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                                             <td><?= formatAmountToman($case['total_price']) ?></td>
                                         </tr>
                                     <?php endforeach; ?>
+                                    <?php foreach ($deliveries as $ad): ?>
+                                        <tr style="background:#faf5ff;">
+                                            <td>
+                                                <input type="checkbox" class="case-checkbox" name="delivery_ids[]" value="<?= (int) $ad['id'] ?>" checked>
+                                            </td>
+                                            <td>#<?= (int) $ad['case_id'] ?></td>
+                                            <td><?= htmlspecialchars((string) ($ad['patient_name'] ?? '')) ?></td>
+                                            <td><?= htmlspecialchars(alignerDeliveryTitle($ad)) ?>
+                                                <div style="font-size:.78rem; color:#6b7280;">تحویل: <?= htmlspecialchars(toJalaliDateFormatted((string) $ad['delivered_date'])) ?></div>
+                                            </td>
+                                            <td><?= formatAmountToman($ad['amount']) ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
                                     <?php if ($balance > 0): ?>
                                         <tr>
                                             <td></td>
@@ -168,7 +184,7 @@ if (($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate'])) || $sel
                                 </tbody>
                             </table>
                             <div style="margin-top:10px;">
-                                <span>تعداد انتخاب شده: <span id="selected-count" class="selected-count"><?= toPersianDigits(count($cases)) ?></span></span>
+                                <span>تعداد انتخاب شده: <span id="selected-count" class="selected-count"><?= toPersianDigits((string) (count($cases) + count($deliveries))) ?></span></span>
                             </div>
                             <div style="margin-top: 16px; display:flex; gap:10px; flex-wrap:wrap;">
                                 <button type="submit" name="confirm" value="1" class="btn" style="background:#06B6D4;">تأیید و ایجاد فاکتور</button>
@@ -203,6 +219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm']) && $_POST[
     $doctorId = (int) $_POST['doctor_id'];
     $bankAccountId = !empty($_POST['bank_account_id']) ? (int) $_POST['bank_account_id'] : null;
     $selectedCaseIds = isset($_POST['case_ids']) && is_array($_POST['case_ids']) ? array_map('intval', $_POST['case_ids']) : [];
+    $selectedDeliveryIds = isset($_POST['delivery_ids']) && is_array($_POST['delivery_ids']) ? array_map('intval', $_POST['delivery_ids']) : [];
 
     [$startDate, $endDate, $rangeLabel, $rangeError] = gi_resolve_range($periodType, $month, $year, $dateFrom, $dateTo, $jalaliMonths);
 
@@ -210,6 +227,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm']) && $_POST[
         $message = $rangeError;
     } else {
         $cases = getUninvoicedCasesForDoctor($doctorId, $startDate, $endDate);
+        $deliveries = getUninvoicedAlignerDeliveriesForDoctor($doctorId, $startDate, $endDate);
         $balance = getOutstandingBalance($doctorId);
 
         // فقط کیس‌های تیک‌خورده
@@ -218,9 +236,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm']) && $_POST[
                 return in_array((int) $c['id'], $selectedCaseIds);
             }));
         }
+        // فقط تحویل‌های تیک‌خورده
+        if (!empty($_POST['delivery_ids']) && is_array($_POST['delivery_ids'])) {
+            $deliveries = array_values(array_filter($deliveries, function ($d) use ($selectedDeliveryIds) {
+                return in_array((int) $d['id'], $selectedDeliveryIds);
+            }));
+        }
 
-        if (!empty($cases) || $balance > 0) {
-            $invoiceId = createMonthlyInvoice($doctorId, $cases, $balance, date('Y-m-d'), $bankAccountId);
+        if (!empty($cases) || !empty($deliveries) || $balance > 0) {
+            $invoiceId = createMonthlyInvoice($doctorId, $cases, $balance, date('Y-m-d'), $bankAccountId, $deliveries);
             $generatedInvoiceId = $invoiceId;
             $message = 'فاکتور با موفقیت ایجاد شد. شماره فاکتور: ' . getInvoice($invoiceId)['invoice_number'];
         } else {

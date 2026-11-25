@@ -39,6 +39,9 @@ $canSelectCases = in_array($user['role'] ?? '', ['admin', 'branch_admin', 'staff
 // وضعیت‌های مجازِ طراح ([۹، ۱۰، ۲۰، ۲۱]) را می‌پذیرد و دسترسیِ هر کیس را با
 // userCanViewCase بررسی می‌کند.
 $canBatchUpdateStatus = has_permission('batch_update_status') || is_designer_user($user);
+// تغییر وضعیتِ یک کیس با کلیک روی سلول وضعیت — همان مجوزهای batch_update_status.php
+$canChangeSingleStatus = $canBatchUpdateStatus
+    || has_permission('update_case_status') || has_permission('edit_cases') || is_admin();
 
 // ── دستور کار و خروجی CSV ──────────────────────────────────────────
 // پرینت دستور کار: مدیران (admin/branch_admin)، کارمندان شعبه (staff/secretary/technician)
@@ -159,8 +162,10 @@ panel_layout_start('مدیریت کیس‌ها');
             <button type="button" id="download-files-btn" class="btn" style="background: #0F172A; color: #fff;" onclick="downloadCaseFiles()" title="دانلود هم‌زمان فایل‌های خام (اسکن) کیس‌های انتخاب‌شده — فایل‌های طراحی از دکمه‌ی «دانلود طراحی‌ها» دانلود می‌شوند">⬇ دانلود فایل‌های خام</button>
             <?php endif; ?>
             <button type="button" id="toggle-delivered-btn" class="btn" style="background:#64748b; color:#fff;" onclick="toggleDelivered()">🙈 نمایش تحویل‌شده‌ها</button>
-            <?php // کیس‌هایی که برچسبشان هنوز چاپ نشده (label_printed_at خالی است) ?>
+            <?php // کیس‌هایی که برچسبشان هنوز چاپ نشده (label_printed_at خالی است) — طراح به این فیلتر نیازی ندارد ?>
+            <?php if (!is_designer_user($user)): ?>
             <button type="button" id="toggle-unprinted-btn" class="btn" style="background:#ea580c; color:#fff;" onclick="toggleUnprintedLabels()" title="فقط کیس‌هایی که برچسبشان هنوز چاپ نشده است">🏷 برچسب‌نشده‌ها</button>
+            <?php endif; ?>
             <?php // کیس‌هایی که برای آن‌ها «درخواست کست از طراح» ثبت شده است ?>
             <button type="button" id="toggle-cast-btn" class="btn" style="background:#7c3aed; color:#fff;" onclick="toggleCastRequested()" title="فقط کیس‌هایی که از طراح درخواست کست شده است">🦷 درخواست کست</button>
             <?php // کیس‌هایی که «فوری» علامت خورده‌اند (اولویتِ طراحی) ?>
@@ -199,6 +204,15 @@ panel_layout_start('مدیریت کیس‌ها');
                     <?php foreach (getAllClinics() as $cl): ?>
                         <option value="<?= (int) $cl['id'] ?>" <?= (int) ($_GET['clinic_id'] ?? 0) === (int) $cl['id'] ? 'selected' : '' ?>><?= htmlspecialchars($cl['full_name']) ?></option>
                     <?php endforeach; ?>
+                </select>
+            </div>
+            <?php // فیلتر کست: کیس‌هایی که برایشان «درخواست کست از طراح» ثبت شده (یا نشده) ?>
+            <div class="form-group" style="margin:0; min-width:190px;">
+                <label for="cast_filter">درخواست کست</label>
+                <select id="cast_filter" name="cast_requested">
+                    <option value="">همهٔ کیس‌ها</option>
+                    <option value="1" <?= (string) ($_GET['cast_requested'] ?? '') === '1' ? 'selected' : '' ?>>فقط دارای درخواست کست</option>
+                    <option value="0" <?= (string) ($_GET['cast_requested'] ?? '') === '0' ? 'selected' : '' ?>>فقط بدون درخواست کست</option>
                 </select>
             </div>
             <button type="submit" class="btn" style="background:#0F172A; color:#fff;">اعمال بازه تاریخ</button>
@@ -264,7 +278,20 @@ panel_layout_start('مدیریت کیس‌ها');
     <tbody></tbody>
 </table>
 
-<!-- Modal for add/edit case (same as before) -->
+<?php
+// ── فرمِ مشترکِ کیس (includes/case_form.php) ─────────────────────────────
+// مارک‌آپ/پیش‌فرض‌ها یک منبع دارند و با فرمِ ویرایشِ صفحهٔ مشاهدهٔ کیس مشترک است.
+require_once __DIR__ . '/../includes/case_form.php';
+$caseFormCtx = caseFormContextForCurrentUser([
+    'mode'              => 'create',
+    'csrf_token'        => $csrf_token,
+    'showFiles'         => true,
+    'showSubcaseButton' => true,
+]);
+?>
+<?php /* ⚠️ بلوک قدیمیِ فرم — غیرفعال. منبع رسمی: includes/case_form.php (تکمیل مهاجرت: حذف این بلوک) */ ?>
+<?php if (false): ?>
+<!-- Modal for add/edit case (old markup) -->
 <div id="case-modal" class="modal" style="display:none;">
     <div class="modal-content form-card" style="max-width:1100px; margin:auto;">
         <h3 id="case-modal-title">افزودن کیس جدید</h3>
@@ -632,6 +659,15 @@ panel_layout_start('مدیریت کیس‌ها');
                 <button type="submit" id="case-save" class="btn" style="background:#06B6D4;">ذخیره</button>
             </div>
         </form>
+    </div>
+</div>
+<?php endif; ?>
+
+<!-- Modal for add/edit case (منبع: includes/case_form.php) -->
+<div id="case-modal" class="modal" style="display:none;">
+    <div class="modal-content form-card" style="max-width:1100px; margin:auto;">
+        <h3 id="case-modal-title">افزودن کیس جدید</h3>
+        <?= renderCaseForm($caseFormCtx) ?>
     </div>
 </div>
 
@@ -1044,7 +1080,7 @@ panel_layout_start('مدیریت کیس‌ها');
 <!-- Batch Status Update Modal -->
 <div id="batch-status-modal" class="modal" style="display:none;">
     <div class="modal-content form-card" style="max-width:420px; margin:auto; padding:24px;">
-        <h3 style="margin-bottom:12px;">تغییر وضعیت گروهی کیس‌ها</h3>
+        <h3 id="batch-status-title" style="margin-bottom:12px;">تغییر وضعیت گروهی کیس‌ها</h3>
         <p id="batch-status-count" style="margin-bottom:16px; color:#555;"></p>
         <div class="form-group">
             <label for="batch-status-select">وضعیت جدید</label>
@@ -1302,6 +1338,11 @@ panel_layout_start('مدیریت کیس‌ها');
             array_map(function ($p) { return (int) ($p['design_required'] ?? 1); }, array_column($prices, null, 'id')),
             JSON_UNESCAPED_UNICODE
         ) ?>;
+        // «طراح پیش‌فرضِ هر خدمت» (site_prices.default_designer_id):
+        //   کلیدِ موجود با مقدار 0  → برای این خدمت طراح پیش‌فرض نگذار
+        //   کلیدِ موجود با مقدار >0 → همان طراح
+        //   کلیدِ غایب               → زنجیرهٔ عادی (پزشک → شعبه → سراسری)
+        window.__SVC_DEFAULT_DESIGNER__ = <?= json_encode(getServiceDefaultDesignerMap(), JSON_UNESCAPED_UNICODE) ?>;
         // خدماتی که هنگام ثبت/ویرایش کیس فیلدِ «نوع اسکن‌بادی» لازم دارند
         // (اباتمنت کره‌ای/اروپایی، فیکسچر ایمپلنت و هر خدمتی که در prices.php تیک خورده باشد).
         window.__SVC_REQUIRES_SCAN_BODY__ = <?= json_encode(
@@ -1361,6 +1402,8 @@ panel_layout_start('مدیریت کیس‌ها');
                     'base_units'       => max(1, (int) ($p['base_units'] ?? 1)),
                     'extra_unit_price' => ($p['extra_unit_price'] !== null && $p['extra_unit_price'] !== '') ? (float) $p['extra_unit_price'] : null,
                     'price'            => (float) $p['price'],
+                    // تعداد ثابت = ۱ (مثل «طرح درمان الاینر»: یک فک یا دو فک، مبلغ یکسان)
+                    'fixed_qty'        => (int) ($p['fixed_qty'] ?? 0),
                 ];
                 return $acc;
             }, []),
@@ -1752,8 +1795,9 @@ panel_layout_start('مدیریت کیس‌ها');
         var uninvoicedOnly = <?= !empty($_GET['uninvoiced']) ? 1 : 0 ?>;
         // فیلتر «برچسب‌نشده‌ها» — همان الگو: وضعیت اولیه از آدرس (?unprinted_labels=1)
         var unprintedOnly = <?= !empty($_GET['unprinted_labels']) ? 1 : 0 ?>;
-        // فیلتر «درخواست کست» — وضعیت اولیه از آدرس (?cast_requested=1)
-        var castRequestedOnly = <?= !empty($_GET['cast_requested']) ? 1 : 0 ?>;
+        // فیلتر «درخواست کست» — وضعیت اولیه از آدرس (?cast_requested=1 / ?cast_requested=0)
+        var castFilterVal = '<?= htmlspecialchars((string) ($_GET['cast_requested'] ?? ''), ENT_QUOTES) ?>';
+        var castRequestedOnly = (castFilterVal === '1') ? 1 : 0;
         // فیلتر «فوری» — وضعیت اولیه از آدرس (?urgent=1)
         var urgentOnly = <?= !empty($_GET['urgent']) ? 1 : 0 ?>;
 
@@ -1776,8 +1820,8 @@ panel_layout_start('مدیریت کیس‌ها');
                         d.uninvoiced = uninvoicedOnly ? 1 : 0;
                         // فقط کیس‌هایی که برچسبشان چاپ نشده (دکمهٔ نوار ابزار)
                         d.unprinted_labels = unprintedOnly ? 1 : 0;
-                        // فقط کیس‌هایی که از طراح درخواست کست شده است
-                        d.cast_requested = castRequestedOnly ? 1 : 0;
+                        // فقط کیس‌هایی که از طراح درخواست کست شده است (یا فقط بدون آن)
+                        d.cast_requested = castFilterVal;
                         d.urgent = urgentOnly ? 1 : 0;
                     }
                 },
@@ -1806,10 +1850,18 @@ panel_layout_start('مدیریت کیس‌ها');
                     // clean header for the plain-status pane (its <th> says "وضعیت (متن)")
                     { targets: [17], searchPanes: { header: 'وضعیت' } },
                     // ستون وضعیت (۱۰): متن طولانی در حداکثر دو ردیف؛ متن کامل در hover (title)
+                    // کلیک روی سلول ⇢ همان مودالِ «تغییر وضعیت» برای همین یک کیس باز می‌شود.
                     { targets: [10], width: '150px', createdCell: function(td, cellData, rowData){
                         td.style.whiteSpace = 'normal';
                         td.style.wordBreak = 'break-word';
-                        td.title = String(rowData[15] || '');
+                        var stText = String(rowData[15] || '');
+                        td.title = stText;
+                        td.dataset.caseId = String(rowData[0]);
+                        td.classList.add('js-case-status');
+                        <?php if ($canChangeSingleStatus): ?>
+                        td.style.cursor = 'pointer';
+                        td.title = stText ? (stText + ' — کلیک: تغییر وضعیت') : 'کلیک: تغییر وضعیت';
+                        <?php endif; ?>
                     } },
                     // ستون انتخاب (۰): کل سلول label است ⇢ انتخاب با یک کلیک/لمس هر جای سلول
                     { targets: [0], className: 'case-cb-cell', orderable: false, responsivePriority: 1 },
@@ -2064,17 +2116,34 @@ panel_layout_start('مدیریت کیس‌ها');
                 }
             };
             window.toggleCastRequested = function(){
-                castRequestedOnly = castRequestedOnly ? 0 : 1;
+                // دکمهٔ نوار ابزار فقط حالت «دارای درخواست کست» را روشن/خاموش می‌کند
+                castFilterVal = (castFilterVal === '1') ? '' : '1';
+                castRequestedOnly = (castFilterVal === '1') ? 1 : 0;
+                var sel = document.getElementById('cast_filter');
+                if (sel) sel.value = castFilterVal;
                 window.updateCastBtn();
                 try {
                     var url = new URL(window.location.href);
-                    if (castRequestedOnly) { url.searchParams.set('cast_requested', '1'); } else { url.searchParams.delete('cast_requested'); }
+                    if (castFilterVal !== '') { url.searchParams.set('cast_requested', castFilterVal); } else { url.searchParams.delete('cast_requested'); }
                     window.history.replaceState({}, '', url.toString());
                 } catch(e){}
                 try { table.ajax.reload(); } catch(e){}
             };
             window.updateCastBtn();
-            if (castRequestedOnly) { try { table.ajax.reload(null, false); } catch(e){} }
+            if (castFilterVal !== '') { try { table.ajax.reload(null, false); } catch(e){} }
+
+            // فیلتر کشویی «درخواست کست» در پنل فیلترها (هر سه حالت: همه/دارد/ندارد)
+            jQuery('#cast_filter').on('change', function(){
+                castFilterVal = String(jQuery(this).val() || '');
+                castRequestedOnly = (castFilterVal === '1') ? 1 : 0;
+                window.updateCastBtn();
+                try {
+                    var url = new URL(window.location.href);
+                    if (castFilterVal !== '') { url.searchParams.set('cast_requested', castFilterVal); } else { url.searchParams.delete('cast_requested'); }
+                    window.history.replaceState({}, '', url.toString());
+                } catch(e){}
+                try { table.ajax.reload(); } catch(e){}
+            });
 
             // ── فیلتر «فوری‌ها» ──
             // کیس‌هایی که «فوری» علامت خورده‌اند؛ طراح با این فیلتر فقط کارهای
@@ -2136,7 +2205,7 @@ panel_layout_start('مدیریت کیس‌ها');
             // قواعد هر خدمت از قالب می‌آید: window.__SVC_PRICING__ = { id: {qty_manual, base_units, extra_unit_price, price} }
             function servicePricing(serviceId){
                 var m = window.__SVC_PRICING__ || {};
-                return m[serviceId] || { qty_manual: 0, base_units: 1, extra_unit_price: null, price: 0 };
+                return m[serviceId] || { qty_manual: 0, base_units: 1, extra_unit_price: null, price: 0, fixed_qty: 0 };
             }
             function faNum(n){ return String(n).replace(/\d/g, function(c){ return '۰۱۲۳۴۵۶۷۸۹'[c]; }); }
             function tomanLabel(n){ return faNum(Number(n || 0).toLocaleString('en-US')); }
@@ -2144,12 +2213,21 @@ panel_layout_start('مدیریت کیس‌ها');
                 var sid = jQuery('#case-service-id').val();
                 return sid ? !!servicePricing(sid).qty_manual : false;
             }
+            // خدماتی که قیمتشان مستقل از تعداد است (مثل «طرح درمان الاینر شفاف»)
+            function isFixedQty(){
+                var sid = jQuery('#case-service-id').val();
+                return sid ? !!servicePricing(sid).fixed_qty : false;
+            }
             // حالت تعداد: خدمت‌هایی مثل الاینر تعداد دستی دارند، بقیه خودکار از دندان‌ها/فک
             function applyQtyMode(){
                 var manual = isManualQty();
+                var fixed  = isFixedQty();
                 var qty = jQuery('#case-quantity');
                 var hint = document.getElementById('case-qty-hint');
-                if (manual) {
+                if (fixed) {
+                    qty.prop('readonly', true).css({ background: '#f3f4f6', cursor: 'not-allowed' });
+                    if (hint) { hint.textContent = '(تعداد ثابت ۱ — یک فک یا دو فک، مبلغ یکسان)'; hint.style.color = '#7c3aed'; hint.style.fontWeight = '600'; }
+                } else if (manual) {
                     qty.prop('readonly', false).css({ background: '#fff', cursor: 'auto' });
                     if (hint) { hint.textContent = '(این خدمت تعداد دستی دارد — مثل ۱۰ یا ۲۰ الاینر)'; hint.style.color = '#0369a1'; hint.style.fontWeight = '600'; }
                 } else {
@@ -2210,6 +2288,13 @@ panel_layout_start('مدیریت کیس‌ها');
             function updateCaseQuantity(){
                 var qty = jQuery('#case-quantity');
                 if (!qty.length) return;
+                // خدمتِ «تعداد ثابت» (طرح درمان الاینر): همیشه ۱ — فک بالا/پایین/هر دو تفاوتی ندارد
+                if (isFixedQty()) {
+                    qty.val(1);
+                    applyDesignFee();
+                    applyServicePricingNote();
+                    return;
+                }
                 var manual = isManualQty();
                 var autoVal = autoQuantityValue();
                 // در حالت «تعداد دستی» (مثل الاینر) مقدار واردشدهٔ کاربر دست‌نخورده می‌ماند
@@ -2763,6 +2848,11 @@ panel_layout_start('مدیریت کیس‌ها');
             // Auto-update unit price when doctor, lab, service, or case type changes in the modal.
             // «فی خدمت + فی طراحی» با یک درخواست خوانده می‌شوند (تغییرِ خدمت و پزشک
             //  هندلرِ مخصوصِ خودشان را دارند — با ترتیبِ درستِ انتخابِ طراح).
+            // نمایش/مخفی‌کردن فیلد لابراتوار با تغییر نوع کیس (onchange قدیمی از مارک‌آپ
+            // مشترک حذف شد تا در صفحهٔ مشاهده هم خطا ندهد).
+            jQuery('#case-type').on('change', function() {
+                if (typeof toggleCaseType === 'function') toggleCaseType(this.value);
+            });
             jQuery('#case-lab-id, #case-type').on('change', function() {
                 loadCasePricing();
             });
@@ -2790,9 +2880,26 @@ panel_layout_start('مدیریت کیس‌ها');
                 el.style.display = text ? 'block' : 'none';
             }
 
+            // قاعدهٔ «طراح پیش‌فرضِ خدمت» (از price_form.php):
+            //   null = تنظیم نشده، 0 = برای این خدمت طراح پیش‌فرض نگذار، >0 = همان طراح
+            function serviceDefaultDesignerRule(serviceId) {
+                var m = window.__SVC_DEFAULT_DESIGNER__ || {};
+                if (!serviceId) return null;
+                return (m[serviceId] === undefined) ? null : Number(m[serviceId]);
+            }
+            // مطمئن می‌شویم گزینهٔ «بدون طراح» در لیست هست (برای نقش‌های بیرونی ممکن است رندر نشود)
+            function ensureEmptyDesignerOption() {
+                var dsel = document.getElementById('case-designer-id');
+                if (dsel && !dsel.querySelector('option[value=""]')) {
+                    dsel.insertBefore(new Option('بدون طراح', ''), dsel.firstChild);
+                }
+                return dsel;
+            }
+
             // پیش‌فرضِ طراح بر اساس خدمت:
-            //  - خدمت بدون طراحی (پست NPG، پرینت کست، الاینر) → «بدون طراح»
-            //  - بقیهٔ خدمات → اگر طراح خالی باشد، طراح پیش‌فرض انتخاب می‌شود
+            //  ۱) خدمتِ بدون طراحی (پست NPG، پرینت کست، الاینر) → «بدون طراح»
+            //  ۲) اگر برای خودِ خدمت طراح پیش‌فرض تعیین شده باشد (price_form) → همان/هیچ‌کس
+            //  ۳) وگرنه اگر طراح خالی باشد، پیش‌فرضِ سراسری انتخاب می‌شود
             // تغییر مقادیر فقط وقتی رخ می‌دهد که خدمت عوض شده باشد، تا انتخابِ دستیِ
             // کاربر (موارد استثنا) و کیس‌های قدیمیِ بدون طراح دست‌نخورده بمانند.
             function syncDesignerWithService(mode) {
@@ -2803,20 +2910,45 @@ panel_layout_start('مدیریت کیس‌ها');
                     ? window.serviceRequiresDesign(serviceId)
                     : true;
                 if (!needsDesign) {
-                    if (userChangedService) jQuery('#case-designer-id').val('');
+                    if (userChangedService) {
+                        // مطمئن می‌شویم گزینهٔ «بدون طراح» وجود دارد، وگرنه انتخاب پاک نمی‌شد
+                        ensureEmptyDesignerOption();
+                        jQuery('#case-designer-id').val('');
+                    }
                     if (note) {
                         note.textContent = 'برای این خدمت طراحی لازم نیست؛ کیس به‌صورت پیش‌فرض بدون طراح و با هزینهٔ طراحیِ ۰ ثبت می‌شود.';
                         note.style.display = 'block';
                     }
-                } else {
-                    if (note) { note.textContent = ''; note.style.display = 'none'; }
-                    // اگر خدمت طراحی لازم دارد و طراح خالی است، «طراح پیش‌فرض» انتخاب می‌شود
-                    // (چه کاربر خدمت را عوض کرده باشد، چه از ابتدا). این‌طور کیس هیچ‌وقت
-                    // ناخواسته «بدون طراح» ثبت نمی‌شود.
-                    if (!jQuery('#case-designer-id').val()) {
-                        var did = Number(window.__DEFAULT_DESIGNER_ID__ || 0);
-                        if (did) jQuery('#case-designer-id').val(did);
+                    return;
+                }
+
+                var rule = serviceDefaultDesignerRule(serviceId);
+                if (rule === 0) {
+                    // این خدمت «بدون طراحِ پیش‌فرض» تعریف شده است
+                    if (userChangedService) {
+                        ensureEmptyDesignerOption();
+                        jQuery('#case-designer-id').val('');
                     }
+                    if (note) {
+                        note.textContent = 'برای این خدمت طراح پیش‌فرض تعیین نشده است؛ در صورت نیاز طراح را دستی انتخاب کنید.';
+                        note.style.display = 'block';
+                    }
+                    return;
+                }
+
+                if (note) { note.textContent = ''; note.style.display = 'none'; }
+                if (rule && rule > 0) {
+                    var cur = String(jQuery('#case-designer-id').val() || '');
+                    if (userChangedService || !cur) {
+                        keepDesignerOption(rule);
+                        jQuery('#case-designer-id').val(String(rule));
+                    }
+                    return;
+                }
+                // رفتار قبلی: اگر طراح خالی است، پیش‌فرضِ سراسری
+                if (!jQuery('#case-designer-id').val()) {
+                    var did = Number(window.__DEFAULT_DESIGNER_ID__ || 0);
+                    if (did) jQuery('#case-designer-id').val(did);
                 }
             }
 
@@ -3137,25 +3269,64 @@ panel_layout_start('مدیریت کیس‌ها');
             };
 
             // ─── Batch status update ───
-            window.openBatchStatusModal = function() {
-                var checked = document.querySelectorAll('.case-select-cb:checked');
-                if (checked.length === 0) {
+            // آرگومانِ اختیاری: آرایهٔ شناسهٔ کیس‌ها. اگر داده شود (کلیک روی سلول وضعیتِ یک
+            // ردیف)، فقط همان کیس‌ها هدف‌اند؛ وگرنه کیس‌های تیک‌خورده.
+            window.openBatchStatusModal = function(caseIds) {
+                var ids = null;
+                if (Object.prototype.toString.call(caseIds) === '[object Array]') {
+                    ids = caseIds.map(function(v){ return String(v); }).filter(function(v){ return v !== ''; });
+                }
+                if (!ids) {
+                    var checked = document.querySelectorAll('.case-select-cb:checked');
+                    if (checked.length === 0) {
+                        alert('لطفاً حداقل یک کیس را انتخاب کنید.');
+                        return;
+                    }
+                    ids = [];
+                    checked.forEach(function(cb) { ids.push(cb.value); });
+                }
+                if (ids.length === 0) {
                     alert('لطفاً حداقل یک کیس را انتخاب کنید.');
                     return;
                 }
-                document.getElementById('batch-status-count').textContent = checked.length + ' کیس انتخاب شده است.';
+                window.__BATCH_STATUS_IDS__ = ids.slice();
+                var titleEl = document.getElementById('batch-status-title');
+                if (titleEl) {
+                    titleEl.textContent = (ids.length === 1) ? 'تغییر وضعیت کیس' : 'تغییر وضعیت گروهی کیس‌ها';
+                }
+                var countEl = document.getElementById('batch-status-count');
+                if (countEl) {
+                    countEl.textContent = (ids.length === 1)
+                        ? ('تغییر وضعیت کیس #' + ids[0])
+                        : (ids.length + ' کیس انتخاب شده است.');
+                }
+                var sel = document.getElementById('batch-status-select');
+                if (sel) { sel.value = ''; }
                 document.getElementById('batch-status-modal').style.display = 'flex';
             };
             jQuery('#batch-status-cancel').on('click', function(){
+                window.__BATCH_STATUS_IDS__ = null;
                 jQuery('#batch-status-modal').css({display: 'none'});
             });
+            <?php if ($canChangeSingleStatus): ?>
+            // کلیک روی سلولِ وضعیتِ یک ردیف ⇢ همان مودال، فقط برای همان کیس
+            jQuery('#cases-table').on('click', 'td.js-case-status', function(){
+                var cid = this.getAttribute('data-case-id');
+                if (!cid) { return; }
+                window.openBatchStatusModal([cid]);
+            });
+            <?php endif; ?>
             jQuery('#batch-status-confirm').on('click', function(){
                 var statusId = jQuery('#batch-status-select').val();
                 if (!statusId) { alert('لطفاً یک وضعیت انتخاب کنید.'); return; }
-                var checked = document.querySelectorAll('.case-select-cb:checked');
-                if (checked.length === 0) { alert('هیچ کیسی انتخاب نشده.'); return; }
-                var ids = [];
-                checked.forEach(function(cb) { ids.push(cb.value); });
+                var ids = window.__BATCH_STATUS_IDS__;
+                if (!ids || !ids.length) {
+                    var checked = document.querySelectorAll('.case-select-cb:checked');
+                    if (checked.length === 0) { alert('هیچ کیسی انتخاب نشده.'); return; }
+                    ids = [];
+                    checked.forEach(function(cb) { ids.push(cb.value); });
+                }
+                window.__BATCH_STATUS_IDS__ = null;
                 jQuery('#batch-status-modal').css({display: 'none'});
                 jQuery.ajax({
                     url: 'batch_update_status.php',

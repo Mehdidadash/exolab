@@ -48,7 +48,16 @@ foreach ($__required as $__f) {
     }
 }
 if ($__missing) {
-    error_log('public_bootstrap.php: missing required files: ' . implode(', ', $__missing));
+    // لاگِ مهارشده (حداکثر یک‌بار در هر ۵ دقیقه) تا یک دیپلویِ ناقص error_log را پر نکند.
+    $__guardLog = __DIR__ . '/deploy_guard.php';
+    if (is_file($__guardLog)) {
+        require_once $__guardLog;
+    }
+    if (function_exists('exolab_log_throttled')) {
+        exolab_log_throttled('public_bootstrap_missing_files', 'public_bootstrap.php: missing required files: ' . implode(', ', $__missing));
+    } else {
+        error_log('public_bootstrap.php: missing required files: ' . implode(', ', $__missing));
+    }
     http_response_code(503);
     @ini_set('display_errors', '0');
     echo '<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8">'

@@ -120,7 +120,7 @@ function setDefaultBankAccount(id) {
 </script>
 <?php endif; ?>
 
-<table class="datatable display" data-order="<?= $isAdmin ? 2 : 1 ?>">
+<table class="datatable display" data-order="<?= $isAdmin ? '2,0' : '1,0' ?>">
     <thead>
     <tr>
         <th>شماره فاکتور</th>

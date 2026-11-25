@@ -17,8 +17,11 @@
  *                'name_extra'=>string (HTML اختیاری که زیرِ نام فایل رندر می‌شود —
  *                              مثلاً آپلودکننده/نوع/توضیحات/اتصال‌ها)]
  * $opts: ['empty' => متنِ خالی بودن، 'open' => باز بودن پیش‌فرض پوشه‌ها,
- *         'folder_actions' => HTML دکمه‌های اضافیِ ردیف پوشه (__FOLDER__ و __COUNT__ جایگزین می‌شوند),
- *         'folder_download_action' => الگوی لینک دانلود ZIP پوشه (__FOLDER__ جایگزین می‌شود)]
+ *         'folder_actions' => HTML دکمه‌های اضافیِ ردیف پوشه (__FOLDER__ و __FULLPATH__ و __COUNT__ جایگزین می‌شوند),
+ *         'folder_download_action' => الگوی لینک دانلود ZIP پوشه (__FOLDER__ جایگزین می‌شود),
+ *         'folder_rename' => ['action' => آدرس، 'all' => 0|1],
+ *         'strip_first_segment' => true → سگمنتِ اولِ rel_path فقط «گروه» است (مثلاً آپلودکننده)
+ *                                  و در عملیاتِ پوشه (نام/دانلود/ZIP) حذف می‌شود]
  */
 
 if (!function_exists('flRelPathRootSafe')) {
@@ -268,6 +271,14 @@ if (!function_exists('renderFileDetailsView')) {
             // جمع‌کردنِ پوشهٔ والد واقعاً همهٔ زیرپوشه‌ها و فایل‌های تودرتو را
             // پنهان می‌کند. ساختار DOM: wrapper > (row + .fl-children > ...)
             $renderFolderRow = function (string $fPath, int $depth) use (&$renderFolderRow, $tree, $opts): void {
+                // وقتی ردیف‌ها بر اساس «گروه» (مثلاً آپلودکننده) دسته‌بندی شده‌اند،
+                // سگمنتِ اول فقط برای گروه‌بندیِ نمایشی است و نباید در عملیاتِ پوشه بیاید.
+                $isGroupRoot = !empty($opts['strip_first_segment']) && $depth === 0;
+                $realPath = $fPath;
+                if (!empty($opts['strip_first_segment'])) {
+                    $slashPos = strpos($fPath, '/');
+                    $realPath = ($slashPos === false) ? '' : substr($fPath, $slashPos + 1);
+                }
                 $node     = $tree['folders'][$fPath];
                 $children = $node['files'];
                 $subPaths = flDirectChildFolders($tree, $fPath);
@@ -344,10 +355,10 @@ if (!function_exists('renderFileDetailsView')) {
                                         data-mode="folder"
                                         title="آپلود یک پوشهٔ کامل داخل این پوشه">📁 آپلود پوشه</button>
                             <?php endif; ?>
-                            <?php if (!empty($opts['folder_rename'])): ?>
+                            <?php if (!empty($opts['folder_rename']) && !$isGroupRoot && $realPath !== ''): ?>
                                 <button type="button" class="btn js-fl-rename"
                                         style="background:#e0f2fe; color:#0369a1;"
-                                        data-folder="<?= htmlspecialchars($fPath, ENT_QUOTES) ?>"
+                                        data-folder="<?= htmlspecialchars($realPath, ENT_QUOTES) ?>"
                                         data-action="<?= htmlspecialchars((string) $opts['folder_rename']['action']) ?>"
                                         data-scope-all="<?= !empty($opts['folder_rename']['all']) ? '1' : '0' ?>"
                                         title="تغییر نام این پوشه">✏ نام</button>
@@ -355,17 +366,20 @@ if (!function_exists('renderFileDetailsView')) {
                             <?php
                             // دکمه‌های مخصوصِ هر پوشه را می‌توان از بیرون داد؛ اگر نبود،
                             // دکمهٔ «دانلود ZIP پوشه» را خودمان می‌سازیم.
-                            if (!empty($opts['folder_download_action'])): ?>
-                                <a class="btn" href="<?= htmlspecialchars(str_replace('__FOLDER__', rawurlencode($fPath), (string) $opts['folder_download_action'])) ?>"
+                            if (!empty($opts['folder_download_action']) && !$isGroupRoot && $realPath !== ''): ?>
+                                <a class="btn" href="<?= htmlspecialchars(str_replace('__FOLDER__', rawurlencode($realPath), (string) $opts['folder_download_action'])) ?>"
                                    style="background:#0F172A; color:#fff; text-decoration:none;" title="دانلود کل پوشه به‌صورت ZIP">🗜 دانلود ZIP</a>
                             <?php endif; ?>
                             <?php
-                            // دکمه‌های اضافیِ پوشه (مثلاً «حذف پوشه») — جای‌نگهدارهای
-                            // __FOLDER__ و __COUNT__ با مقدارِ همین پوشه پر می‌شوند.
-                            if (!empty($opts['folder_actions'])) {
+                            // دکمه‌های اضافیِ پوشه (مثلاً «حذف پوشه» یا «الصاق به کیس») —
+                            // __FOLDER__ = مسیر واقعی پوشه، __FULLPATH__ = مسیر کامل (با سگمنتِ گروه)،
+                            // __COUNT__ = تعداد فایل‌ها.
+                            // در ردیفِ «گروهِ آپلودکننده» عملیات پوشه معنا ندارد (چند نفر را قاطی می‌کند)،
+                            // مگر با folder_actions_on_group.
+                            if (!empty($opts['folder_actions']) && (!$isGroupRoot || !empty($opts['folder_actions_on_group']))) {
                                 echo str_replace(
-                                    ['__FOLDER__', '__COUNT__'],
-                                    [htmlspecialchars($fPath, ENT_QUOTES), (string) $total],
+                                    ['__FULLPATH__', '__FOLDER__', '__COUNT__'],
+                                    [htmlspecialchars($fPath, ENT_QUOTES), htmlspecialchars($realPath, ENT_QUOTES), (string) $total],
                                     (string) $opts['folder_actions']
                                 );
                             }

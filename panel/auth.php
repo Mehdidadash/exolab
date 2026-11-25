@@ -518,9 +518,35 @@ function panel_layout_start($title = 'پنل مدیریت') {
         <!-- اسکریپت‌های منو در head تعریف می‌شوند تا اگر در ادامهٔ صفحه خطایی رخ دهد،
              دکمه‌های منو (همبرگری/گروه‌های کشویی) از کار نیفتند. -->
         <script>
+        // پنلِ منوی موبایل: ارتفاعش را دقیقاً از پایینِ هدر تا پایینِ صفحه تنظیم می‌کنیم.
+        // (قبلاً CSS با 100dvh-64px حساب می‌کرد ولی هدر بلندتر است → ته منو بیرونِ دید
+        //  می‌افتاد و آیتم‌های آخر مثل «بررسی درآمد و هزینه» دیده نمی‌شدند.)
+        function panelSyncMobileNav() {
+            var nav = document.getElementById('siteNav');
+            if (!nav) return;
+            // «حالت موبایل» = دکمهٔ همبرگری دیده شود (هم در عرض کم و هم در landscape کوتاه)
+            var toggleBtn = document.getElementById('menuToggle');
+            var isMobileNav = !!toggleBtn && window.getComputedStyle(toggleBtn).display !== 'none';
+            if (!isMobileNav || !nav.classList.contains('mobile-open')) {
+                nav.classList.remove('nav-fixed');
+                nav.style.top = '';
+                document.body.classList.remove('nav-open');
+                return;
+            }
+            var header = document.querySelector('.site-header');
+            // ⚠️ ترتیب مهم است: اول کلاس fixed را بگذار (تا پنل از جریانِ هدر خارج و
+            // ارتفاع هدر واقعی شود)، بعد ارتفاع را بخوان؛ وگرنه هدرِ بلندترِ قبل از
+            // fixed ملاک قرار می‌گیرد و پنل با فاصله/بیرون‌زدگی شروع می‌شود.
+            nav.classList.add('nav-fixed');
+            document.body.classList.add('nav-open');
+            var top = header ? Math.max(0, Math.round(header.getBoundingClientRect().bottom)) : 64;
+            nav.style.top = top + 'px';
+        }
         function toggleMobileMenu() {
             var nav = document.getElementById('siteNav');
-            if (nav) nav.classList.toggle('mobile-open');
+            if (!nav) return;
+            nav.classList.toggle('mobile-open');
+            panelSyncMobileNav();
         }
         // Grouped nav dropdowns: open one group at a time.
         function toggleNavGroup(btn) {
@@ -553,8 +579,15 @@ function panel_layout_start($title = 'پنل مدیریت') {
                 var btn = document.getElementById('menuToggle');
                 if (nav && btn && nav.classList.contains('mobile-open') && !nav.contains(e.target) && !btn.contains(e.target)) {
                     nav.classList.remove('mobile-open');
+                    panelSyncMobileNav();
                 }
             });
+            // تغییر اندازه/چرخش صفحه → ارتفاع پنل دوباره حساب شود
+            window.addEventListener('resize', panelSyncMobileNav);
+            window.addEventListener('orientationchange', function(){
+                setTimeout(panelSyncMobileNav, 150);
+            });
+            document.addEventListener('DOMContentLoaded', panelSyncMobileNav);
         }
         </script>
     </head>
@@ -588,6 +621,7 @@ function panel_layout_start($title = 'پنل مدیریت') {
                         <button type="button" class="nav-group-toggle" onclick="toggleNavGroup(this)">کیس‌ها <span class="caret">▼</span></button>
                         <div class="nav-group-menu">
                             <a href="cases.php">کیس‌ها</a>
+                            <a href="aligner_cases.php">🦷 کیس‌های الاینر</a>
                             <?php if (!empty($navCanAppts)): ?><a href="scan_appointments.php">🗓 نوبت اسکن</a><?php endif; ?>
                             <?php if ($navIsAdmin): ?><a href="case_expenses.php">کیس‌های مخارج</a><?php endif; ?>
                         </div>
@@ -776,10 +810,18 @@ function panel_layout_end() {
                         targets: noSort.split(',').map(function (n) { return parseInt(n, 10); })
                     }];
                 }
-                // If the table has a data-order attribute, use it
+                // If the table has a data-order attribute, use it.
+                // می‌تواند یک شمارهٔ ستون باشد یا چند شماره با کاما (مثل "2,0")
+                // تا مرتب‌سازیِ اولیه چندستونه باشد (همه نزولی = جدیدها اول).
                 var orderIdx = this.getAttribute('data-order');
                 if (orderIdx !== null && !this.hasAttribute('data-dt-plain')) {
-                    config.order = [[parseInt(orderIdx), 'desc']];
+                    var orderCols = String(orderIdx).split(',')
+                        .map(function (n) { return parseInt(n, 10); })
+                        .filter(function (n) { return !isNaN(n); })
+                        .map(function (n) { return [n, 'desc']; });
+                    if (orderCols.length) {
+                        config.order = orderCols;
+                    }
                 }
                 jQuery(this).DataTable(config);
             });
